@@ -1,0 +1,782 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { User } from '../App';
+import { Socket } from 'socket.io-client';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile } from 'lucide-react';
+import EmojiPicker, { Theme } from 'emoji-picker-react';
+import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
+import { encodeLSB, decodeLSB, createCarrierWav } from '../utils/stego';
+
+interface ChatAreaProps {
+  key?: string | number;
+  user: User;
+  targetUser: User;
+  socket: Socket;
+  sessionInfo: { sessionId: string; pin: string };
+  isOnline: boolean;
+}
+
+interface Message {
+  id: string;
+  fromId: number;
+  text: string;
+  timestamp: number;
+  isSelfDestruct?: boolean;
+  expiresAt?: number;
+  file?: {
+    name: string;
+    type: string;
+    data: string; // base64
+  };
+}
+
+export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: ChatAreaProps) {
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputText, setInputText] = useState('');
+  const [snapchatMode, setSnapchatMode] = useState(false);
+  const [timer, setTimer] = useState(10); // seconds
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [showUserProfile, setShowUserProfile] = useState(false);
+  const [callState, setCallState] = useState<'idle' | 'calling' | 'receiving' | 'connected'>('idle');
+  const [callerId, setCallerId] = useState<string | null>(null);
+  const [callDuration, setCallDuration] = useState(0);
+  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
+  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
+
+  useEffect(() => {
+    return () => {
+      // Cleanup media tracks on unmount to prevent stuck recording icons
+      if (localStream) {
+        localStream.getTracks().forEach(track => track.stop());
+      }
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      }
+    };
+  }, [localStream]);
+
+  const onEmojiClick = (emojiObject: any) => {
+    setInputText(prev => prev + emojiObject.emoji);
+  };
+
+  useEffect(() => {
+    if (!socket) return;
+
+    const handleReceive = async (data: any) => {
+      try {
+        // 1. Receive Audio Carrier (base64)
+        const binaryString = atob(data.audioBase64);
+        const bytes = new Uint8Array(binaryString.length);
+        for (let i = 0; i < binaryString.length; i++) {
+          bytes[i] = binaryString.charCodeAt(i);
+        }
+        const audioData = bytes.buffer;
+        
+        // 2. Extract Hidden Binary
+        const binary = decodeLSB(audioData);
+        
+        // 3. Convert Binary to Encrypted Text
+        const encryptedText = binaryToString(binary);
+        
+        // 4. Decrypt using Session PIN
+        const decrypted = decryptData(encryptedText, sessionInfo.pin);
+        
+        if (decrypted) {
+          const newMessage: Message = {
+            id: Math.random().toString(36).substr(2, 9),
+            fromId: data.fromId,
+            text: decrypted,
+            timestamp: Date.now(),
+            isSelfDestruct: data.isSelfDestruct,
+            expiresAt: data.isSelfDestruct ? Date.now() + (data.timer * 1000) : undefined
+          };
+          setMessages(prev => [...prev, newMessage]);
+        }
+      } catch (err) {
+        console.error('Failed to process incoming message', err);
+      }
+    };
+
+    const handleReceiveFile = (data: any) => {
+      try {
+        const decryptedFile = decryptData(data.encryptedFile, sessionInfo.pin);
+        if (decryptedFile) {
+          const filePayload = JSON.parse(decryptedFile);
+          const newMessage: Message = {
+            id: Math.random().toString(36).substr(2, 9),
+            fromId: data.fromId,
+            text: '',
+            timestamp: Date.now(),
+            isSelfDestruct: data.isSelfDestruct,
+            expiresAt: data.isSelfDestruct ? Date.now() + (data.timer * 1000) : undefined,
+            file: filePayload
+          };
+          setMessages(prev => [...prev, newMessage]);
+        }
+      } catch (err) {
+        console.error('Failed to process incoming file', err);
+      }
+    };
+
+    const handleCallOffer = async (data: any) => {
+      setCallState('receiving');
+      setCallerId(data.fromId);
+      peerConnectionRef.current = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+      
+      peerConnectionRef.current.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('call_ice_candidate', {
+            sessionId: sessionInfo.sessionId,
+            candidate: event.candidate,
+            toId: data.fromId
+          });
+        }
+      };
+
+      peerConnectionRef.current.ontrack = (event) => {
+        setRemoteStream(event.streams[0]);
+      };
+
+      await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
+      
+      while (pendingCandidates.current.length > 0) {
+        const candidate = pendingCandidates.current.shift();
+        if (candidate) {
+          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+        }
+      }
+    };
+
+    const handleCallAnswer = async (data: any) => {
+      if (peerConnectionRef.current) {
+        await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
+        setCallState('connected');
+        
+        while (pendingCandidates.current.length > 0) {
+          const candidate = pendingCandidates.current.shift();
+          if (candidate) {
+            await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+          }
+        }
+      }
+    };
+
+    const handleIceCandidate = async (data: any) => {
+      if (peerConnectionRef.current) {
+        if (peerConnectionRef.current.remoteDescription) {
+          try {
+            await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(data.candidate));
+          } catch (e) {
+            console.error("Error adding ICE candidate", e);
+          }
+        } else {
+          pendingCandidates.current.push(data.candidate);
+        }
+      } else {
+        pendingCandidates.current.push(data.candidate);
+      }
+    };
+
+    const handleCallEnd = () => {
+      endCall(false);
+    };
+
+    socket.on('receive_message', handleReceive);
+    socket.on('receive_file', handleReceiveFile);
+    socket.on('call_offer', handleCallOffer);
+    socket.on('call_answer', handleCallAnswer);
+    socket.on('call_ice_candidate', handleIceCandidate);
+    socket.on('call_end', handleCallEnd);
+
+    return () => {
+      socket.off('receive_message', handleReceive);
+      socket.off('receive_file', handleReceiveFile);
+      socket.off('call_offer', handleCallOffer);
+      socket.off('call_answer', handleCallAnswer);
+      socket.off('call_ice_candidate', handleIceCandidate);
+      socket.off('call_end', handleCallEnd);
+    };
+  }, [socket, sessionInfo.pin]);
+
+  useEffect(() => {
+    if (chatContainerRef.current) {
+      const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
+      const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
+      if (isNearBottom) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }
+    } else {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [messages]);
+
+  // Handle self-destructing messages
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setMessages(prev => {
+        const filtered = prev.filter(m => !m.expiresAt || m.expiresAt > now);
+        // Only return new array if length changed to prevent unnecessary re-renders
+        return filtered.length === prev.length ? prev : filtered;
+      });
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Handle call duration timer
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (callState === 'connected') {
+      interval = setInterval(() => {
+        setCallDuration(prev => prev + 1);
+      }, 1000);
+    } else {
+      setCallDuration(0);
+    }
+    return () => clearInterval(interval);
+  }, [callState]);
+
+  const formatDuration = (seconds: number) => {
+    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+    const s = (seconds % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  };
+
+  const startCall = async () => {
+    try {
+      pendingCandidates.current = [];
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setLocalStream(stream);
+      setCallState('calling');
+
+      peerConnectionRef.current = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+      });
+
+      stream.getTracks().forEach(track => {
+        peerConnectionRef.current?.addTrack(track, stream);
+      });
+
+      peerConnectionRef.current.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('call_ice_candidate', {
+            sessionId: sessionInfo.sessionId,
+            candidate: event.candidate,
+            toId: targetUser.id
+          });
+        }
+      };
+
+      peerConnectionRef.current.ontrack = (event) => {
+        setRemoteStream(event.streams[0]);
+      };
+
+      const offer = await peerConnectionRef.current.createOffer();
+      await peerConnectionRef.current.setLocalDescription(offer);
+
+      socket.emit('call_offer', {
+        sessionId: sessionInfo.sessionId,
+        offer: offer,
+        fromId: user.id,
+        toId: targetUser.id
+      });
+    } catch (err) {
+      console.error('Error starting call:', err);
+      if (!navigator.mediaDevices) {
+        alert('Microphone access requires a secure HTTPS connection. Please use the secure ngrok URL on your phone.');
+      } else {
+        alert('Could not access microphone for call. Please check your browser permissions.');
+      }
+      endCall();
+    }
+  };
+
+  const acceptCall = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setLocalStream(stream);
+
+      stream.getTracks().forEach(track => {
+        peerConnectionRef.current?.addTrack(track, stream);
+      });
+
+      const answer = await peerConnectionRef.current!.createAnswer();
+      await peerConnectionRef.current!.setLocalDescription(answer);
+
+      socket.emit('call_answer', {
+        sessionId: sessionInfo.sessionId,
+        answer: answer,
+        toId: callerId || targetUser.id
+      });
+
+      setCallState('connected');
+      
+      // Attempt to play audio immediately to satisfy mobile browser user gesture requirements
+      if (remoteAudioRef.current && remoteStream) {
+        remoteAudioRef.current.srcObject = remoteStream;
+        remoteAudioRef.current.play().catch(e => console.error("Audio play failed:", e));
+      }
+    } catch (err) {
+      console.error('Error accepting call:', err);
+      if (!navigator.mediaDevices) {
+        alert('Microphone access requires a secure HTTPS connection. Please use the secure ngrok URL on your phone.');
+      } else {
+        alert('Could not access microphone to accept call. Please check permissions.');
+      }
+      endCall();
+    }
+  };
+
+  const endCall = (emit = true) => {
+    setCallState('idle');
+    pendingCandidates.current = [];
+    if (localStream) {
+      localStream.getTracks().forEach(track => track.stop());
+      setLocalStream(null);
+    }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.close();
+      peerConnectionRef.current = null;
+    }
+    setRemoteStream(null);
+    if (emit) {
+      socket.emit('call_end', {
+        sessionId: sessionInfo.sessionId,
+        toId: callerId || targetUser.id
+      });
+    }
+    setCallerId(null);
+  };
+
+  useEffect(() => {
+    if (remoteAudioRef.current && remoteStream) {
+      remoteAudioRef.current.srcObject = remoteStream;
+      remoteAudioRef.current.play().catch(e => console.error("Audio play failed:", e));
+    }
+  }, [remoteStream, callState]);
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 5 * 1024 * 1024) {
+      alert("File is too large. Please select a file smaller than 5MB. Large files cause mobile browsers to freeze and disconnect.");
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
+    setIsProcessing(true);
+    const reader = new FileReader();
+    reader.onload = async () => {
+      const base64Data = reader.result as string;
+      
+      const filePayload = JSON.stringify({
+        name: file.name,
+        type: file.type,
+        data: base64Data
+      });
+      
+      setTimeout(() => {
+        try {
+          const encryptedFile = encryptData(filePayload, sessionInfo.pin);
+
+          socket.emit('send_file', {
+            sessionId: sessionInfo.sessionId,
+            fromId: user.id,
+            toId: targetUser.id,
+            encryptedFile: encryptedFile,
+            isSelfDestruct: snapchatMode,
+            timer: timer
+          });
+
+          setMessages(prev => [...prev, {
+            id: Math.random().toString(36).substr(2, 9),
+            fromId: user.id,
+            text: '',
+            timestamp: Date.now(),
+            isSelfDestruct: snapchatMode,
+            expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined,
+            file: {
+              name: file.name,
+              type: file.type,
+              data: base64Data
+            }
+          }]);
+        } catch (err) {
+          console.error(err);
+        } finally {
+          setIsProcessing(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      }, 50);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleVoiceRecord = async () => {
+    if (isRecording) {
+      if (mediaRecorderRef.current) {
+        mediaRecorderRef.current.stop();
+        mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
+      }
+      setIsRecording(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0) {
+          audioChunksRef.current.push(e.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        setIsProcessing(true);
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onload = () => {
+          const base64Data = reader.result as string;
+          
+          const filePayload = JSON.stringify({
+            name: 'Voice Message.webm',
+            type: 'audio/webm',
+            data: base64Data
+          });
+          
+          setTimeout(() => {
+            try {
+              const encryptedFile = encryptData(filePayload, sessionInfo.pin);
+
+              socket.emit('send_file', {
+                sessionId: sessionInfo.sessionId,
+                fromId: user.id,
+                toId: targetUser.id,
+                encryptedFile: encryptedFile,
+                isSelfDestruct: snapchatMode,
+                timer: timer
+              });
+
+              setMessages(prev => [...prev, {
+                id: Math.random().toString(36).substr(2, 9),
+                fromId: user.id,
+                text: '',
+                timestamp: Date.now(),
+                isSelfDestruct: snapchatMode,
+                expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined,
+                file: {
+                  name: 'Voice Message.webm',
+                  type: 'audio/webm',
+                  data: base64Data
+                }
+              }]);
+            } catch (err) {
+              console.error(err);
+            } finally {
+              setIsProcessing(false);
+            }
+          }, 50);
+        };
+        reader.readAsDataURL(audioBlob);
+        stream.getTracks().forEach(track => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Error accessing microphone:', err);
+      if (!navigator.mediaDevices) {
+        alert('Microphone access requires a secure HTTPS connection. Please use the secure ngrok URL on your phone.');
+      } else {
+        alert('Could not access microphone. Please check your browser permissions.');
+      }
+      setIsRecording(false);
+    }
+  };
+
+  const handleSendMessage = async () => {
+    if (!inputText.trim()) return;
+
+    try {
+      // 1. Encrypt Message
+      const encrypted = encryptData(inputText, sessionInfo.pin);
+      
+      // 2. Convert to Binary
+      const binary = stringToBinary(encrypted);
+      
+      // 3. Create Carrier Audio
+      const carrier = createCarrierWav(2); // 2 seconds carrier
+      
+      // 4. Hide Data in Carrier
+      const stegoAudio = encodeLSB(carrier, binary);
+      
+      // 5. Convert to Base64 for transmission
+      const bytes = new Uint8Array(stegoAudio);
+      let binaryStr = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binaryStr += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binaryStr);
+
+      // 6. Send via Socket
+      socket.emit('send_message', {
+        sessionId: sessionInfo.sessionId,
+        fromId: user.id,
+        toId: targetUser.id,
+        audioBase64: base64,
+        isSelfDestruct: snapchatMode,
+        timer: timer
+      });
+
+      // Add to local UI
+      setMessages(prev => [...prev, {
+        id: Math.random().toString(36).substr(2, 9),
+        fromId: user.id,
+        text: inputText,
+        timestamp: Date.now(),
+        isSelfDestruct: snapchatMode,
+        expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined
+      }]);
+
+      setInputText('');
+    } catch (err) {
+      alert('Error encoding message: ' + err);
+    }
+  };
+
+  return (
+    <div className="flex flex-row h-full w-full">
+      {/* Main Chat Area */}
+      <div className="flex-1 flex flex-col relative">
+        {/* Call UI Overlay */}
+        {callState !== 'idle' && (
+          <div className="absolute inset-0 z-50 bg-[#0b141a]/90 backdrop-blur-sm flex items-center justify-center animate-fade-in">
+            <div className="bg-[#202c33] rounded-2xl p-8 flex flex-col items-center shadow-2xl w-80 border border-[#2a3942]">
+              {/* Avatar */}
+              <div className="w-24 h-24 bg-[#00a884] rounded-full flex items-center justify-center mb-6 animate-pulse shadow-lg shadow-[#00a884]/20">
+                <Phone className="w-10 h-10 text-white" />
+              </div>
+
+              {/* Status/Name */}
+              <h2 className="text-2xl text-white font-medium mb-2">
+                {callState === 'receiving' ? (callerId === targetUser.id ? targetUser.username : 'Unknown') : targetUser.username}
+              </h2>
+              <p className="text-[#8696a0] mb-8 text-lg">
+                {callState === 'calling' && 'Calling...'}
+                {callState === 'receiving' && 'Incoming Audio Call'}
+                {callState === 'connected' && formatDuration(callDuration)}
+              </p>
+
+              {/* Actions */}
+              <div className="flex items-center justify-center space-x-8 w-full">
+                {callState === 'receiving' && (
+                  <button
+                    onClick={acceptCall}
+                    className="w-16 h-16 bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
+                  >
+                    <Phone className="w-7 h-7 text-white" />
+                  </button>
+                )}
+                <button
+                  onClick={() => endCall()}
+                  className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
+                >
+                  <Phone className="w-7 h-7 text-white rotate-[135deg]" />
+                </button>
+              </div>
+            </div>
+            <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+          </div>
+        )}
+
+        {/* Header */}
+        <div className="h-[60px] bg-[#202c33] px-4 flex items-center justify-between border-l border-[#2a3942]">
+          <div className="flex items-center cursor-pointer" onClick={() => setShowUserProfile(true)}>
+            <div className="w-10 h-10 bg-[#4f5e67] rounded-full flex items-center justify-center mr-3">
+              <span className="text-[#d1d7db] font-bold">{targetUser.username[0].toUpperCase()}</span>
+            </div>
+            <div>
+              <h2 className="text-[#e9edef] font-medium leading-tight">{targetUser.username}</h2>
+              <div className="flex items-center text-[11px] font-medium">
+                <span className={`mr-2 ${isOnline ? 'text-[#00a884]' : 'text-[#8696a0]'}`}>
+                  {isOnline ? 'Online' : 'Offline'}
+                </span>
+                <Shield className="w-3 h-3 mr-1 text-[#00a884]" />
+                <span className="text-[#00a884]">SECURE SESSION ACTIVE (PIN: {sessionInfo.pin})</span>
+              </div>
+            </div>
+          </div>
+        <div className="flex items-center space-x-5 text-[#aebac1]">
+          <button 
+            onClick={() => setSnapchatMode(!snapchatMode)}
+            className={`p-1.5 rounded-lg transition-colors ${snapchatMode ? 'bg-[#00a884] text-white' : 'hover:bg-[#2a3942]'}`}
+            title="Snapchat Mode (Disappearing Messages)"
+          >
+            <Eye className="w-5 h-5" />
+          </button>
+          <Phone className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={startCall} />
+          <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" />
+        </div>
+      </div>
+
+      {/* Messages Area */}
+      <div 
+        ref={chatContainerRef}
+        className="flex-1 overflow-y-auto p-6 space-y-4 bg-[url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')] bg-repeat opacity-90"
+      >
+        {messages.map(msg => (
+          <div 
+            key={msg.id} 
+            className={`flex ${msg.fromId === user.id ? 'justify-end' : 'justify-start'}`}
+          >
+            <div className={`max-w-[65%] rounded-lg px-3 py-2 shadow-sm relative group ${
+              msg.fromId === user.id ? 'bg-[#005c4b] text-[#e9edef]' : 'bg-[#202c33] text-[#e9edef]'
+            }`}>
+              {msg.file ? (
+                <div className="mb-2">
+                  {msg.file.type.startsWith('image/') ? (
+                    <img src={msg.file.data} alt="attachment" className="max-w-full rounded-lg max-h-64 object-contain" />
+                  ) : msg.file.type.startsWith('video/') ? (
+                    <video src={msg.file.data} controls className="max-w-full rounded-lg max-h-64" />
+                  ) : msg.file.type.startsWith('audio/') ? (
+                    <audio src={msg.file.data} controls className="max-w-full" />
+                  ) : (
+                    <a href={msg.file.data} download={msg.file.name} className="flex items-center space-x-2 bg-[#2a3942] p-3 rounded-lg hover:bg-[#3a4952] transition-colors">
+                      <Paperclip className="w-5 h-5" />
+                      <span className="truncate max-w-[200px]">{msg.file.name}</span>
+                    </a>
+                  )}
+                </div>
+              ) : null}
+              {msg.text && <p className="text-sm leading-relaxed pr-8">{msg.text}</p>}
+              <div className="flex items-center justify-end mt-1 space-x-1">
+                <span className="text-[10px] text-[#8696a0]">
+                  {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+                {msg.isSelfDestruct && (
+                  <span className="text-[10px] text-orange-400 font-bold flex items-center">
+                    <Trash2 className="w-3 h-3 ml-1" />
+                    {Math.max(0, Math.ceil((msg.expiresAt! - Date.now()) / 1000))}s
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input Area */}
+      <div className="bg-[#202c33] p-3 flex items-center space-x-3 relative">
+        {showEmojiPicker && (
+          <div className="absolute bottom-16 left-4 z-50">
+            <EmojiPicker onEmojiClick={onEmojiClick} theme={Theme.DARK} />
+          </div>
+        )}
+        <div className="flex items-center space-x-3 text-[#aebac1]">
+          <Smile 
+            className={`w-6 h-6 cursor-pointer hover:text-[#d1d7db] ${showEmojiPicker ? 'text-[#00a884]' : ''}`} 
+            onClick={() => setShowEmojiPicker(!showEmojiPicker)} 
+          />
+          <Paperclip 
+            className="w-6 h-6 cursor-pointer hover:text-[#d1d7db]" 
+            onClick={() => fileInputRef.current?.click()}
+          />
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            className="hidden" 
+            onChange={handleFileUpload} 
+          />
+        </div>
+        <div className="flex-1 relative">
+          <input
+            type="text"
+            placeholder="Type a secure message..."
+            className="w-full bg-[#2a3942] text-[#e9edef] rounded-lg py-2.5 px-4 focus:outline-none text-sm"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+          />
+          {snapchatMode && (
+             <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center space-x-2">
+                <select 
+                  className="bg-[#202c33] text-xs text-orange-400 border-none focus:ring-0 cursor-pointer"
+                  value={timer}
+                  onChange={(e) => setTimer(Number(e.target.value))}
+                >
+                  <option value={5}>5s</option>
+                  <option value={10}>10s</option>
+                  <option value={30}>30s</option>
+                  <option value={60}>1m</option>
+                </select>
+             </div>
+          )}
+        </div>
+        <button 
+          onClick={inputText ? handleSendMessage : handleVoiceRecord}
+          disabled={isProcessing}
+          className={`w-10 h-10 rounded-full flex items-center justify-center text-white transition-colors shadow-lg ${
+            isProcessing ? 'bg-gray-500 cursor-not-allowed' :
+            isRecording ? 'bg-red-500 hover:bg-red-600 animate-pulse' : 'bg-[#00a884] hover:bg-[#06cf9c]'
+          }`}
+        >
+          {isProcessing ? (
+            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+          ) : inputText ? (
+            <Send className="w-5 h-5" />
+          ) : (
+            <Mic className="w-5 h-5" />
+          )}
+        </button>
+      </div>
+      </div>
+
+      {/* User Profile Sidebar */}
+      {showUserProfile && (
+        <div className="w-[350px] bg-[#111b21] border-l border-[#2a3942] flex flex-col animate-fade-in">
+          <div className="h-[60px] bg-[#202c33] px-4 flex items-center text-[#d1d7db]">
+            <button onClick={() => setShowUserProfile(false)} className="mr-6 hover:text-white">
+              <svg viewBox="0 0 24 24" width="24" height="24" stroke="currentColor" strokeWidth="2" fill="none" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+            <h2 className="text-lg font-medium">Contact info</h2>
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            <div className="flex flex-col items-center py-8 bg-[#111b21] shadow-sm">
+              <div className="w-48 h-48 bg-[#4f5e67] rounded-full flex items-center justify-center mb-4">
+                <span className="text-6xl text-[#d1d7db] font-bold">{targetUser.username[0].toUpperCase()}</span>
+              </div>
+              <h2 className="text-2xl text-[#e9edef] font-medium">{targetUser.username}</h2>
+              <p className="text-[#8696a0] text-lg">{targetUser.email}</p>
+            </div>
+            <div className="mt-2 bg-[#111b21] p-4 shadow-sm">
+              <h3 className="text-[#00a884] text-sm mb-4">Shared Media</h3>
+              <div className="grid grid-cols-3 gap-2">
+                {messages.filter(m => m.file && m.file.type.startsWith('image/')).map(m => (
+                  <img key={m.id} src={m.file!.data} alt="shared" className="w-full h-24 object-cover rounded" />
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
