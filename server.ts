@@ -445,7 +445,7 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-const PORT = 5000;
+const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;
 httpServer.listen(PORT, '0.0.0.0', () => {
   console.log(`Server running securely on https://localhost:${PORT}`);
 });
