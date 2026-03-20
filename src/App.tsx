@@ -23,6 +23,12 @@ export default function App() {
     if (user) {
       const newSocket = io();
       newSocket.emit('register', user.id);
+      
+      newSocket.on('banned', () => {
+         setUser(null);
+         alert('Your account has been permanently terminated by the Administrator.');
+      });
+
       setSocket(newSocket);
 
       return () => {

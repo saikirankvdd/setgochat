@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+database.db
+uploads/
+*.pem

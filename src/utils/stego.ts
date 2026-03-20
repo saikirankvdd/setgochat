@@ -98,9 +98,29 @@ export const createCarrierWav = (seconds: number = 5): ArrayBuffer => {
   view.setUint32(36, 0x64617461, false); // "data"
   view.setUint32(40, dataSize, true);
 
-  // Fill with silence or low noise
-  for (let i = 0; i < dataSize / 2; i++) {
-    view.setInt16(44 + i * 2, Math.floor(Math.random() * 100) - 50, true);
+  // Generate White Gaussian Noise using Box-Muller transform
+  for (let i = 0; i < dataSize / 2; i += 2) {
+    let u1 = 0, u2 = 0;
+    while(u1 === 0) u1 = Math.random(); // Converting [0,1) to (0,1)
+    while(u2 === 0) u2 = Math.random();
+    
+    // Standard normal distribution
+    const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+    const z1 = Math.sqrt(-2.0 * Math.log(u1)) * Math.sin(2.0 * Math.PI * u2);
+    
+    // Scale to acceptable 16-bit range (std dev of 1500 for audible static)
+    const stdDev = 1500;
+    let sample0 = Math.floor(z0 * stdDev);
+    let sample1 = Math.floor(z1 * stdDev);
+    
+    // Clamp to 16-bit boundaries
+    sample0 = Math.max(-32768, Math.min(32767, sample0));
+    sample1 = Math.max(-32768, Math.min(32767, sample1));
+    
+    view.setInt16(44 + i * 2, sample0, true);
+    if (i + 1 < dataSize / 2) {
+      view.setInt16(44 + (i + 1) * 2, sample1, true);
+    }
   }
 
   return buffer;

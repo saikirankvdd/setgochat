@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../App';
 import { Socket } from 'socket.io-client';
-import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile } from 'lucide-react';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createCarrierWav } from '../utils/stego';
@@ -13,6 +13,8 @@ interface ChatAreaProps {
   socket: Socket;
   sessionInfo: { sessionId: string; pin: string };
   isOnline: boolean;
+  pendingCall?: any;
+  clearPendingCall?: () => void;
 }
 
 interface Message {
@@ -29,7 +31,7 @@ interface Message {
   };
 }
 
-export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: ChatAreaProps) {
+export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pendingCall, clearPendingCall }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [snapchatMode, setSnapchatMode] = useState(false);
@@ -43,6 +45,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
   const [callDuration, setCallDuration] = useState(0);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [isVideoCall, setIsVideoCall] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isVideoOff, setIsVideoOff] = useState(false);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -50,21 +55,23 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
-  const remoteAudioRef = useRef<HTMLAudioElement>(null);
+  const localVideoRef = useRef<HTMLVideoElement>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
+  const localStreamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
     return () => {
       // Cleanup media tracks on unmount to prevent stuck recording icons
-      if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach(track => track.stop());
       }
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
         mediaRecorderRef.current.stream.getTracks().forEach(track => track.stop());
       }
     };
-  }, [localStream]);
+  }, []);
 
   const onEmojiClick = (emojiObject: any) => {
     setInputText(prev => prev + emojiObject.emoji);
@@ -74,6 +81,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
     if (!socket) return;
 
     const handleReceive = async (data: any) => {
+      if (data.sessionId !== sessionInfo.sessionId) return;
       try {
         // 1. Receive Audio Carrier (base64)
         const binaryString = atob(data.audioBase64);
@@ -109,6 +117,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
     };
 
     const handleReceiveFile = (data: any) => {
+      if (data.sessionId !== sessionInfo.sessionId) return;
       try {
         const decryptedFile = decryptData(data.encryptedFile, sessionInfo.pin);
         if (decryptedFile) {
@@ -130,8 +139,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
     };
 
     const handleCallOffer = async (data: any) => {
+      if (data.sessionId !== sessionInfo.sessionId) return;
       setCallState('receiving');
       setCallerId(data.fromId);
+      setIsVideoCall(data.withVideo || false);
       peerConnectionRef.current = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
@@ -161,6 +172,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
     };
 
     const handleCallAnswer = async (data: any) => {
+      if (data.sessionId !== sessionInfo.sessionId) return;
       if (peerConnectionRef.current) {
         await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
         setCallState('connected');
@@ -175,6 +187,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
     };
 
     const handleIceCandidate = async (data: any) => {
+      if (data.sessionId !== sessionInfo.sessionId) return;
       if (peerConnectionRef.current) {
         if (peerConnectionRef.current.remoteDescription) {
           try {
@@ -190,9 +203,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
       }
     };
 
-    const handleCallEnd = () => {
+    const handleCallEnd = (data: any) => {
+      if (data && data.sessionId !== sessionInfo.sessionId) return;
       endCall(false);
     };
+
+    if (pendingCall && pendingCall.sessionId === sessionInfo.sessionId) {
+      handleCallOffer(pendingCall);
+      if (clearPendingCall) clearPendingCall();
+    }
 
     socket.on('receive_message', handleReceive);
     socket.on('receive_file', handleReceiveFile);
@@ -209,7 +228,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
       socket.off('call_ice_candidate', handleIceCandidate);
       socket.off('call_end', handleCallEnd);
     };
-  }, [socket, sessionInfo.pin]);
+  }, [socket, sessionInfo.pin, sessionInfo.sessionId, pendingCall, clearPendingCall]);
 
   useEffect(() => {
     if (chatContainerRef.current) {
@@ -255,11 +274,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
     return `${m}:${s}`;
   };
 
-  const startCall = async () => {
+  const startCall = async (withVideo: boolean = false) => {
     try {
       pendingCandidates.current = [];
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setIsVideoCall(withVideo);
+      setIsMuted(false);
+      setIsVideoOff(false);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
       setLocalStream(stream);
+      localStreamRef.current = stream;
       setCallState('calling');
 
       peerConnectionRef.current = new RTCPeerConnection({
@@ -291,7 +314,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
         sessionId: sessionInfo.sessionId,
         offer: offer,
         fromId: user.id,
-        toId: targetUser.id
+        fromName: user.username,
+        toId: targetUser.id,
+        withVideo
       });
     } catch (err) {
       console.error('Error starting call:', err);
@@ -306,8 +331,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
 
   const acceptCall = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      setIsMuted(false);
+      setIsVideoOff(false);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideoCall });
       setLocalStream(stream);
+      localStreamRef.current = stream;
 
       stream.getTracks().forEach(track => {
         peerConnectionRef.current?.addTrack(track, stream);
@@ -325,16 +353,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
       setCallState('connected');
       
       // Attempt to play audio immediately to satisfy mobile browser user gesture requirements
-      if (remoteAudioRef.current && remoteStream) {
-        remoteAudioRef.current.srcObject = remoteStream;
-        remoteAudioRef.current.play().catch(e => console.error("Audio play failed:", e));
+      if (remoteVideoRef.current && remoteStream) {
+        remoteVideoRef.current.srcObject = remoteStream;
+        remoteVideoRef.current.play().catch(e => console.error("Video play failed:", e));
       }
     } catch (err) {
       console.error('Error accepting call:', err);
       if (!navigator.mediaDevices) {
-        alert('Microphone access requires a secure HTTPS connection. Please use the secure ngrok URL on your phone.');
+        alert('Media device access requires a secure HTTPS connection. Please use the secure ngrok URL on your phone.');
       } else {
-        alert('Could not access microphone to accept call. Please check permissions.');
+        alert('Could not access microphone/camera to accept call. Please check permissions.');
       }
       endCall();
     }
@@ -343,10 +371,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
   const endCall = (emit = true) => {
     setCallState('idle');
     pendingCandidates.current = [];
-    if (localStream) {
-      localStream.getTracks().forEach(track => track.stop());
-      setLocalStream(null);
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach(track => track.stop());
+      localStreamRef.current = null;
     }
+    setLocalStream(null);
     if (peerConnectionRef.current) {
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
@@ -362,18 +391,40 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
   };
 
   useEffect(() => {
-    if (remoteAudioRef.current && remoteStream) {
-      remoteAudioRef.current.srcObject = remoteStream;
-      remoteAudioRef.current.play().catch(e => console.error("Audio play failed:", e));
+    if (remoteVideoRef.current && remoteStream) {
+      remoteVideoRef.current.srcObject = remoteStream;
+      remoteVideoRef.current.play().catch(e => console.error("Video play failed:", e));
     }
-  }, [remoteStream, callState]);
+    if (localVideoRef.current && localStream && isVideoCall) {
+      localVideoRef.current.srcObject = localStream;
+      localVideoRef.current.play().catch(e => console.error("Local video play failed:", e));
+    }
+  }, [remoteStream, localStream, callState, isVideoCall]);
+
+  const toggleMute = () => {
+    if (localStream) {
+      localStream.getAudioTracks().forEach(track => {
+        track.enabled = isMuted; // if previously muted, enable it
+      });
+      setIsMuted(!isMuted);
+    }
+  };
+
+  const toggleVideo = () => {
+    if (localStream && isVideoCall) {
+      localStream.getVideoTracks().forEach(track => {
+        track.enabled = isVideoOff; 
+      });
+      setIsVideoOff(!isVideoOff);
+    }
+  };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    if (file.size > 5 * 1024 * 1024) {
-      alert("File is too large. Please select a file smaller than 5MB. Large files cause mobile browsers to freeze and disconnect.");
+    if (file.size > 100 * 1024 * 1024) {
+      alert("File is too large. Please select a file smaller than 100MB in accordance with WhatsApp standards.");
       if (fileInputRef.current) fileInputRef.current.value = '';
       return;
     }
@@ -561,48 +612,93 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
     }
   };
 
+  const renderMessageText = (text: string) => {
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = text.split(urlRegex);
+    return parts.map((part, i) => {
+      if (part.match(urlRegex)) {
+        return (
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline underline-offset-2 break-all">
+            {part}
+          </a>
+        );
+      }
+      return <span key={i}>{part}</span>;
+    });
+  };
+
   return (
     <div className="flex flex-row h-full w-full">
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col relative">
         {/* Call UI Overlay */}
         {callState !== 'idle' && (
-          <div className="absolute inset-0 z-50 bg-[#0b141a]/90 backdrop-blur-sm flex items-center justify-center animate-fade-in">
-            <div className="bg-[#202c33] rounded-2xl p-8 flex flex-col items-center shadow-2xl w-80 border border-[#2a3942]">
-              {/* Avatar */}
-              <div className="w-24 h-24 bg-[#00a884] rounded-full flex items-center justify-center mb-6 animate-pulse shadow-lg shadow-[#00a884]/20">
-                <Phone className="w-10 h-10 text-white" />
-              </div>
+          <div className="absolute inset-0 z-50 bg-[#0b141a]/95 backdrop-blur-md flex flex-col items-center justify-center animate-fade-in p-8">
+            {/* Always mount video so ref attaches, hide visual if audio-only */}
+            <video 
+              ref={remoteVideoRef} 
+              autoPlay 
+              playsInline 
+              className={`absolute inset-0 w-full h-full object-cover z-0 ${isVideoCall && callState === 'connected' ? 'block' : 'hidden'}`} 
+            />
 
-              {/* Status/Name */}
-              <h2 className="text-2xl text-white font-medium mb-2">
-                {callState === 'receiving' ? (callerId === targetUser.id ? targetUser.username : 'Unknown') : targetUser.username}
-              </h2>
-              <p className="text-[#8696a0] mb-8 text-lg">
-                {callState === 'calling' && 'Calling...'}
-                {callState === 'receiving' && 'Incoming Audio Call'}
-                {callState === 'connected' && formatDuration(callDuration)}
-              </p>
+            <div className={`relative w-full max-w-3xl flex-1 flex flex-col items-center justify-center z-10 ${isVideoCall && callState === 'connected' ? 'bg-transparent' : 'bg-[#202c33] rounded-3xl border border-[#2a3942] p-8 shadow-2xl max-h-[400px]'}`}>
+              {/* Avatar for Audio Call or connecting */}
+              {(!isVideoCall || callState !== 'connected') && (
+                <div className="flex flex-col items-center">
+                  <div className="w-24 h-24 bg-[#00a884] rounded-full flex items-center justify-center mb-6 animate-pulse shadow-lg shadow-[#00a884]/20">
+                    {isVideoCall ? <Video className="w-10 h-10 text-white" /> : <Phone className="w-10 h-10 text-white" />}
+                  </div>
+                  <h2 className="text-2xl text-white font-medium mb-2">
+                    {callState === 'receiving' ? (String(callerId) === String(targetUser.id) ? targetUser.username : 'Unknown') : targetUser.username}
+                  </h2>
+                  <p className="text-[#8696a0] mb-2 text-lg">
+                    {callState === 'calling' && 'Calling...'}
+                    {callState === 'receiving' && `Incoming ${isVideoCall ? 'Video ' : 'Audio '}Call`}
+                    {callState === 'connected' && formatDuration(callDuration)}
+                  </p>
+                </div>
+              )}
+              
+              {/* Local PiP feed */}
+              <video 
+                ref={localVideoRef} 
+                autoPlay 
+                playsInline 
+                muted 
+                className={`absolute bottom-32 right-8 w-32 md:w-48 h-48 md:h-64 object-cover rounded-2xl shadow-xl border-2 border-[#2a3942] bg-[#202c33] transition-opacity ${isVideoCall && !isVideoOff && callState === 'connected' ? 'opacity-100' : 'opacity-0 hidden'}`} 
+              />
 
-              {/* Actions */}
-              <div className="flex items-center justify-center space-x-8 w-full">
-                {callState === 'receiving' && (
-                  <button
-                    onClick={acceptCall}
-                    className="w-16 h-16 bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
-                  >
-                    <Phone className="w-7 h-7 text-white" />
-                  </button>
+              {/* Actions Bar */}
+              <div className="absolute bottom-8 flex items-center justify-center space-x-6 w-full">
+                {callState === 'receiving' ? (
+                  <>
+                    <button onClick={acceptCall} className="w-16 h-16 bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
+                      {isVideoCall ? <Video className="w-7 h-7 text-white" /> : <Phone className="w-7 h-7 text-white" />}
+                    </button>
+                    <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
+                      <Phone className="w-7 h-7 text-white rotate-[135deg]" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={toggleMute} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isMuted ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
+                      {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                    </button>
+                    
+                    {isVideoCall && (
+                      <button onClick={toggleVideo} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isVideoOff ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
+                        {isVideoOff ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
+                      </button>
+                    )}
+
+                    <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
+                      <Phone className="w-7 h-7 text-white rotate-[135deg]" />
+                    </button>
+                  </>
                 )}
-                <button
-                  onClick={() => endCall()}
-                  className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105"
-                >
-                  <Phone className="w-7 h-7 text-white rotate-[135deg]" />
-                </button>
               </div>
             </div>
-            <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
           </div>
         )}
 
@@ -631,7 +727,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
           >
             <Eye className="w-5 h-5" />
           </button>
-          <Phone className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={startCall} />
+          <Phone className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(false)} />
+          <Video className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(true)} />
           <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" />
         </div>
       </div>
@@ -665,7 +762,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline }: Ch
                   )}
                 </div>
               ) : null}
-              {msg.text && <p className="text-sm leading-relaxed pr-8">{msg.text}</p>}
+              {msg.text && <p className="text-sm leading-relaxed pr-8 whitespace-pre-wrap">{renderMessageText(msg.text)}</p>}
               <div className="flex items-center justify-end mt-1 space-x-1">
                 <span className="text-[10px] text-[#8696a0]">
                   {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}

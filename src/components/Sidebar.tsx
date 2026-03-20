@@ -4,26 +4,22 @@ import { Search, MoreVertical, MessageSquare, User as UserIcon, LogOut, Activity
 
 interface SidebarProps {
   currentUser: User;
+  users: User[];
   onSelectUser: (user: User) => void;
   activeUserId?: number;
   onShowAdmin: () => void;
   onlineUsers: number[];
+  lastMessages?: Record<number, string>;
+  unreadCounts?: Record<number, number>;
 }
 
-export function Sidebar({ currentUser, onSelectUser, activeUserId, onShowAdmin, onlineUsers }: SidebarProps) {
-  const [users, setUsers] = useState<User[]>([]);
+export function Sidebar({ currentUser, users, onSelectUser, activeUserId, onShowAdmin, onlineUsers, lastMessages, unreadCounts }: SidebarProps) {
   const [search, setSearch] = useState('');
   const [showProfile, setShowProfile] = useState(false);
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [otpSent, setOtpSent] = useState(false);
-
-  useEffect(() => {
-    fetch('/api/users')
-      .then(res => res.json())
-      .then(data => setUsers(data.filter((u: User) => u.id !== currentUser.id)));
-  }, [currentUser.id]);
 
   const filteredUsers = users.filter(u => 
     u.username.toLowerCase().includes(search.toLowerCase())
@@ -34,7 +30,7 @@ export function Sidebar({ currentUser, onSelectUser, activeUserId, onShowAdmin, 
       const res = await fetch('/api/request-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.id })
+        body: JSON.stringify({ emailOrUsername: currentUser.username })
       });
       if (res.ok) {
         setOtpSent(true);
@@ -50,7 +46,7 @@ export function Sidebar({ currentUser, onSelectUser, activeUserId, onShowAdmin, 
       const res = await fetch('/api/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: currentUser.id, otp, newPassword })
+        body: JSON.stringify({ emailOrUsername: currentUser.username, otp, newPassword })
       });
       if (res.ok) {
         alert('Password changed successfully!');
@@ -191,13 +187,22 @@ export function Sidebar({ currentUser, onSelectUser, activeUserId, onShowAdmin, 
               <UserIcon className="w-7 h-7 text-[#d1d7db]" />
             </div>
             <div className="flex-1 min-w-0">
-              <div className="flex justify-between items-baseline">
+              <div className="flex justify-between items-baseline mb-1">
                 <h3 className="text-[#e9edef] font-medium truncate">{user.username}</h3>
-                <span className={`text-xs ${onlineUsers.includes(user.id) ? 'text-[#00a884]' : 'text-[#8696a0]'}`}>
-                  {onlineUsers.includes(user.id) ? 'Online' : 'Offline'}
+                <span className={`text-xs ml-2 flex-shrink-0 ${unreadCounts?.[user.id] ? 'text-[#00a884] font-medium' : (onlineUsers.includes(user.id) ? 'text-[#00a884]' : 'text-[#8696a0]')}`}>
+                  {unreadCounts?.[user.id] ? new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (onlineUsers.includes(user.id) ? 'Online' : 'Offline')}
                 </span>
               </div>
-              <p className="text-sm text-[#8696a0] truncate">Click to start secure session</p>
+              <div className="flex justify-between items-center text-sm">
+                <p className="text-[#8696a0] truncate pr-2 flex-1">
+                  {lastMessages?.[user.id] || "Click to start secure session"}
+                </p>
+                {unreadCounts?.[user.id] ? (
+                  <div className="w-5 h-5 bg-[#00a884] rounded-full flex items-center justify-center flex-shrink-0">
+                    <span className="text-xs text-white font-medium">{unreadCounts[user.id]}</span>
+                  </div>
+                ) : null}
+              </div>
             </div>
           </div>
         ))}
