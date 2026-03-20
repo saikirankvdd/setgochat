@@ -1,5 +1,6 @@
 import express from 'express';
-import { createServer } from 'https';
+import { createServer as createHttpsServer } from 'https';
+import { createServer as createHttpServer } from 'http';
 import selfsigned from 'selfsigned';
 import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
@@ -93,7 +94,12 @@ if (fs.existsSync('cert.pem') && fs.existsSync('key.pem')) {
   } catch(e) {}
 }
 
-const httpServer = createServer(httpsOptions, app);
+// In production (like Railway), the host platform manages HTTPS for us automatically at their edge proxy!
+const isProduction = process.env.NODE_ENV === 'production';
+const httpServer = isProduction 
+  ? createHttpServer(app) 
+  : createHttpsServer(httpsOptions, app);
+
 const io = new Server(httpServer, {
   cors: { origin: '*' },
   maxHttpBufferSize: 1e8 // 100 MB
@@ -447,5 +453,5 @@ if (process.env.NODE_ENV !== 'production') {
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;
 httpServer.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running securely on https://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
 });
