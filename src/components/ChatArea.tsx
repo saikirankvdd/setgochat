@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../App';
 import { Socket } from 'socket.io-client';
-import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff } from 'lucide-react';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createCarrierWav } from '../utils/stego';
@@ -24,6 +24,11 @@ interface Message {
   timestamp: number;
   isSelfDestruct?: boolean;
   expiresAt?: number;
+  isRevealed?: boolean;
+  isOneTime?: boolean;
+  timerSeconds?: number;
+  isPaused?: boolean;
+  timeRemaining?: number;
   file?: {
     name: string;
     type: string;
@@ -34,7 +39,8 @@ interface Message {
 export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pendingCall, clearPendingCall }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
-  const [snapchatMode, setSnapchatMode] = useState(false);
+  const [snapchatMode, setSnapchatMode] = useState(false); // Disappearing timer
+  const [oneTimeView, setOneTimeView] = useState(false);   // View once mode
   const [timer, setTimer] = useState(10); // seconds
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -107,7 +113,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             text: decrypted,
             timestamp: Date.now(),
             isSelfDestruct: data.isSelfDestruct,
-            expiresAt: data.isSelfDestruct ? Date.now() + (data.timer * 1000) : undefined
+            isOneTime: data.isOneTime,
+            timerSeconds: data.timer,
+            isRevealed: !(data.isSelfDestruct || data.isOneTime),
+            expiresAt: undefined
           };
           setMessages(prev => [...prev, newMessage]);
         }
@@ -128,7 +137,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             text: '',
             timestamp: Date.now(),
             isSelfDestruct: data.isSelfDestruct,
-            expiresAt: data.isSelfDestruct ? Date.now() + (data.timer * 1000) : undefined,
+            isOneTime: data.isOneTime,
+            timerSeconds: data.timer,
+            isRevealed: !(data.isSelfDestruct || data.isOneTime),
+            expiresAt: undefined,
             file: filePayload
           };
           setMessages(prev => [...prev, newMessage]);
@@ -247,11 +259,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     const interval = setInterval(() => {
       const now = Date.now();
       setMessages(prev => {
-        const filtered = prev.filter(m => !m.expiresAt || m.expiresAt > now);
-        // Only return new array if length changed to prevent unnecessary re-renders
+        const filtered = prev.filter(m => {
+          if (!m.expiresAt) return true;
+          if (m.isPaused) return true; // Keep message alive while downloading/paused
+          return m.expiresAt > now;
+        });
+        // Only trigger React render if something actually expired and left the array
         return filtered.length === prev.length ? prev : filtered;
       });
-    }, 1000);
+    }, 100); // 100ms for smoother countdown visuals
     return () => clearInterval(interval);
   }, []);
 
@@ -450,6 +466,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             toId: targetUser.id,
             encryptedFile: encryptedFile,
             isSelfDestruct: snapchatMode,
+            isOneTime: oneTimeView,
             timer: timer
           });
 
@@ -459,6 +476,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             text: '',
             timestamp: Date.now(),
             isSelfDestruct: snapchatMode,
+            isOneTime: oneTimeView,
+            timerSeconds: timer,
+            isRevealed: true,
             expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined,
             file: {
               name: file.name,
@@ -522,6 +542,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 toId: targetUser.id,
                 encryptedFile: encryptedFile,
                 isSelfDestruct: snapchatMode,
+                isOneTime: oneTimeView,
                 timer: timer
               });
 
@@ -531,6 +552,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 text: '',
                 timestamp: Date.now(),
                 isSelfDestruct: snapchatMode,
+                isOneTime: oneTimeView,
+                timerSeconds: timer,
+                isRevealed: true,
                 expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined,
                 file: {
                   name: 'Voice Message.webm',
@@ -593,6 +617,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         toId: targetUser.id,
         audioBase64: base64,
         isSelfDestruct: snapchatMode,
+        isOneTime: oneTimeView,
         timer: timer
       });
 
@@ -603,6 +628,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         text: inputText,
         timestamp: Date.now(),
         isSelfDestruct: snapchatMode,
+        isOneTime: oneTimeView,
+        timerSeconds: timer,
+        isRevealed: true,
         expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined
       }]);
 
@@ -610,6 +638,66 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     } catch (err) {
       alert('Error encoding message: ' + err);
     }
+  };
+
+  const handleReveal = (msgId: string) => {
+    setMessages(prev => prev.map(m => {
+      if (m.id === msgId) {
+        return {
+          ...m,
+          isRevealed: true,
+          expiresAt: m.isSelfDestruct ? Date.now() + ((m.timerSeconds || 10) * 1000) : undefined
+        };
+      }
+      return m;
+    }));
+  };
+
+  const destroyMessage = (msgId: string) => {
+    setMessages(prev => prev.filter(m => m.id !== msgId));
+  };
+
+  const triggerDownload = (msgId: string, filename: string, base64data: string) => {
+    // 1. Pause countdown
+    setMessages(prev => prev.map(m => {
+      if (m.id === msgId && m.expiresAt) {
+        return { ...m, isPaused: true, timeRemaining: Math.max(0, m.expiresAt - Date.now()) };
+      }
+      return m;
+    }));
+
+    // 2. Process file download (using Blob handles large files without freezing UX)
+    try {
+      const parts = base64data.split(',');
+      const bstr = atob(parts[parts.length - 1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+      const blob = new Blob([u8arr], { type: parts[0].split(':')[1].split(';')[0] });
+      const url = URL.createObjectURL(blob);
+      
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Download Error:", err);
+    }
+
+    // 3. Resume countdown after typical download pop-up processes (2 seconds grace period)
+    setTimeout(() => {
+      setMessages(prev => prev.map(m => {
+        if (m.id === msgId && m.isPaused && m.timeRemaining !== undefined) {
+          return { ...m, isPaused: false, expiresAt: Date.now() + m.timeRemaining };
+        }
+        return m;
+      }));
+    }, 2000); 
   };
 
   const renderMessageText = (text: string) => {
@@ -720,13 +808,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             </div>
           </div>
         <div className="flex items-center space-x-5 text-[#aebac1]">
-          <button 
-            onClick={() => setSnapchatMode(!snapchatMode)}
-            className={`p-1.5 rounded-lg transition-colors ${snapchatMode ? 'bg-[#00a884] text-white' : 'hover:bg-[#2a3942]'}`}
-            title="Snapchat Mode (Disappearing Messages)"
-          >
-            <Eye className="w-5 h-5" />
-          </button>
           <Phone className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(false)} />
           <Video className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(true)} />
           <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" />
@@ -746,19 +827,58 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             <div className={`max-w-[65%] rounded-lg px-3 py-2 shadow-sm relative group ${
               msg.fromId === user.id ? 'bg-[#005c4b] text-[#e9edef]' : 'bg-[#202c33] text-[#e9edef]'
             }`}>
-              {msg.file ? (
-                <div className="mb-2">
+              {((msg.isSelfDestruct || msg.isOneTime) && !msg.isRevealed) ? (
+                <div 
+                  className="flex flex-col items-center justify-center p-3 cursor-pointer hover:bg-black/20 rounded-lg group transition-colors min-w-[120px]"
+                  onClick={() => handleReveal(msg.id)}
+                >
+                  <div className="relative">
+                    {msg.isOneTime ? (
+                      <span className="flex items-center justify-center w-8 h-8 rounded-full border-2 border-[#00a884] text-[#00a884] font-bold text-sm mb-2 group-hover:scale-110 transition-transform">1</span>
+                    ) : (
+                      <Clock className="w-8 h-8 text-[#00a884] mb-2 group-hover:scale-110 transition-transform" />
+                    )}
+                  </div>
+                  <span className="text-[#00a884] font-medium text-sm text-center">
+                    Tap to view
+                  </span>
+                </div>
+              ) : (
+                <>
+                  {msg.isOneTime && msg.isRevealed && msg.fromId !== user.id && (
+                     <button onClick={() => destroyMessage(msg.id)} className="absolute -top-3 -right-3 bg-red-500 hover:bg-red-600 rounded-full p-1.5 shadow-lg text-white z-50 transform hover:scale-110 transition-transform" title="Destroy Message">
+                       <X className="w-4 h-4" />
+                     </button>
+                  )}
+                  {msg.file ? (
+                    <div className="mb-2 relative">
                   {msg.file.type.startsWith('image/') ? (
-                    <img src={msg.file.data} alt="attachment" className="max-w-full rounded-lg max-h-64 object-contain" />
+                    <div className="relative inline-block group/media">
+                      <img src={msg.file.data} alt="attachment" className="max-w-full rounded-lg max-h-64 object-contain" />
+                      <button onClick={(e) => { e.preventDefault(); triggerDownload(msg.id, msg.file!.name, msg.file!.data); }} className="absolute bottom-2 right-2 p-2 bg-black/60 hover:bg-black/80 rounded-full text-white backdrop-blur-sm transition-colors opacity-0 group-hover/media:opacity-100">
+                        <Download className="w-4 h-4" />
+                      </button>
+                    </div>
                   ) : msg.file.type.startsWith('video/') ? (
-                    <video src={msg.file.data} controls className="max-w-full rounded-lg max-h-64" />
+                    <div className="relative inline-block group/media">
+                      <video src={msg.file.data} controls className="max-w-full rounded-lg max-h-64" />
+                      <button onClick={(e) => { e.preventDefault(); triggerDownload(msg.id, msg.file!.name, msg.file!.data); }} className="absolute -top-2 -right-2 p-2 bg-black/60 hover:bg-black/80 rounded-full text-white backdrop-blur-sm transition-colors opacity-0 group-hover/media:opacity-100 shadow-xl z-10">
+                        <Download className="w-4 h-4" />
+                      </button>
+                    </div>
                   ) : msg.file.type.startsWith('audio/') ? (
-                    <audio src={msg.file.data} controls className="max-w-full" />
+                    <div className="flex items-center space-x-2">
+                       <audio src={msg.file.data} controls className="max-w-full flex-1" />
+                       <button onClick={(e) => { e.preventDefault(); triggerDownload(msg.id, msg.file!.name, msg.file!.data); }} className="p-2 bg-[#2a3942] hover:bg-[#3a4952] rounded-full text-[#aebac1] transition-colors">
+                        <Download className="w-4 h-4" />
+                       </button>
+                    </div>
                   ) : (
-                    <a href={msg.file.data} download={msg.file.name} className="flex items-center space-x-2 bg-[#2a3942] p-3 rounded-lg hover:bg-[#3a4952] transition-colors">
-                      <Paperclip className="w-5 h-5" />
-                      <span className="truncate max-w-[200px]">{msg.file.name}</span>
-                    </a>
+                    <button onClick={(e) => { e.preventDefault(); triggerDownload(msg.id, msg.file!.name, msg.file!.data); }} className="flex items-center space-x-2 bg-[#2a3942] p-3 rounded-lg hover:bg-[#3a4952] transition-colors text-left w-full">
+                      <Paperclip className="w-5 h-5 flex-shrink-0" />
+                      <span className="truncate max-w-[200px] flex-1">{msg.file.name}</span>
+                      <Download className="w-4 h-4 flex-shrink-0 text-[#aebac1]" />
+                    </button>
                   )}
                 </div>
               ) : null}
@@ -767,13 +887,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 <span className="text-[10px] text-[#8696a0]">
                   {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
-                {msg.isSelfDestruct && (
-                  <span className="text-[10px] text-orange-400 font-bold flex items-center">
+                {msg.isSelfDestruct && msg.isRevealed && msg.expiresAt && (
+                  <span className={`text-[10px] font-bold flex items-center ${msg.isPaused ? 'text-blue-400' : 'text-orange-400'}`}>
                     <Trash2 className="w-3 h-3 ml-1" />
-                    {Math.max(0, Math.ceil((msg.expiresAt! - Date.now()) / 1000))}s
+                    {msg.isPaused && msg.timeRemaining 
+                      ? `${Math.max(0, Math.ceil(msg.timeRemaining / 1000))}s (Paused)` 
+                      : `${Math.max(0, Math.ceil((msg.expiresAt - Date.now()) / 1000))}s`}
                   </span>
                 )}
               </div>
+              </>
+              )}
             </div>
           </div>
         ))}
@@ -792,6 +916,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             className={`w-6 h-6 cursor-pointer hover:text-[#d1d7db] ${showEmojiPicker ? 'text-[#00a884]' : ''}`} 
             onClick={() => setShowEmojiPicker(!showEmojiPicker)} 
           />
+          <button 
+            onClick={() => setOneTimeView(!oneTimeView)}
+            className={`flex items-center justify-center w-6 h-6 rounded-full border-[2px] transition-all shadow-sm ${oneTimeView ? 'bg-[#00a884] border-[#00a884] text-white' : 'bg-transparent border-[#aebac1] text-[#aebac1] hover:border-[#d1d7db] hover:text-[#d1d7db]'}`}
+            title="View Once"
+          >
+            <span className="text-[10px] font-bold select-none text-center leading-none">1</span>
+          </button>
           <Paperclip 
             className="w-6 h-6 cursor-pointer hover:text-[#d1d7db]" 
             onClick={() => fileInputRef.current?.click()}
@@ -807,25 +938,33 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           <input
             type="text"
             placeholder="Type a secure message..."
-            className="w-full bg-[#2a3942] text-[#e9edef] rounded-lg py-2.5 px-4 focus:outline-none text-sm"
+            className="w-full bg-[#2a3942] text-[#e9edef] rounded-lg py-2.5 pl-4 pr-24 focus:outline-none text-sm"
             value={inputText}
             onChange={(e) => setInputText(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
           />
-          {snapchatMode && (
-             <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center space-x-2">
-                <select 
-                  className="bg-[#202c33] text-xs text-orange-400 border-none focus:ring-0 cursor-pointer"
-                  value={timer}
-                  onChange={(e) => setTimer(Number(e.target.value))}
-                >
-                  <option value={5}>5s</option>
-                  <option value={10}>10s</option>
-                  <option value={30}>30s</option>
-                  <option value={60}>1m</option>
-                </select>
-             </div>
-          )}
+          <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center space-x-2 bg-[#2a3942] pl-2 rounded-r-lg">
+            {snapchatMode && (
+              <select 
+                className="bg-[#2a3942] text-xs font-bold text-orange-400 border-none outline-none focus:ring-0 cursor-pointer appearance-none text-right"
+                value={timer}
+                onChange={(e) => setTimer(Number(e.target.value))}
+                title="Self-Destruct Timer"
+              >
+                <option value={5}>5s</option>
+                <option value={10}>10s</option>
+                <option value={30}>30s</option>
+                <option value={60}>1m</option>
+              </select>
+            )}
+            <button 
+              onClick={() => setSnapchatMode(!snapchatMode)}
+              className={`p-1 rounded-full transition-all ${snapchatMode ? 'text-orange-400' : 'text-[#8696a0] hover:text-[#d1d7db]'}`}
+              title="Disappearing Messages Timer"
+            >
+              <Clock className="w-5 h-5" />
+            </button>
+          </div>
         </div>
         <button 
           onClick={inputText ? handleSendMessage : handleVoiceRecord}
