@@ -12,7 +12,11 @@ import fs from 'fs';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const db = new Database('database.db');
+import 'dotenv/config';
+
+// Use a persistent data directory if deployed (e.g. Render /data disk), otherwise use root
+const dataDir = process.env.DATA_DIR || '.';
+const db = new Database(path.join(dataDir, 'database.db'));
 
 // Initialize Database
 db.exec(`
