@@ -1,4 +1,6 @@
 import express from 'express';
+import dns from 'dns';
+dns.setDefaultResultOrder('ipv4first'); // Force IPv4 routing for Nodemailer since Render/Railway struggles with IPv6 outbound
 import { createServer as createHttpsServer } from 'https';
 import { createServer as createHttpServer } from 'http';
 import selfsigned from 'selfsigned';
