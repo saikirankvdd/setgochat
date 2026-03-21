@@ -4,8 +4,14 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
+@media print {
+  body { display: none !important; }
+}
+
 body {
   @apply bg-[#111b21] text-[#e9edef] font-sans;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 /* Custom Scrollbar */
