@@ -9,3 +9,4 @@ coverage/
 database.db
 uploads/
 *.pem
+shannon-pentester/
