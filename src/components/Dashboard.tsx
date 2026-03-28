@@ -36,9 +36,17 @@ export function Dashboard({ user, socket }: DashboardProps) {
   }, [activeChat]);
 
   useEffect(() => {
-    fetch('/api/users')
+    fetch('/api/users', {
+      headers: {
+        'Authorization': `Bearer ${user.token}`
+      }
+    })
       .then(res => res.json())
-      .then(data => setUsers(data.filter((u: User) => u.id !== user.id)));
+      .then(data => {
+        if (Array.isArray(data)) {
+          setUsers(data.filter((u: User) => u.id !== user.id));
+        }
+      });
   }, [user.id]);
 
   useEffect(() => {

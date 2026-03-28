@@ -12,6 +12,7 @@ export type User = {
   id: number;
   username: string;
   email: string;
+  token?: string;
   isAdmin?: boolean;
 };
 
@@ -21,8 +22,10 @@ export default function App() {
 
   useEffect(() => {
     if (user) {
-      const newSocket = io();
-      newSocket.emit('register', user.id);
+      const newSocket = io({
+        auth: { token: user.token }
+      });
+      newSocket.emit('register');
       
       newSocket.on('banned', () => {
          setUser(null);

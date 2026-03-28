@@ -150,8 +150,12 @@ const httpServer = isProduction
   ? createHttpServer(app) 
   : createHttpsServer(httpsOptions, app);
 
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+  ? [process.env.FRONTEND_URL || 'https://stegochat-e74t.onrender.com'] 
+  : '*';
+
 const io = new Server(httpServer, {
-  cors: { origin: '*' },
+  cors: { origin: allowedOrigins },
   maxHttpBufferSize: 1e8 // 100 MB
 });
 
@@ -245,10 +249,6 @@ app.post('/api/login', authLimiter, (req, res) => {
   }
 });
 
-app.get('/api/users', (req, res) => {
-  const users = db.prepare('SELECT id, username FROM users WHERE LOWER(email) != ? AND LOWER(username) != ?').all('saikirankvdd13@gmail.com', 'admin_saikiran');
-  res.json(users);
-});
 
 // Socket.io Logic
 const userSockets = new Map<number, string>();
@@ -310,10 +310,25 @@ function broadcastOnlineUsers() {
   io.emit('online_users', onlineUserIds);
 }
 
-io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+io.use((socket: any, next) => {
+  const token = socket.handshake.auth?.token;
+  if (!token) {
+    return next(new Error('Authentication error: Token missing'));
+  }
+  try {
+    const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_for_jwt');
+    socket.userId = decoded.id; // Trusted ID
+    next();
+  } catch (err) {
+    next(new Error('Authentication error: Invalid Token'));
+  }
+});
 
-  socket.on('register', (userId: number) => {
+io.on('connection', (socket: any) => {
+  console.log('User connected:', socket.id, 'Authenticated as:', socket.userId);
+
+  socket.on('register', () => {
+    const userId = socket.userId; // Use trusted ID instead of client payload
     userSockets.set(userId, socket.id);
     socket.join(`user_${userId}`);
     console.log(`User ${userId} registered with socket ${socket.id}`);
@@ -355,7 +370,8 @@ io.on('connection', (socket) => {
     }
   });
 
-  socket.on('start_chat', ({ fromId, toId }) => {
+  socket.on('start_chat', ({ toId }) => {
+    const fromId = socket.userId; // Trusted ID
     const sessionId = [fromId, toId].sort().join('-');
     let session: any = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId);
     
@@ -375,20 +391,22 @@ io.on('connection', (socket) => {
   });
 
   socket.on('send_message', (data) => {
-    const toSocketId = userSockets.get(data.toId);
+    const safeData = { ...data, fromId: socket.userId };
+    const toSocketId = userSockets.get(safeData.toId);
     if (toSocketId) {
-      io.to(toSocketId).emit('receive_message', data);
+      io.to(toSocketId).emit('receive_message', safeData);
     } else {
-      db.prepare('INSERT INTO offline_messages (to_id, payload) VALUES (?, ?)').run(data.toId, JSON.stringify({ type: 'text', data }));
+      db.prepare('INSERT INTO offline_messages (to_id, payload) VALUES (?, ?)').run(safeData.toId, JSON.stringify({ type: 'text', data: safeData }));
     }
   });
 
   socket.on('send_file', (data) => {
-    const toSocketId = userSockets.get(data.toId);
+    const safeData = { ...data, fromId: socket.userId };
+    const toSocketId = userSockets.get(safeData.toId);
     if (toSocketId) {
-      io.to(toSocketId).emit('receive_file', data);
+      io.to(toSocketId).emit('receive_file', safeData);
     } else {
-      db.prepare('INSERT INTO offline_messages (to_id, payload) VALUES (?, ?)').run(data.toId, JSON.stringify({ type: 'file', data }));
+      db.prepare('INSERT INTO offline_messages (to_id, payload) VALUES (?, ?)').run(safeData.toId, JSON.stringify({ type: 'file', data: safeData }));
     }
   });
 
@@ -419,7 +437,7 @@ io.on('connection', (socket) => {
 });
 
 // --- JWT AUTHENTICATION MIDDLEWARE ---
-const verifyAdmin = (req: any, res: any, next: any) => {
+const verifyAuth = (req: any, res: any, next: any) => {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized: Missing Token' });
@@ -428,9 +446,6 @@ const verifyAdmin = (req: any, res: any, next: any) => {
   const token = authHeader.split(' ')[1];
   try {
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_for_jwt');
-    if (!decoded.isAdmin) {
-      return res.status(403).json({ error: 'Forbidden: You are not authorized to perform this admin action.' });
-    }
     req.user = decoded; // Attach validated token info
     next();
   } catch (err) {
@@ -438,7 +453,21 @@ const verifyAdmin = (req: any, res: any, next: any) => {
   }
 };
 
+const verifyAdmin = (req: any, res: any, next: any) => {
+  verifyAuth(req, res, () => {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: You are not authorized to perform this admin action.' });
+    }
+    next();
+  });
+};
+
 // Admin Routes (Now Protected by verifyAdmin Guard!)
+app.get('/api/users', verifyAuth, (req: any, res: any) => {
+  const users = db.prepare('SELECT id, username FROM users WHERE LOWER(email) != ? AND LOWER(username) != ?').all('saikirankvdd13@gmail.com', 'admin_saikiran');
+  res.json(users);
+});
+
 app.get('/api/admin/stats', verifyAdmin, (req, res) => {
   const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users').get() as any;
   const activeSessions = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as any;
