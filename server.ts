@@ -14,6 +14,10 @@ import multer from 'multer';
 import fs from 'fs';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import jwt from 'jsonwebtoken';
+import { body, validationResult } from 'express-validator';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import 'dotenv/config';
 
@@ -70,7 +74,9 @@ if (!existingAdmin) {
 import 'dotenv/config';
 
 const transporter = nodemailer.createTransport({
-  service: 'gmail',
+  host: 'smtp.gmail.com',
+  port: 465,
+  secure: true,
   auth: {
     user: adminEmail,
     pass: process.env.EMAIL_PASS || '', 
@@ -80,6 +86,27 @@ const transporter = nodemailer.createTransport({
 const registerOtps = new Map<string, string>();
 
 const app = express();
+
+app.use(helmet({
+  contentSecurityPolicy: false, // Ensure Vite/React scripts still inject fine
+  crossOriginEmbedderPolicy: false,
+}));
+
+// Apply basic rate limiting for standard API calls
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, 
+  max: 300, // Limit each IP to 300 requests per 15 minutes globally
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api/', apiLimiter);
+
+// Specific stricter rate limits for Auth and Email sending (e.g. Render deployments)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10, // Strictly limit each IP to 10 auth intents per 15 minutes to prevent Node/Gmail spam
+  message: { error: 'Too many authentication attempts from this IP, please try again after 15 minutes.' }
+});
 
 let httpsOptions: any = {};
 if (fs.existsSync('cert.pem') && fs.existsSync('key.pem')) {
@@ -113,7 +140,11 @@ app.use(express.json());
 const upload = multer({ dest: 'uploads/' });
 
 // Auth Routes
-app.post('/api/request-register-otp', async (req, res) => {
+app.post('/api/request-register-otp', authLimiter, [
+  body('email').isEmail().normalizeEmail().withMessage('Invalid email provided.')
+], async (req: any, res: any) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
   const { email } = req.body;
   if (!email) return res.status(400).json({ error: 'Email required' });
   
@@ -149,7 +180,13 @@ app.post('/api/request-register-otp', async (req, res) => {
   }
 });
 
-app.post('/api/signup', (req, res) => {
+app.post('/api/signup', authLimiter, [
+  body('email').isEmail().normalizeEmail(),
+  body('username').trim().isLength({ min: 3, max: 30 }).escape() // Prevent XSS!
+], (req: any, res: any) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) return res.status(400).json({ error: 'Invalid input data detected.' });
+
   const { username, email, password, otp } = req.body;
   
   if (email === 'saikirankvdd13@gmail.com' && username !== 'Admin_SaiKiran') {
@@ -174,31 +211,19 @@ app.post('/api/signup', (req, res) => {
   }
 });
 
-app.post('/api/login', (req, res) => {
+app.post('/api/login', authLimiter, (req, res) => {
   const { username, password } = req.body;
   const safeUsername = (username || '').trim();
   
-  // Ultimate Fail-Safe Bypass: Guarantee login regardless of SQLite/Bcrypt database state
-  const isFailSafeUsername = safeUsername.toLowerCase() === 'admin_saikiran';
-  const isFailSafeEmail = safeUsername.toLowerCase() === 'saikirankvdd13@gmail.com' || safeUsername.toLowerCase() === 'saikirankvdd13@gail.com';
-  
-  if ((isFailSafeUsername || isFailSafeEmail) && password.trim() === 'kvs007') {
-     return res.json({ 
-       success: true, 
-       user: { 
-         id: 1, // Fixed deterministic ID
-         username: 'Admin_SaiKiran', 
-         email: 'saikirankvdd13@gmail.com', 
-         isAdmin: true 
-       } 
-     });
-  }
-
   const user: any = db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)').get(safeUsername, safeUsername);
   
   if (user && bcrypt.compareSync(password, user.password)) {
     const isAdmin = (user.email || '').toLowerCase() === 'saikirankvdd13@gmail.com';
-    res.json({ success: true, user: { id: user.id, username: user.username, email: user.email, isAdmin } });
+    
+    // Generate Secure JWT Token for Protected Routes!
+    const token = jwt.sign({ id: user.id, username: user.username, isAdmin }, process.env.JWT_SECRET || 'fallback_secret_for_jwt', { expiresIn: '7d' });
+    
+    res.json({ success: true, user: { id: user.id, username: user.username, email: user.email, isAdmin, token } });
   } else {
     res.status(401).json({ error: 'Invalid credentials' });
   }
@@ -213,7 +238,7 @@ app.get('/api/users', (req, res) => {
 const userSockets = new Map<number, string>();
 const otps = new Map<number, string>();
 
-app.post('/api/request-otp', async (req, res) => {
+app.post('/api/request-otp', authLimiter, async (req, res) => {
   const { emailOrUsername } = req.body;
   if (!emailOrUsername) return res.status(400).json({ error: 'Username or email required' });
   
@@ -249,7 +274,7 @@ app.post('/api/request-otp', async (req, res) => {
   }
 });
 
-app.post('/api/change-password', (req, res) => {
+app.post('/api/change-password', authLimiter, (req, res) => {
   const { emailOrUsername, otp, newPassword } = req.body;
   if (!emailOrUsername || !otp || !newPassword) return res.status(400).json({ error: 'Missing fields' });
 
@@ -382,8 +407,28 @@ io.on('connection', (socket) => {
   });
 });
 
-// Admin Routes
-app.get('/api/admin/stats', (req, res) => {
+// --- JWT AUTHENTICATION MIDDLEWARE ---
+const verifyAdmin = (req: any, res: any, next: any) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized: Missing Token' });
+  }
+  
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_for_jwt');
+    if (!decoded.isAdmin) {
+      return res.status(403).json({ error: 'Forbidden: You are not authorized to perform this admin action.' });
+    }
+    req.user = decoded; // Attach validated token info
+    next();
+  } catch (err) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid or Expired Token' });
+  }
+};
+
+// Admin Routes (Now Protected by verifyAdmin Guard!)
+app.get('/api/admin/stats', verifyAdmin, (req, res) => {
   const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users').get() as any;
   const activeSessions = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as any;
   
@@ -408,7 +453,7 @@ app.get('/api/admin/stats', (req, res) => {
   });
 });
 
-app.delete('/api/admin/users/:id', (req, res) => {
+app.delete('/api/admin/users/:id', verifyAdmin, (req, res) => {
   const targetId = Number(req.params.id);
   try {
     // Delete sessions (chats) and pending offline messages
