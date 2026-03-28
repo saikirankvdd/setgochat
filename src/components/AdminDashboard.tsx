@@ -21,7 +21,9 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/admin/stats')
+    fetch('/api/admin/stats', {
+      headers: { 'Authorization': `Bearer ${user.token}` }
+    })
       .then(res => res.json())
       .then(data => {
         setStats(data);
@@ -41,7 +43,10 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
     if (!window.confirm("Are you sure you want to completely delete this user? This will instantly erase them and their session history.")) return;
     
     try {
-       const res = await fetch(`/api/admin/users/${targetId}`, { method: 'DELETE' });
+       const res = await fetch(`/api/admin/users/${targetId}`, { 
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${user.token}` }
+       });
        if (res.ok) {
           setStats(prev => {
              if (!prev) return prev;
