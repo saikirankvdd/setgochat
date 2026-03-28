@@ -73,15 +73,36 @@ if (!existingAdmin) {
 
 import 'dotenv/config';
 
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 465,
-  secure: true,
-  auth: {
-    user: adminEmail,
-    pass: process.env.EMAIL_PASS || '', 
-  },
-});
+async function sendEmailJS(toEmail: string, otpCode: string, isReset: boolean = false) {
+  // If no private key is set yet, explicitly bypass so user can test login while configuring EmailJS
+  if (!process.env.EMAILJS_PRIVATE_KEY) {
+     console.log(`[Local fallback] EmailJS skipped. OTP for ${toEmail}: ${otpCode}`);
+     return true; 
+  }
+  
+  const payload = {
+    service_id: process.env.EMAILJS_SERVICE_ID || 'service_d59ibbf',
+    template_id: process.env.EMAILJS_TEMPLATE_ID,
+    user_id: process.env.EMAILJS_PUBLIC_KEY,
+    accessToken: process.env.EMAILJS_PRIVATE_KEY,
+    template_params: {
+        to_email: toEmail,
+        otp: otpCode,
+        subject: isReset ? "Password Reset OTP" : "Registration OTP"
+    }
+  };
+
+  const response = await fetch('https://api.emailjs.com/api/v1.0/email/send', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    headers: { 'Content-Type': 'application/json' }
+  });
+  
+  if (!response.ok) {
+     const errorText = await response.text();
+     throw new Error(`EmailJS HTTP Error: ${errorText}`);
+  }
+}
 
 const registerOtps = new Map<string, string>();
 
@@ -160,23 +181,18 @@ app.post('/api/request-register-otp', authLimiter, [
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   registerOtps.set(email, otp);
 
-  if (!process.env.EMAIL_PASS) {
+  if (!process.env.EMAILJS_PRIVATE_KEY) {
       console.log(`[Local fallback] Registration OTP for ${email}: ${otp}`);
-      return res.json({ success: true, message: 'OTP logged to console because EMAIL_PASS is not set in .env' });
+      return res.json({ success: true, message: 'OTP logged to console because EmailJS is not fully configured in Render yet.' });
   }
 
   try {
-    await transporter.sendMail({
-      from: `"Secure Audio Steganography" <${adminEmail}>`,
-      to: email,
-      subject: "Your Registration OTP",
-      text: `Welcome! Your 6-digit OTP for registration is: ${otp}\n\nPlease do not share this with anyone.`,
-    });
-    console.log(`[Email System] Registration OTP sent to ${email}`);
+    await sendEmailJS(email, otp, false);
+    console.log(`[Email System] Registration OTP sent via EmailJS securely to ${email}`);
     res.json({ success: true, message: 'OTP sent to email successfully' });
   } catch (error: any) {
-    console.error('Email error:', error);
-    res.status(500).json({ error: 'Failed to send OTP email. Please ensure your Gmail App Password is set correctly in .env as EMAIL_PASS.' });
+    console.error('Email error:', error.message);
+    res.status(500).json({ error: 'Failed to send OTP email. View Render logs for EmailJS details.' });
   }
 });
 
@@ -252,7 +268,7 @@ app.post('/api/request-otp', authLimiter, async (req, res) => {
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
   otps.set(user.id, otp);
   
-  if (!process.env.EMAIL_PASS) {
+  if (!process.env.EMAILJS_PRIVATE_KEY) {
       console.log(`\n========================================`);
       console.log(`[ADMIN ALERT] Password Reset Requested for ${user.username} (ID: ${user.id}). OTP: ${otp}`);
       console.log(`========================================\n`);
@@ -260,17 +276,12 @@ app.post('/api/request-otp', authLimiter, async (req, res) => {
   }
 
   try {
-    await transporter.sendMail({
-      from: `"Secure Audio Steganography" <${adminEmail}>`,
-      to: user.email,
-      subject: "Your Password Reset OTP",
-      text: `Hello ${user.username},\n\nYour 6-digit OTP for resetting your password is: ${otp}\n\nIf you did not request this, please ignore this email.`,
-    });
-    console.log(`[Email System] Password Reset OTP sent to ${user.email}`);
+    await sendEmailJS(user.email, otp, true);
+    console.log(`[Email System] Password Reset OTP sent securely via EmailJS to ${user.email}`);
     res.json({ success: true });
   } catch (error: any) {
-    console.error('Email error:', error);
-    res.status(500).json({ error: 'Failed to send OTP email.' });
+    console.error('Email error:', error.message);
+    res.status(500).json({ error: 'Failed to send EmailJS OTP.' });
   }
 });
 
