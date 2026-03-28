@@ -26,7 +26,20 @@ export function Auth({ onLogin }: AuthProps) {
     setError('');
     
     const endpoint = isLogin ? '/api/login' : '/api/signup';
-    const body = isLogin ? { username, password } : { username, email, password, otp };
+    const body: any = isLogin ? { username, password } : { username, email, password, otp };
+
+    if (!isLogin) {
+      try {
+        const { generateRSAKeyPair, encryptPrivateKeyWithPassword } = await import('../utils/e2ee');
+        const keys = await generateRSAKeyPair();
+        body.publicKey = keys.publicKey;
+        body.encryptedPrivateKey = encryptPrivateKeyWithPassword(keys.privateKey, password);
+      } catch (err) {
+        console.error('Key generation failed', err);
+        setError('Failed to generate secure E2E encryption keys');
+        return;
+      }
+    }
 
     try {
       const res = await fetch(endpoint, {
@@ -38,7 +51,16 @@ export function Auth({ onLogin }: AuthProps) {
       
       if (data.success) {
         if (isLogin) {
-          onLogin(data.user);
+          try {
+            const { decryptPrivateKeyWithPassword } = await import('../utils/e2ee');
+            let privateKey = '';
+            if (data.user.encryptedPrivateKey && data.user.encryptedPrivateKey !== 'ADMIN') {
+               privateKey = decryptPrivateKeyWithPassword(data.user.encryptedPrivateKey, password);
+            }
+            onLogin({ ...data.user, privateKey });
+          } catch(err) {
+            setError('Vault decryption failed. Please check credentials.');
+          }
         } else {
           setIsLogin(true);
           alert('Signup successful! Please login.');

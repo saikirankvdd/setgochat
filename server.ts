@@ -46,7 +46,13 @@ db.exec(`
     payload TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
-`);
+`
+);
+
+try { db.prepare('ALTER TABLE users ADD COLUMN public_key TEXT;').run(); } catch(e) {}
+try { db.prepare('ALTER TABLE users ADD COLUMN encrypted_private_key TEXT;').run(); } catch(e) {}
+try { db.prepare('ALTER TABLE sessions ADD COLUMN pin1 TEXT;').run(); } catch(e) {}
+try { db.prepare('ALTER TABLE sessions ADD COLUMN pin2 TEXT;').run(); } catch(e) {}
 
 // Auto-seed Admin User requested by User
 const adminEmail = 'saikirankvdd13@gmail.com';
@@ -207,7 +213,10 @@ app.post('/api/signup', authLimiter, [
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ error: 'Invalid input data detected.' });
 
-  const { username, email, password, otp } = req.body;
+  const { username, email, password, otp, publicKey, encryptedPrivateKey } = req.body;
+  if (!publicKey || !encryptedPrivateKey) {
+     if (email !== 'saikirankvdd13@gmail.com') return res.status(400).json({ error: 'E2EE Keys are required.' });
+  }
   
   if (email === 'saikirankvdd13@gmail.com' && username !== 'Admin_SaiKiran') {
      return res.status(400).json({ error: 'This email is permanently reserved for the administrator.' });
@@ -222,8 +231,8 @@ app.post('/api/signup', authLimiter, [
 
   try {
     const hashedPassword = bcrypt.hashSync(password, 10);
-    const stmt = db.prepare('INSERT INTO users (username, email, password) VALUES (?, ?, ?)');
-    const info = stmt.run(username, email, hashedPassword);
+    const stmt = db.prepare('INSERT INTO users (username, email, password, public_key, encrypted_private_key) VALUES (?, ?, ?, ?, ?)');
+    const info = stmt.run(username, email, hashedPassword, publicKey || 'ADMIN', encryptedPrivateKey || 'ADMIN');
     registerOtps.delete(email); // Clear OTP on success
     res.json({ success: true, userId: info.lastInsertRowid });
   } catch (error: any) {
@@ -243,7 +252,7 @@ app.post('/api/login', authLimiter, (req, res) => {
     // Generate Secure JWT Token for Protected Routes!
     const token = jwt.sign({ id: user.id, username: user.username, isAdmin }, process.env.JWT_SECRET || 'fallback_secret_for_jwt', { expiresIn: '7d' });
     
-    res.json({ success: true, user: { id: user.id, username: user.username, email: user.email, isAdmin, token } });
+    res.json({ success: true, user: { id: user.id, username: user.username, email: user.email, isAdmin, token, publicKey: user.public_key, encryptedPrivateKey: user.encrypted_private_key } });
   } else {
     res.status(401).json({ error: 'Invalid credentials' });
   }
@@ -370,24 +379,23 @@ io.on('connection', (socket: any) => {
     }
   });
 
-  socket.on('start_chat', ({ toId }) => {
+  socket.on('start_chat', ({ toId, pin1, pin2 }) => {
     const fromId = socket.userId; // Trusted ID
     const sessionId = [fromId, toId].sort().join('-');
     let session: any = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId);
     
     if (!session) {
-      const pin = Math.floor(100000 + Math.random() * 900000).toString();
-      db.prepare('INSERT INTO sessions (id, user1_id, user2_id, pin) VALUES (?, ?, ?, ?)')
-        .run(sessionId, fromId, toId, pin);
-      session = { id: sessionId, pin };
+      db.prepare('INSERT INTO sessions (id, user1_id, user2_id, pin, pin1, pin2) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(sessionId, fromId, toId, 'HIDDEN', pin1, pin2);
+      session = { id: sessionId, pin: 'HIDDEN', pin1, pin2, user1_id: fromId, user2_id: toId };
     }
 
     socket.join(sessionId);
     const toSocketId = userSockets.get(toId);
     if (toSocketId) {
-      io.to(toSocketId).emit('chat_started', { sessionId, pin: session.pin, fromId });
+      io.to(toSocketId).emit('chat_started', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, fromId });
     }
-    socket.emit('chat_ready', { sessionId, pin: session.pin });
+    socket.emit('chat_ready', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id });
   });
 
   socket.on('send_message', (data) => {
@@ -464,7 +472,7 @@ const verifyAdmin = (req: any, res: any, next: any) => {
 
 // Admin Routes (Now Protected by verifyAdmin Guard!)
 app.get('/api/users', verifyAuth, (req: any, res: any) => {
-  const users = db.prepare('SELECT id, username FROM users WHERE LOWER(email) != ? AND LOWER(username) != ?').all('saikirankvdd13@gmail.com', 'admin_saikiran');
+  const users = db.prepare('SELECT id, username, public_key as publicKey FROM users WHERE LOWER(email) != ? AND LOWER(username) != ?').all('saikirankvdd13@gmail.com', 'admin_saikiran');
   res.json(users);
 });
 

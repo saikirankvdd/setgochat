@@ -52,24 +52,42 @@ export function Dashboard({ user, socket }: DashboardProps) {
   useEffect(() => {
     if (!socket) return;
 
-    socket.on('chat_started', (data) => {
-      setSessionInfo({ sessionId: data.sessionId, pin: data.pin });
-      pinsRef.current[data.sessionId] = data.pin;
+    socket.on('chat_started', async (data) => {
+      try {
+        const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
+        const encPin = user.id === data.user1_id ? data.pin1 : data.pin2;
+        const decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+        setSessionInfo({ sessionId: data.sessionId, pin: decryptedPin });
+        pinsRef.current[data.sessionId] = decryptedPin;
+      } catch (e) { console.error('Failed to decrypt session', e); }
     });
 
-    socket.on('chat_ready', (data) => {
-      setSessionInfo({ sessionId: data.sessionId, pin: data.pin });
-      pinsRef.current[data.sessionId] = data.pin;
+    socket.on('chat_ready', async (data) => {
+      try {
+        const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
+        const encPin = user.id === data.user1_id ? data.pin1 : data.pin2;
+        const decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+        setSessionInfo({ sessionId: data.sessionId, pin: decryptedPin });
+        pinsRef.current[data.sessionId] = decryptedPin;
+      } catch (e) { console.error('Failed to decrypt session', e); }
     });
 
     socket.on('online_users', (userIds: number[]) => {
       setOnlineUsers(userIds);
     });
 
-    socket.on('session_pins', (sessions: any[]) => {
+    socket.on('session_pins', async (sessions: any[]) => {
       const newPins: Record<string, string> = { ...pinsRef.current };
-      sessions.forEach(s => newPins[s.id] = s.pin);
-      pinsRef.current = newPins;
+      try {
+        const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
+        await Promise.all(sessions.map(async (s) => {
+          const encPin = user.id === s.user1_id ? s.pin1 : s.pin2;
+          try {
+            newPins[s.id] = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+          } catch(e) {}
+        }));
+        pinsRef.current = newPins;
+      } catch(e) {}
     });
 
     const processPreview = (data: any, isFile: boolean) => {
@@ -135,9 +153,31 @@ export function Dashboard({ user, socket }: DashboardProps) {
     setShowAdmin(true);
   };
 
-  const handleStartChat = (targetUser: User) => {
+  const handleStartChat = async (targetUser: User) => {
     setActiveChat(targetUser);
-    socket.emit('start_chat', { fromId: user.id, toId: targetUser.id });
+
+    try {
+      if (!user.publicKey || !targetUser.publicKey) {
+         console.error('Missing public keys to establish E2E session');
+         return; // If either user is missing a public key, we cannot secure the chat
+      }
+
+      const { encryptPINWithPublicKey } = await import('../utils/e2ee');
+      const myGeneratedPin = Math.floor(100000 + Math.random() * 900000).toString();
+      let pin1, pin2;
+
+      if (user.id < targetUser.id) {
+         pin1 = await encryptPINWithPublicKey(myGeneratedPin, user.publicKey);
+         pin2 = await encryptPINWithPublicKey(myGeneratedPin, targetUser.publicKey);
+      } else {
+         pin2 = await encryptPINWithPublicKey(myGeneratedPin, user.publicKey);
+         pin1 = await encryptPINWithPublicKey(myGeneratedPin, targetUser.publicKey);
+      }
+
+      socket.emit('start_chat', { toId: targetUser.id, pin1, pin2 });
+    } catch (err) {
+      console.error('E2EE Handshake failed', err);
+    }
   };
 
   return (

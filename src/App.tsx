@@ -13,6 +13,9 @@ export type User = {
   username: string;
   email: string;
   token?: string;
+  publicKey?: string;
+  encryptedPrivateKey?: string;
+  privateKey?: string;
   isAdmin?: boolean;
 };
 
