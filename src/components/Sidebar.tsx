@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { User } from '../App';
-import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus } from 'lucide-react';
+import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut } from 'lucide-react';
 
 interface SidebarProps {
   currentUser: User;
@@ -101,6 +101,10 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
                   )}
                 </div>
               )}
+              <button onClick={() => { localStorage.removeItem('stego_user'); window.location.reload(); }} className="flex items-center text-red-500 hover:text-red-400 mt-8 w-full transition-colors font-medium">
+                <LogOut className="w-5 h-5 mr-3" />
+                <span>Log Out</span>
+              </button>
             </div>
           </div>
         </div>

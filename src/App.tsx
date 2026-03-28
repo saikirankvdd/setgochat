@@ -20,8 +20,24 @@ export type User = {
 };
 
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('stego_user');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch(e) {}
+    }
+    return null;
+  });
   const [socket, setSocket] = useState<Socket | null>(null);
+
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem('stego_user', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('stego_user');
+    }
+  }, [user]);
 
   useEffect(() => {
     if (user) {
