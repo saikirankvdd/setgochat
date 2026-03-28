@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../App';
 import { Socket } from 'socket.io-client';
-import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck } from 'lucide-react';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createCarrierWav } from '../utils/stego';
@@ -15,6 +15,8 @@ interface ChatAreaProps {
   isOnline: boolean;
   pendingCall?: any;
   clearPendingCall?: () => void;
+  dbSession?: any;
+  onBack?: () => void;
 }
 
 interface Message {
@@ -36,7 +38,7 @@ interface Message {
   };
 }
 
-export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pendingCall, clearPendingCall }: ChatAreaProps) {
+export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pendingCall, clearPendingCall, dbSession, onBack }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [snapchatMode, setSnapchatMode] = useState(false); // Disappearing timer
@@ -385,6 +387,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const endCall = (emit = true) => {
+    if (emit && callState === 'calling') {
+      socket.emit('log_call', { toId: targetUser.id, status: 'missed' });
+      socket.emit('send_message', { sessionId: sessionInfo.sessionId, fromId: user.id, toId: targetUser.id, type: 'missed_call' });
+    } else if (emit && callState === 'connected') {
+      socket.emit('log_call', { toId: callerId || targetUser.id, status: 'completed' });
+    }
+
     setCallState('idle');
     pendingCandidates.current = [];
     if (localStreamRef.current) {
@@ -646,7 +655,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         return {
           ...m,
           isRevealed: true,
-          expiresAt: m.isSelfDestruct ? Date.now() + ((m.timerSeconds || 10) * 1000) : undefined
+          expiresAt: m.isSelfDestruct ? Date.now() + ((m.timerSeconds || 10) * 1000) : (m.isOneTime ? Date.now() + 5000 : undefined)
         };
       }
       return m;
@@ -791,11 +800,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         )}
 
         {/* Header */}
-        <div className="h-[60px] bg-[#202c33] px-4 flex items-center justify-between border-l border-[#2a3942]">
-          <div className="flex items-center cursor-pointer" onClick={() => setShowUserProfile(true)}>
-            <div className="w-10 h-10 bg-[#4f5e67] rounded-full flex items-center justify-center mr-3">
-              <span className="text-[#d1d7db] font-bold">{targetUser.username[0].toUpperCase()}</span>
-            </div>
+        <div className="h-[64px] bg-[#202c33] px-3 flex items-center justify-between border-l border-[#2a3942] z-40 shadow-sm w-full">
+          <div className="flex items-center min-w-0">
+            {onBack && (
+              <button className="md:hidden p-2 mr-1 text-[#aebac1] hover:text-[#e9edef] rounded-full hover:bg-[rgba(255,255,255,0.1)] transition-colors" onClick={onBack}>
+                <ArrowLeft className="w-6 h-6" />
+              </button>
+            )}
+            <div className="flex items-center cursor-pointer hover:bg-[rgba(255,255,255,0.05)] p-1.5 rounded-lg transition-colors" onClick={() => setShowUserProfile(true)}>
+              <div className="w-11 h-11 bg-gradient-to-br from-[#00a884] to-[#046a53] rounded-full flex items-center justify-center mr-3 flex-shrink-0 shadow-lg border border-[#111b21]">
+                <span className="text-[#d1d7db] font-bold text-lg">{targetUser.username[0].toUpperCase()}</span>
+              </div>
             <div>
               <h2 className="text-[#e9edef] font-medium leading-tight">{targetUser.username}</h2>
               <div className="flex items-center text-[11px] font-medium">
@@ -865,9 +880,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               ) : (
                 <>
                   {msg.isOneTime && msg.isRevealed && msg.fromId !== user.id && (
-                     <button onClick={() => destroyMessage(msg.id)} className="absolute -top-3 -right-3 bg-red-500 hover:bg-red-600 rounded-full p-1.5 shadow-lg text-white z-50 transform hover:scale-110 transition-transform" title="Destroy Message">
-                       <X className="w-4 h-4" />
-                     </button>
+                     <div className="absolute -top-3 -right-3 bg-red-500 rounded-full h-6 px-2 shadow-lg text-white z-50 flex items-center text-[10px] font-bold animate-pulse">
+                       BURNING...
+                     </div>
                   )}
                   {msg.file ? (
                     <div className="mb-2 relative">
@@ -934,63 +949,83 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
-      <div className="bg-[#202c33] p-3 flex items-center space-x-3 relative">
-        {showEmojiPicker && (
-          <div className="absolute bottom-16 left-4 z-50">
-            <EmojiPicker onEmojiClick={onEmojiClick} theme={Theme.DARK} />
-          </div>
-        )}
-        <div className="flex items-center space-x-3 text-[#aebac1]">
-          <Smile 
-            className={`w-6 h-6 cursor-pointer hover:text-[#d1d7db] ${showEmojiPicker ? 'text-[#00a884]' : ''}`} 
-            onClick={() => setShowEmojiPicker(!showEmojiPicker)} 
-          />
-          <button 
-            onClick={() => setOneTimeView(!oneTimeView)}
-            className={`flex items-center justify-center w-6 h-6 rounded-full border-[2px] transition-all shadow-sm ${oneTimeView ? 'bg-[#00a884] border-[#00a884] text-white' : 'bg-transparent border-[#aebac1] text-[#aebac1] hover:border-[#d1d7db] hover:text-[#d1d7db]'}`}
-            title="View Once"
-          >
-            <span className="text-[10px] font-bold select-none text-center leading-none">1</span>
-          </button>
-          <Paperclip 
-            className="w-6 h-6 cursor-pointer hover:text-[#d1d7db]" 
-            onClick={() => fileInputRef.current?.click()}
-          />
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            className="hidden" 
-            onChange={handleFileUpload} 
-          />
-        </div>
-        <div className="flex-1 relative">
-          <input
-            type="text"
-            placeholder="Type a secure message..."
-            className="w-full bg-[#2a3942] text-[#e9edef] rounded-lg py-2.5 pl-4 pr-10 focus:outline-none text-sm"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-          />
-        </div>
-        <button 
-          onClick={inputText ? handleSendMessage : handleVoiceRecord}
-          disabled={isProcessing}
-          className={`w-10 h-10 rounded-full flex items-center justify-center text-white transition-colors shadow-lg ${
-            isProcessing ? 'bg-gray-500 cursor-not-allowed' :
-            isRecording ? 'bg-red-500 hover:bg-red-600 animate-pulse' : 'bg-[#00a884] hover:bg-[#06cf9c]'
-          }`}
-        >
-          {isProcessing ? (
-            <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-          ) : inputText ? (
-            <Send className="w-5 h-5" />
-          ) : (
-            <Mic className="w-5 h-5" />
-          )}
-        </button>
       </div>
+      
+      {/* Input Area or Request Panel */}
+      {dbSession?.status === 'pending' && dbSession?.initiator_id !== user.id ? (
+        <div className="bg-[#202c33] p-4 flex flex-col items-center justify-center border-t border-[#2a3942] z-20">
+           <h3 className="text-[#e9edef] font-medium mb-3 flex items-center">
+              <UserPlus className="w-5 h-5 mr-2 text-[#00a884]" />
+              {targetUser.username} wants to send you a secure message
+           </h3>
+           <p className="text-[#8696a0] text-sm mb-4">Accept the request to chat safely.</p>
+           <div className="flex space-x-4 w-full max-w-sm">
+             <button onClick={() => { if(onBack) onBack(); }} className="flex-1 py-2.5 bg-[#3b4a54] hover:bg-red-500 hover:text-white text-[#d1d7db] font-semibold rounded-lg transition-colors flex items-center justify-center">
+               <UserMinus className="w-4 h-4 mr-2" /> Decline
+             </button>
+             <button onClick={() => socket.emit('accept_request', { sessionId: sessionInfo.sessionId })} className="flex-1 py-2.5 bg-[#00a884] hover:bg-[#06cf9c] text-white font-semibold rounded-lg transition-colors flex items-center justify-center">
+               <Check className="w-4 h-4 mr-2" /> Accept
+             </button>
+           </div>
+        </div>
+      ) : (
+        <div className="bg-[#202c33] p-3 flex flex-wrap md:flex-nowrap items-center gap-3 relative border-t border-[#2a3942] z-20">
+          {showEmojiPicker && (
+            <div className="absolute bottom-[70px] left-2 md:left-4 z-50 shadow-2xl">
+              <EmojiPicker onEmojiClick={onEmojiClick} theme={Theme.DARK} width={window.innerWidth < 768 ? 320 : undefined}/>
+            </div>
+          )}
+          <div className="flex items-center space-x-3 text-[#aebac1]">
+            <Smile 
+              className={`w-6 h-6 cursor-pointer hover:text-[#d1d7db] ${showEmojiPicker ? 'text-[#00a884]' : ''}`} 
+              onClick={() => setShowEmojiPicker(!showEmojiPicker)} 
+            />
+            <button 
+              onClick={() => setOneTimeView(!oneTimeView)}
+              className={`flex items-center justify-center w-6 h-6 rounded-full border-[2px] transition-all shadow-sm ${oneTimeView ? 'bg-[#00a884] border-[#00a884] text-white' : 'bg-transparent border-[#aebac1] text-[#aebac1] hover:border-[#d1d7db] hover:text-[#d1d7db]'}`}
+              title="View Once"
+            >
+              <span className="text-[10px] font-bold select-none text-center leading-none">1</span>
+            </button>
+            <Paperclip 
+              className="w-6 h-6 cursor-pointer hover:text-[#d1d7db]" 
+              onClick={() => fileInputRef.current?.click()}
+            />
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              className="hidden" 
+              onChange={handleFileUpload} 
+            />
+          </div>
+          <div className="flex-1 relative order-last md:order-none w-full md:w-auto mt-2 md:mt-0">
+            <input
+              type="text"
+              placeholder="Type a secure message..."
+              className="w-full bg-[#2a3942] text-[#e9edef] rounded-lg py-3 pl-4 pr-10 focus:outline-none text-[15px] shadow-inner"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+            />
+          </div>
+          <button 
+            onClick={inputText ? handleSendMessage : handleVoiceRecord}
+            disabled={isProcessing}
+            className={`w-12 h-12 rounded-full flex items-center justify-center text-white transition-colors shadow-lg ${
+              isProcessing ? 'bg-gray-500 cursor-not-allowed' :
+              isRecording ? 'bg-red-500 hover:bg-red-600 animate-pulse' : 'bg-[#00a884] hover:bg-[#06cf9c]'
+            }`}
+          >
+            {isProcessing ? (
+              <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+            ) : inputText ? (
+              <Send className="w-5 h-5 ml-1" />
+            ) : (
+              <Mic className="w-5 h-5" />
+            )}
+          </button>
+        </div>
+      )}
       </div>
 
       {/* User Profile Sidebar */}
