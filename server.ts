@@ -446,6 +446,11 @@ io.on('connection', (socket: any) => {
      io.to(sessionId).emit('request_accepted', { sessionId });
   });
 
+  socket.on('decline_request', async ({ sessionId, toId }) => {
+     await Session.deleteOne({ id: sessionId });
+     io.to(sessionId).emit('request_declined', { sessionId });
+  });
+
   socket.on('send_message', async (data) => {
     const safeData = { ...data, fromId: socket.userId };
     const toSocketId = userSockets.get(safeData.toId);

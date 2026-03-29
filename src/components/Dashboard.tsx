@@ -85,6 +85,10 @@ export function Dashboard({ user, socket }: DashboardProps) {
        setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, status: 'accepted' } : s));
     });
 
+    socket.on('request_declined', ({ sessionId }) => {
+       setSessions(prev => prev.filter(s => s.id !== sessionId));
+    });
+
     socket.on('online_users', (userIds: number[]) => { 
       setOnlineUsers(userIds); 
       fetch('/api/users', { headers: { 'Authorization': `Bearer ${user.token}` } })
@@ -165,6 +169,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
       socket.off('chat_started');
       socket.off('chat_ready');
       socket.off('request_accepted');
+      socket.off('request_declined');
       socket.off('new_call_log');
       socket.off('online_users');
       socket.off('session_pins');

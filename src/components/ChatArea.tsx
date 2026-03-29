@@ -960,7 +960,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
            </h3>
            <p className="text-[#8696a0] text-sm mb-4">Accept the request to chat safely.</p>
            <div className="flex space-x-4 w-full max-w-sm">
-             <button onClick={() => { if(onBack) onBack(); }} className="flex-1 py-2.5 bg-[#3b4a54] hover:bg-red-500 hover:text-white text-[#d1d7db] font-semibold rounded-lg transition-colors flex items-center justify-center">
+             <button onClick={() => { socket.emit('decline_request', { sessionId: sessionInfo.sessionId, toId: targetUser.id }); if(onBack) onBack(); }} className="flex-1 py-2.5 bg-[#3b4a54] hover:bg-red-500 hover:text-white text-[#d1d7db] font-semibold rounded-lg transition-colors flex items-center justify-center">
                <UserMinus className="w-4 h-4 mr-2" /> Decline
              </button>
              <button onClick={() => socket.emit('accept_request', { sessionId: sessionInfo.sessionId })} className="flex-1 py-2.5 bg-[#00a884] hover:bg-[#06cf9c] text-white font-semibold rounded-lg transition-colors flex items-center justify-center">
