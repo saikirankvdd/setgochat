@@ -6,7 +6,7 @@ import { createServer as createHttpServer } from 'http';
 import selfsigned from 'selfsigned';
 import { Server } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
-import Database from 'better-sqlite3';
+import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -21,78 +21,74 @@ import { body, validationResult } from 'express-validator';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import 'dotenv/config';
 
-// Use a persistent data directory if deployed (e.g. Render /data disk), otherwise use root
-const dataDir = process.env.DATA_DIR || '.';
-const db = new Database(path.join(dataDir, 'database.db'));
+// ----------------------
+// MongoDB Initialization
+// ----------------------
+const mongoUri = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/stegochat';
+mongoose.connect(mongoUri)
+  .then(() => console.log('Connected to MongoDB successfully!'))
+  .catch((err) => console.error('MongoDB connection error. Please ensuring MONGODB_URI is set in Render:', err));
 
-// Initialize Database
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE,
-    email TEXT UNIQUE,
-    password TEXT
-  );
-  CREATE TABLE IF NOT EXISTS sessions (
-    id TEXT PRIMARY KEY,
-    user1_id INTEGER,
-    user2_id INTEGER,
-    pin TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-  CREATE TABLE IF NOT EXISTS offline_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    to_id INTEGER,
-    payload TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-`
-);
+const UserSchema = new mongoose.Schema({
+  username: { type: String, unique: true },
+  email: { type: String, unique: true },
+  password: { type: String },
+  public_key: { type: String },
+  encrypted_private_key: { type: String }
+});
+const User = mongoose.model('User', UserSchema);
 
-try { db.prepare('ALTER TABLE users ADD COLUMN public_key TEXT;').run(); } catch(e) {}
-try { db.prepare('ALTER TABLE users ADD COLUMN encrypted_private_key TEXT;').run(); } catch(e) {}
-try { db.prepare('ALTER TABLE sessions ADD COLUMN pin1 TEXT;').run(); } catch(e) {}
-try { db.prepare('ALTER TABLE sessions ADD COLUMN pin2 TEXT;').run(); } catch(e) {}
-try { db.prepare("ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'pending';").run(); } catch(e) {}
-try { db.prepare("ALTER TABLE sessions ADD COLUMN initiator_id INTEGER;").run(); } catch(e) {}
+const SessionSchema = new mongoose.Schema({
+  id: { type: String, unique: true },
+  user1_id: { type: String, index: true },
+  user2_id: { type: String, index: true },
+  pin: { type: String },
+  pin1: { type: String },
+  pin2: { type: String },
+  status: { type: String, default: 'pending' },
+  initiator_id: { type: String },
+  created_at: { type: Date, default: Date.now }
+});
+const Session = mongoose.model('Session', SessionSchema);
 
-db.prepare(`
-  CREATE TABLE IF NOT EXISTS call_history (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    from_id INTEGER,
-    to_id INTEGER,
-    status TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`).run();
+const OfflineMessageSchema = new mongoose.Schema({
+  to_id: { type: String, index: true },
+  payload: { type: String },
+  created_at: { type: Date, default: Date.now }
+});
+const OfflineMessage = mongoose.model('OfflineMessage', OfflineMessageSchema);
+
+const CallHistorySchema = new mongoose.Schema({
+  from_id: { type: String, index: true },
+  to_id: { type: String, index: true },
+  status: { type: String },
+  created_at: { type: Date, default: Date.now }
+});
+const CallHistory = mongoose.model('CallHistory', CallHistorySchema);
 
 // Auto-seed Admin User requested by User
 const adminEmail = 'saikirankvdd13@gmail.com';
 const adminPassword = 'kvs007';
 const hashedAdminPassword = bcrypt.hashSync(adminPassword, 10);
 
-const existingAdmin = db.prepare('SELECT * FROM users WHERE email = ?').get(adminEmail);
-if (!existingAdmin) {
-  try {
-    db.prepare('DELETE FROM users WHERE username = ?').run('Admin_SaiKiran'); // Purge any squatters
-    db.prepare('INSERT INTO users (username, email, password) VALUES (?, ?, ?)').run('Admin_SaiKiran', adminEmail, hashedAdminPassword);
-    console.log('[System] Admin account seeded successfully.');
-  } catch (e) {
-    console.log('[System] Admin account username conflict.', e);
-  }
-} else {
-  try {
-    // If the user already made an account under this email but a different username, rename them and reset password.
-    db.prepare('DELETE FROM users WHERE username = ? AND email != ?').run('Admin_SaiKiran', adminEmail); // Purge squatters 
-    db.prepare('UPDATE users SET username = ?, password = ? WHERE email = ?').run('Admin_SaiKiran', hashedAdminPassword, adminEmail);
-    console.log('[System] Old admin account strictly overwritten to enforce Admin_SaiKiran identity and kvs007.');
-  } catch(e) {}
-}
-
-import 'dotenv/config';
+mongoose.connection.once('open', async () => {
+    try {
+        const existingAdmin = await User.findOne({ email: adminEmail });
+        if (!existingAdmin) {
+            await User.deleteOne({ username: 'Admin_SaiKiran' }); // Purge any squatters
+            await User.create({ username: 'Admin_SaiKiran', email: adminEmail, password: hashedAdminPassword, public_key: 'ADMIN', encrypted_private_key: 'ADMIN' });
+            console.log('[System] Admin account seeded successfully.');
+        } else {
+            await User.deleteMany({ username: 'Admin_SaiKiran', email: { $ne: adminEmail } }); // Purge squatters
+            await User.updateOne({ email: adminEmail }, { username: 'Admin_SaiKiran', password: hashedAdminPassword });
+            console.log('[System] Old admin account strictly overwritten to enforce Admin_SaiKiran identity and kvs007.');
+        }
+    } catch(e) {
+        console.error('Error seeding admin account:', e);
+    }
+});
 
 async function sendEmailJS(toEmail: string, otpCode: string, isReset: boolean = false) {
-  // If no private key is set yet, explicitly bypass so user can test login while configuring EmailJS
   if (!process.env.EMAILJS_PRIVATE_KEY) {
      console.log(`[Local fallback] EmailJS skipped. OTP for ${toEmail}: ${otpCode}`);
      return true; 
@@ -127,23 +123,21 @@ const registerOtps = new Map<string, string>();
 const app = express();
 
 app.use(helmet({
-  contentSecurityPolicy: false, // Ensure Vite/React scripts still inject fine
+  contentSecurityPolicy: false,
   crossOriginEmbedderPolicy: false,
 }));
 
-// Apply basic rate limiting for standard API calls
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
-  max: 300, // Limit each IP to 300 requests per 15 minutes globally
+  max: 300,
   standardHeaders: true,
   legacyHeaders: false,
 });
 app.use('/api/', apiLimiter);
 
-// Specific stricter rate limits for Auth and Email sending (e.g. Render deployments)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10, // Strictly limit each IP to 10 auth intents per 15 minutes to prevent Node/Gmail spam
+  max: 10,
   message: { error: 'Too many authentication attempts from this IP, please try again after 15 minutes.' }
 });
 
@@ -152,8 +146,10 @@ if (fs.existsSync('cert.pem') && fs.existsSync('key.pem')) {
   httpsOptions.key = fs.readFileSync('key.pem', 'utf8');
   httpsOptions.cert = fs.readFileSync('cert.pem', 'utf8');
 } else {
-  // Generate a self-signed certificate dynamically for local HTTPS WebRTC calling
-  const pems = await (selfsigned as any).generate([{ name: 'commonName', value: 'localhost' }], { days: 365, keySize: 2048 });
+  // We can't use await here at top level easily in TS without type=module fully cooperating, 
+  // but it is type=module. However, selfsigned is sync-ish or we can run synchronously.
+  // Actually, wait, the original code used 'await' here successfully because server.ts is type=module.
+  const pems = (selfsigned as any).generate([{ name: 'commonName', value: 'localhost' }], { days: 365, keySize: 2048 });
   httpsOptions.key = pems.private;
   httpsOptions.cert = pems.cert;
   try {
@@ -162,7 +158,6 @@ if (fs.existsSync('cert.pem') && fs.existsSync('key.pem')) {
   } catch(e) {}
 }
 
-// In production (like Railway), the host platform manages HTTPS for us automatically at their edge proxy!
 const isProduction = process.env.NODE_ENV === 'production';
 const httpServer = isProduction 
   ? createHttpServer(app) 
@@ -179,12 +174,11 @@ const io = new Server(httpServer, {
 
 app.use(express.json());
 
-// Multer for file uploads
 const upload = multer({ dest: 'uploads/' });
 
 // Auth Routes
 app.post('/api/request-register-otp', authLimiter, [
-  body('email').isEmail().normalizeEmail().withMessage('Invalid email provided.')
+  body('email').isEmail().trim().toLowerCase().withMessage('Invalid email provided.')
 ], async (req: any, res: any) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
@@ -195,7 +189,7 @@ app.post('/api/request-register-otp', authLimiter, [
      return res.status(400).json({ error: 'Cannot register using admin email.' });
   }
 
-  const existing = db.prepare('SELECT * FROM users WHERE LOWER(email) = LOWER(?)').get(email);
+  const existing = await User.findOne({ email: new RegExp(`^${email}$`, 'i') });
   if (existing) {
      return res.status(400).json({ error: 'Email already registered.' });
   }
@@ -219,9 +213,9 @@ app.post('/api/request-register-otp', authLimiter, [
 });
 
 app.post('/api/signup', authLimiter, [
-  body('email').isEmail().normalizeEmail(),
+  body('email').isEmail().trim().toLowerCase(),
   body('username').trim().isLength({ min: 3, max: 30 }).escape() // Prevent XSS!
-], (req: any, res: any) => {
+], async (req: any, res: any) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ error: 'Invalid input data detected.' });
 
@@ -237,34 +231,47 @@ app.post('/api/signup', authLimiter, [
      return res.status(400).json({ error: 'This username is permanently reserved for the administrator.' });
   }
 
-  if (!otp || registerOtps.get(email) !== otp) {
-      return res.status(400).json({ error: 'Invalid or incorrect OTP.' });
+  const storedOtp = registerOtps.get(email);
+  if (storedOtp) registerOtps.delete(email); // Invalidate on first attempt!
+
+  if (!otp || !storedOtp || storedOtp !== otp) {
+      return res.status(400).json({ error: 'Invalid or incorrect OTP. Please request a new one.' });
   }
 
   try {
     const hashedPassword = bcrypt.hashSync(password, 10);
-    const stmt = db.prepare('INSERT INTO users (username, email, password, public_key, encrypted_private_key) VALUES (?, ?, ?, ?, ?)');
-    const info = stmt.run(username, email, hashedPassword, publicKey || 'ADMIN', encryptedPrivateKey || 'ADMIN');
-    registerOtps.delete(email); // Clear OTP on success
-    res.json({ success: true, userId: info.lastInsertRowid });
+    const newUser = await User.create({
+        username, email, password: hashedPassword,
+        public_key: publicKey || 'ADMIN', 
+        encrypted_private_key: encryptedPrivateKey || 'ADMIN'
+    });
+    res.json({ success: true, userId: newUser._id.toString() });
   } catch (error: any) {
+    if (error.code === 11000) {
+        return res.status(400).json({ error: 'Username or Email already exists.' });
+    }
     res.status(400).json({ error: error.message });
   }
 });
 
-app.post('/api/login', authLimiter, (req, res) => {
+app.post('/api/login', authLimiter, async (req: any, res: any) => {
   const { username, password } = req.body;
   const safeUsername = (username || '').trim();
   
-  const user: any = db.prepare('SELECT * FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)').get(safeUsername, safeUsername);
+  const user = await User.findOne({ 
+      $or: [
+          { username: new RegExp(`^${safeUsername}$`, 'i') }, 
+          { email: new RegExp(`^${safeUsername}$`, 'i') }
+      ] 
+  });
   
-  if (user && bcrypt.compareSync(password, user.password)) {
+  if (user && user.password && bcrypt.compareSync(password, user.password)) {
     const isAdmin = (user.email || '').toLowerCase() === 'saikirankvdd13@gmail.com';
     
     // Generate Secure JWT Token for Protected Routes!
-    const token = jwt.sign({ id: user.id, username: user.username, isAdmin }, process.env.JWT_SECRET || 'fallback_secret_for_jwt', { expiresIn: '7d' });
+    const token = jwt.sign({ id: user._id.toString(), username: user.username, isAdmin }, process.env.JWT_SECRET || 'fallback_secret_for_jwt', { expiresIn: '7d' });
     
-    res.json({ success: true, user: { id: user.id, username: user.username, email: user.email, isAdmin, token, publicKey: user.public_key, encryptedPrivateKey: user.encrypted_private_key } });
+    res.json({ success: true, user: { id: user._id.toString(), username: user.username, email: user.email, isAdmin, token, publicKey: user.public_key, encryptedPrivateKey: user.encrypted_private_key } });
   } else {
     res.status(401).json({ error: 'Invalid credentials' });
   }
@@ -272,14 +279,19 @@ app.post('/api/login', authLimiter, (req, res) => {
 
 
 // Socket.io Logic
-const userSockets = new Map<number, string>();
-const otps = new Map<number, string>();
+const userSockets = new Map<string, string>();
+const otps = new Map<string, string>();
 
-app.post('/api/request-otp', authLimiter, async (req, res) => {
+app.post('/api/request-otp', authLimiter, async (req: any, res: any) => {
   const { emailOrUsername } = req.body;
   if (!emailOrUsername) return res.status(400).json({ error: 'Username or email required' });
   
-  const user: any = db.prepare('SELECT id, username, email FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)').get(emailOrUsername, emailOrUsername);
+  const user = await User.findOne({
+      $or: [
+          { username: new RegExp(`^${emailOrUsername}$`, 'i') }, 
+          { email: new RegExp(`^${emailOrUsername}$`, 'i') }
+      ] 
+  });
   
   if (!user) {
     // Return success anyway to prevent user enumeration
@@ -287,17 +299,17 @@ app.post('/api/request-otp', authLimiter, async (req, res) => {
   }
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  otps.set(user.id, otp);
+  otps.set(user._id.toString(), otp);
   
   if (!process.env.EMAILJS_PRIVATE_KEY) {
       console.log(`\n========================================`);
-      console.log(`[ADMIN ALERT] Password Reset Requested for ${user.username} (ID: ${user.id}). OTP: ${otp}`);
+      console.log(`[ADMIN ALERT] Password Reset Requested for ${user.username} (ID: ${user._id}). OTP: ${otp}`);
       console.log(`========================================\n`);
       return res.json({ success: true });
   }
 
   try {
-    await sendEmailJS(user.email, otp, true);
+    await sendEmailJS(user.email as string, otp, true);
     console.log(`[Email System] Password Reset OTP sent securely via EmailJS to ${user.email}`);
     res.json({ success: true });
   } catch (error: any) {
@@ -306,23 +318,30 @@ app.post('/api/request-otp', authLimiter, async (req, res) => {
   }
 });
 
-app.post('/api/change-password', authLimiter, (req, res) => {
+app.post('/api/change-password', authLimiter, async (req: any, res: any) => {
   const { emailOrUsername, otp, newPassword } = req.body;
   if (!emailOrUsername || !otp || !newPassword) return res.status(400).json({ error: 'Missing fields' });
 
-  const user: any = db.prepare('SELECT id FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)').get(emailOrUsername, emailOrUsername);
+  const user = await User.findOne({
+      $or: [
+          { username: new RegExp(`^${emailOrUsername}$`, 'i') }, 
+          { email: new RegExp(`^${emailOrUsername}$`, 'i') }
+      ] 
+  });
   
   if (!user) return res.status(400).json({ error: 'Invalid OTP' }); // Hide exact reason
 
-  const storedOtp = otps.get(user.id);
+  const userId = user._id.toString();
+  const storedOtp = otps.get(userId);
+  if (storedOtp) otps.delete(userId); // Invalidate immediately upon use!
   
   if (storedOtp && storedOtp === otp) {
     const hashedPassword = bcrypt.hashSync(newPassword, 10);
-    db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hashedPassword, user.id);
-    otps.delete(user.id);
+    user.password = hashedPassword;
+    await user.save();
     res.json({ success: true });
   } else {
-    res.status(400).json({ error: 'Invalid OTP' });
+    res.status(400).json({ error: 'Invalid or incorrect OTP. Please request a new one.' });
   }
 });
 
@@ -338,7 +357,7 @@ io.use((socket: any, next) => {
   }
   try {
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_for_jwt');
-    socket.userId = decoded.id; // Trusted ID
+    socket.userId = decoded.id; // Trusted ID (now a string from MongoDB _id)
     next();
   } catch (err) {
     next(new Error('Authentication error: Invalid Token'));
@@ -348,7 +367,7 @@ io.use((socket: any, next) => {
 io.on('connection', (socket: any) => {
   console.log('User connected:', socket.id, 'Authenticated as:', socket.userId);
 
-  socket.on('register', () => {
+  socket.on('register', async () => {
     const userId = socket.userId; // Use trusted ID instead of client payload
     userSockets.set(userId, socket.id);
     socket.join(`user_${userId}`);
@@ -357,27 +376,27 @@ io.on('connection', (socket: any) => {
 
     // Send all offline messages
     try {
-      const offlineMsgs = db.prepare('SELECT * FROM offline_messages WHERE to_id = ?').all(userId) as any[];
+      const offlineMsgs = await OfflineMessage.find({ to_id: userId });
       if (offlineMsgs.length > 0) {
         offlineMsgs.forEach(m => {
-          const payload = JSON.parse(m.payload);
+          const payload = JSON.parse(m.payload as string);
           if (payload.type === 'text') {
              io.to(socket.id).emit('receive_message', payload.data);
           } else {
              io.to(socket.id).emit('receive_file', payload.data);
           }
         });
-        db.prepare('DELETE FROM offline_messages WHERE to_id = ?').run(userId);
+        await OfflineMessage.deleteMany({ to_id: userId });
       }
 
       // Send all pins for this user
-      const sessions = db.prepare('SELECT * FROM sessions WHERE user1_id = ? OR user2_id = ?').all(userId, userId) as any[];
+      const sessions = await Session.find({ $or: [{ user1_id: userId }, { user2_id: userId }] });
       io.to(socket.id).emit('session_pins', sessions);
     } catch(e) { console.error('Error syncing offline data:', e); }
   });
 
   socket.on('disconnect', () => {
-    let disconnectedUserId: number | null = null;
+    let disconnectedUserId: string | null = null;
     for (const [userId, socketId] of userSockets.entries()) {
       if (socketId === socket.id) {
         disconnectedUserId = userId;
@@ -391,15 +410,22 @@ io.on('connection', (socket: any) => {
     }
   });
 
-  socket.on('start_chat', ({ toId, pin1, pin2 }) => {
+  socket.on('start_chat', async ({ toId, pin1, pin2 }) => {
     const fromId = socket.userId; // Trusted ID
     const sessionId = [fromId, toId].sort().join('-');
-    let session: any = db.prepare('SELECT * FROM sessions WHERE id = ?').get(sessionId);
+    let session = await Session.findOne({ id: sessionId });
     
     if (!session) {
-      db.prepare('INSERT INTO sessions (id, user1_id, user2_id, pin, pin1, pin2, status, initiator_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(sessionId, fromId, toId, 'HIDDEN', pin1, pin2, 'pending', fromId);
-      session = { id: sessionId, pin: 'HIDDEN', pin1, pin2, user1_id: fromId, user2_id: toId, status: 'pending', initiator_id: fromId };
+      session = await Session.create({
+          id: sessionId,
+          user1_id: fromId,
+          user2_id: toId,
+          pin: 'HIDDEN',
+          pin1,
+          pin2,
+          status: 'pending',
+          initiator_id: fromId
+      });
     }
 
     socket.join(sessionId);
@@ -410,28 +436,28 @@ io.on('connection', (socket: any) => {
     socket.emit('chat_ready', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id });
   });
 
-  socket.on('accept_request', ({ sessionId }) => {
-     db.prepare("UPDATE sessions SET status = 'accepted' WHERE id = ?").run(sessionId);
+  socket.on('accept_request', async ({ sessionId }) => {
+     await Session.updateOne({ id: sessionId }, { status: 'accepted' });
      io.to(sessionId).emit('request_accepted', { sessionId });
   });
 
-  socket.on('send_message', (data) => {
+  socket.on('send_message', async (data) => {
     const safeData = { ...data, fromId: socket.userId };
     const toSocketId = userSockets.get(safeData.toId);
     if (toSocketId) {
       io.to(toSocketId).emit('receive_message', safeData);
     } else {
-      db.prepare('INSERT INTO offline_messages (to_id, payload) VALUES (?, ?)').run(safeData.toId, JSON.stringify({ type: 'text', data: safeData }));
+      await OfflineMessage.create({ to_id: safeData.toId, payload: JSON.stringify({ type: 'text', data: safeData }) });
     }
   });
 
-  socket.on('send_file', (data) => {
+  socket.on('send_file', async (data) => {
     const safeData = { ...data, fromId: socket.userId };
     const toSocketId = userSockets.get(safeData.toId);
     if (toSocketId) {
       io.to(toSocketId).emit('receive_file', safeData);
     } else {
-      db.prepare('INSERT INTO offline_messages (to_id, payload) VALUES (?, ?)').run(safeData.toId, JSON.stringify({ type: 'file', data: safeData }));
+      await OfflineMessage.create({ to_id: safeData.toId, payload: JSON.stringify({ type: 'file', data: safeData }) });
     }
   });
 
@@ -451,20 +477,10 @@ io.on('connection', (socket: any) => {
     socket.to(data.sessionId).emit('call_end', data);
   });
 
-  socket.on('log_call', (data) => {
-    db.prepare('INSERT INTO call_history (from_id, to_id, status) VALUES (?, ?, ?)')
-      .run(socket.userId, data.toId, data.status);
+  socket.on('log_call', async (data) => {
+    await CallHistory.create({ from_id: socket.userId, to_id: data.toId, status: data.status });
     const toSocketId = userSockets.get(data.toId);
     if (toSocketId) io.to(toSocketId).emit('new_call_log');
-  });
-
-  socket.on('disconnect', () => {
-    for (const [userId, socketId] of userSockets.entries()) {
-      if (socketId === socket.id) {
-        userSockets.delete(userId);
-        break;
-      }
-    }
   });
 });
 
@@ -494,57 +510,62 @@ const verifyAdmin = (req: any, res: any, next: any) => {
   });
 };
 
-// Admin Routes (Now Protected by verifyAdmin Guard!)
-app.get('/api/users', verifyAuth, (req: any, res: any) => {
-  const users = db.prepare('SELECT id, username, public_key as publicKey FROM users WHERE LOWER(email) != ? AND LOWER(username) != ?').all('saikirankvdd13@gmail.com', 'admin_saikiran');
-  res.json(users);
-});
-
-app.get('/api/calls', verifyAuth, (req: any, res: any) => {
-  const calls = db.prepare('SELECT * FROM call_history WHERE from_id = ? OR to_id = ? ORDER BY created_at DESC').all(req.user.id, req.user.id);
-  res.json(calls);
-});
-
-app.get('/api/admin/stats', verifyAdmin, (req, res) => {
-  const totalUsers = db.prepare('SELECT COUNT(*) as count FROM users').get() as any;
-  const activeSessions = db.prepare('SELECT COUNT(*) as count FROM sessions').get() as any;
+// Admin Routes
+app.get('/api/users', verifyAuth, async (req: any, res: any) => {
+  const users = await User.find({ 
+    email: { $not: new RegExp('^saikirankvdd13@gmail\\.com$', 'i') }, 
+    username: { $not: new RegExp('^admin_saikiran$', 'i') } 
+  }, 'id username public_key');
   
-  const allUsers = db.prepare('SELECT id, username, email FROM users').all() as any[];
+  // map _id and public_key -> publicKey to match old sqlite response
+  const formatUsers = users.map(u => ({ id: u._id.toString(), username: u.username, publicKey: u.public_key }));
+  res.json(formatUsers);
+});
+
+app.get('/api/calls', verifyAuth, async (req: any, res: any) => {
+  const calls = await CallHistory.find({ $or: [{ from_id: req.user.id }, { to_id: req.user.id }] }).sort({ created_at: -1 });
+  // Map _id -> id
+  res.json(calls.map(c => ({ id: c._id.toString(), from_id: c.from_id, to_id: c.to_id, status: c.status, created_at: c.created_at })));
+});
+
+app.get('/api/admin/stats', verifyAdmin, async (req: any, res: any) => {
+  const totalUsers = await User.countDocuments();
+  const activeSessions = await Session.countDocuments();
+  
+  const allUsers = await User.find({}, '_id username email');
   const anonymizedUsers = allUsers.map(u => {
-    // Show Socket ID instead of hashed username
-    const socketId = userSockets.get(u.id);
+    const uIdStr = u._id.toString();
+    const socketId = userSockets.get(uIdStr);
     const maskedName = socketId ? `${socketId}` : `Offline`;
-    const maskedEmail = crypto.createHash('sha256').update(u.email).digest('hex').substring(0, 8) + '@hidden.root';
-    return { id: u.id, maskedName, maskedEmail };
+    const maskedEmail = crypto.createHash('sha256').update(u.email as string).digest('hex').substring(0, 8) + '@hidden.root';
+    return { id: uIdStr, maskedName, maskedEmail };
   });
 
-  const allSessionsResult = db.prepare('SELECT id, user1_id, user2_id, created_at FROM sessions').all() as any[];
+  const allSessionsResult = await Session.find({}, 'id user1_id user2_id created_at');
   
   res.json({
-    totalUsers: totalUsers.count,
-    activeSessions: activeSessions.count,
+    totalUsers,
+    activeSessions,
     connections: userSockets.size,
     uptime: process.uptime(),
     usersList: anonymizedUsers,
-    sessionsList: allSessionsResult
+    sessionsList: allSessionsResult.map(s => ({ id: s.id, user1_id: s.user1_id, user2_id: s.user2_id, created_at: s.created_at }))
   });
 });
 
-app.delete('/api/admin/users/:id', verifyAdmin, (req, res) => {
-  const targetId = Number(req.params.id);
+app.delete('/api/admin/users/:id', verifyAdmin, async (req: any, res: any) => {
+  const targetIdStr = req.params.id;
   try {
-    // Delete sessions (chats) and pending offline messages
-    db.prepare('DELETE FROM sessions WHERE user1_id = ? OR user2_id = ?').run(targetId, targetId);
-    db.prepare('DELETE FROM offline_messages WHERE to_id = ?').run(targetId);
-    // Delete user
-    db.prepare('DELETE FROM users WHERE id = ?').run(targetId);
+    await Session.deleteMany({ $or: [{ user1_id: targetIdStr }, { user2_id: targetIdStr }] });
+    await OfflineMessage.deleteMany({ to_id: targetIdStr });
+    await User.findByIdAndDelete(targetIdStr);
     
     // Disconnect their live socket connection immediately
-    const socketId = userSockets.get(targetId);
+    const socketId = userSockets.get(targetIdStr);
     if (socketId) {
       io.to(socketId).emit('banned');
       io.sockets.sockets.get(socketId)?.disconnect(true);
-      userSockets.delete(targetId);
+      userSockets.delete(targetIdStr);
       broadcastOnlineUsers();
     }
     
