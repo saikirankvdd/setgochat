@@ -121,6 +121,7 @@ async function sendEmailJS(toEmail: string, otpCode: string, isReset: boolean = 
 const registerOtps = new Map<string, string>();
 
 const app = express();
+app.set('trust proxy', 1); // Enable proxy trust for Render load balancer compatibility with express-rate-limit
 
 app.use(helmet({
   contentSecurityPolicy: false,
