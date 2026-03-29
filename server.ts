@@ -220,7 +220,7 @@ app.post('/api/signup', authLimiter, [
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ error: 'Invalid input data detected.' });
 
-  const exactUsername = await User.findOne({ username: new RegExp(`^${username}$`, 'i') });
+  const exactUsername = await User.findOne({ username: new RegExp(`^${req.body.username}$`, 'i') });
   if (exactUsername) return res.status(400).json({ error: 'Username already taken.' });
 
   const { username, email, password, otp, publicKey, encryptedPrivateKey } = req.body;
