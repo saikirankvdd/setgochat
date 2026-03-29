@@ -136,12 +136,14 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
                   {stats.usersList?.map(u => (
                     <div key={u.id} className="bg-[#111b21] p-3 rounded-lg flex justify-between items-center border border-[#2a3942] hover:bg-[#202c33] transition-colors">
                       <div className="flex items-center">
-                        <div className="w-8 h-8 rounded-full bg-[#4f5e67] flex items-center justify-center mr-3 text-sm">
-                          {u.id}
+                        <div className="w-8 h-8 rounded-full bg-[#4f5e67] flex items-center justify-center mr-3 flex-shrink-0 text-sm">
+                          <Users className="w-4 h-4 text-[#d1d7db]" />
                         </div>
-                        <div>
-                          <p className="font-mono text-sm text-[#00a884]">{u.maskedName}</p>
-                          <p className="text-xs text-[#8696a0] font-mono">{u.maskedEmail}</p>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-mono text-sm text-[#00a884] truncate">{u.maskedName}</p>
+                          <p className="text-xs text-[#8696a0] font-mono truncate">
+                            {u.maskedEmail} <span className="text-[#3a4952] italic ml-1 select-all">({u.id})</span>
+                          </p>
                         </div>
                       </div>
                       

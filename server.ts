@@ -220,6 +220,9 @@ app.post('/api/signup', authLimiter, [
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ error: 'Invalid input data detected.' });
 
+  const exactUsername = await User.findOne({ username: new RegExp(`^${username}$`, 'i') });
+  if (exactUsername) return res.status(400).json({ error: 'Username already taken.' });
+
   const { username, email, password, otp, publicKey, encryptedPrivateKey } = req.body;
   if (!publicKey || !encryptedPrivateKey) {
      if (email !== 'saikirankvdd13@gmail.com') return res.status(400).json({ error: 'E2EE Keys are required.' });
@@ -414,13 +417,14 @@ io.on('connection', (socket: any) => {
   socket.on('start_chat', async ({ toId, pin1, pin2 }) => {
     const fromId = socket.userId; // Trusted ID
     const sessionId = [fromId, toId].sort().join('-');
+    const [sorted1, sorted2] = [fromId, toId].sort();
     let session = await Session.findOne({ id: sessionId });
     
     if (!session) {
       session = await Session.create({
           id: sessionId,
-          user1_id: fromId,
-          user2_id: toId,
+          user1_id: sorted1,
+          user2_id: sorted2,
           pin: 'HIDDEN',
           pin1,
           pin2,

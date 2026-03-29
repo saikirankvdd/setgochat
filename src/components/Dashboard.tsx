@@ -85,7 +85,12 @@ export function Dashboard({ user, socket }: DashboardProps) {
        setSessions(prev => prev.map(s => s.id === sessionId ? { ...s, status: 'accepted' } : s));
     });
 
-    socket.on('online_users', (userIds: number[]) => { setOnlineUsers(userIds); });
+    socket.on('online_users', (userIds: number[]) => { 
+      setOnlineUsers(userIds); 
+      fetch('/api/users', { headers: { 'Authorization': `Bearer ${user.token}` } })
+        .then(res => res.json())
+        .then(data => { if (Array.isArray(data)) setUsers(data.filter((u: User) => u.id !== user.id)); });
+    });
 
     socket.on('session_pins', async (sessionsData: any[]) => {
       setSessions(sessionsData);
