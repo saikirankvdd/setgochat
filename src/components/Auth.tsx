@@ -1,10 +1,45 @@
 import React, { useState } from 'react';
 import { User } from '../App';
-import { Lock, Mail, User as UserIcon, ShieldCheck, Key } from 'lucide-react';
+import { Lock, Mail, User as UserIcon, ShieldCheck, Key, X } from 'lucide-react';
 
 interface AuthProps {
   onLogin: (user: User) => void;
 }
+
+const TermsModal = ({ onClose }: { onClose: () => void }) => (
+  <div className="fixed inset-0 bg-[#0b141a]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+    <div className="bg-[#202c33] rounded-2xl w-full max-w-2xl p-6 border border-[#2a3942] shadow-2xl flex flex-col max-h-[80vh]">
+      <div className="flex justify-between items-center mb-4">
+        <h2 className="text-2xl font-bold text-white">Terms of Service & Privacy Policy</h2>
+        <button onClick={onClose} className="text-[#8696a0] hover:text-white transition-colors p-1 rounded hover:bg-[#2a3942]">
+          <X className="w-5 h-5" />
+        </button>
+      </div>
+      <div className="overflow-y-auto pr-4 text-[#e9edef] space-y-4 flex-1 text-sm leading-relaxed custom-scrollbar py-2">
+        <p><strong>Last Updated: {new Date().toLocaleDateString()}</strong></p>
+        <h3 className="text-lg font-bold text-[#00a884] mt-4">1. Acceptance of Terms</h3>
+        <p>By registering for or using StegoChat, you strictly agree to these Terms. We reserve the right to suspend or eternally ban any user who violates these guidelines without notice via our automated moderation system.</p>
+        
+        <h3 className="text-lg font-bold text-[#00a884] mt-4">2. Privacy and Data Security</h3>
+        <p>StegoChat is constructed entirely upon End-to-End Encryption (E2EE) with impenetrable audio steganography algorithms. <strong>We do not read, intercept, or store your raw or decrypted messages.</strong> Your keys live entirely on your device. However, you are strictly prohibited from utilizing this infrastructure to exchange illicit, dangerous, or illegal materials.</p>
+
+        <h3 className="text-lg font-bold text-[#00a884] mt-4">3. Limitation of Liability (Immunity Clause)</h3>
+        <p><strong>StegoChat assumes absolutely zero responsibility or liability for user-generated content or behavior.</strong> Operating similarly to how Internet Service Providers (ISPs) or standard telecom networks function, our technology acts strictly as an unmonitored encrypted conduit. We are entirely immune from and hold no responsibility for any direct, indirect, incidental, or consequential damages resulting from any interactions, transactions, illegalities, or communications conducted between users on the platform.</p>
+        
+        <h3 className="text-lg font-bold text-[#00a884] mt-4">4. Cookie Policy & Consent</h3>
+        <p>By using this service, you consent to our extremely strictly necessary cookies. We use essential cryptographic cookies and HTML5 local browser storage exclusively to secure your cryptographic key pairs natively on your device and maintain your active socket sessions against brute-force attacks. Absolutely no third-party tracking or targeted marketing cookies are utilized here.</p>
+
+        <h3 className="text-lg font-bold text-[#00a884] mt-4">5. Community Reporting & Enforcement</h3>
+        <p>If you encounter content violating community safety bounds, please utilize our in-app reporting feature dynamically hidden within the Chat Area. Our automated moderation systems issue strikes. Accumulating 3 warnings will result in an immediate permanent, irrevocable ban from StegoChat infrastructure.</p>
+      </div>
+      <div className="mt-6 pt-4 border-t border-[#2a3942] flex justify-end">
+        <button onClick={onClose} className="px-6 py-2 bg-[#00a884] hover:bg-[#06cf9c] text-white rounded-lg font-bold transition-colors">
+          Acknowledge & Close
+        </button>
+      </div>
+    </div>
+  </div>
+);
 
 export function Auth({ onLogin }: AuthProps) {
   const [isLogin, setIsLogin] = useState(true);
@@ -21,9 +56,17 @@ export function Auth({ onLogin }: AuthProps) {
   
   const [error, setError] = useState('');
 
+  const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
+  const [showTerms, setShowTerms] = useState(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    
+    if (!hasAcceptedTerms) {
+       setError('Please accept the Terms of Service & Privacy Policy to continue.');
+       return;
+    }
     
     const endpoint = isLogin ? '/api/login' : '/api/signup';
     const body: any = isLogin ? { username, password } : { username, email, password, otp };
@@ -316,6 +359,19 @@ export function Auth({ onLogin }: AuthProps) {
               />
             </div>
 
+            <div className="flex items-start py-2">
+              <input
+                type="checkbox"
+                id="terms"
+                checked={hasAcceptedTerms}
+                onChange={(e) => setHasAcceptedTerms(e.target.checked)}
+                className="mt-1 mr-3 w-4 h-4 rounded bg-[#2a3942] border-gray-600 focus:ring-[#00a884] text-[#00a884] accent-[#00a884] cursor-pointer"
+              />
+              <label htmlFor="terms" className="text-xs text-[#8696a0] leading-relaxed">
+                By ticking this box, I confirm I have read and agree to the <button type="button" onClick={() => setShowTerms(true)} className="text-[#00a884] hover:underline focus:outline-none font-bold">Terms of Service</button>, <button type="button" onClick={() => setShowTerms(true)} className="text-[#00a884] hover:underline focus:outline-none font-bold">Privacy Policy</button>, and entirely consent to the Cookie Policy.
+              </label>
+            </div>
+
             <button
               type="submit"
               className="w-full bg-[#00a884] hover:bg-[#06cf9c] text-white font-bold py-3 rounded-lg transition-colors shadow-lg"
@@ -346,6 +402,8 @@ export function Auth({ onLogin }: AuthProps) {
           </div>
         </div>
       </div>
+      
+      {showTerms && <TermsModal onClose={() => setShowTerms(false)} />}
     </div>
   );
 }
