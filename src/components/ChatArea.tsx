@@ -140,6 +140,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [showReportModal, setShowReportModal] = useState(false);
   const [isBlocking, setIsBlocking] = useState(false);
   
+  const [pipVideoEl, setPipVideoEl] = useState<HTMLVideoElement | null>(null);
+  const [localVidPos, setLocalVidPos] = useState({ x: window.innerWidth > 768 ? window.innerWidth - 220 : window.innerWidth - 150, y: window.innerHeight - 300 });
+  
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -150,6 +153,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
   const localStreamRef = useRef<MediaStream | null>(null);
+
+  const isDraggingRef = useRef(false);
+  const offsetRef = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
     return () => {
@@ -595,9 +601,46 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
     
     if (!isVideoCall) {
-       alert("For audio calls, simply select another chat or tab, or minimize your browser. The live audio channel will safely remain active in the background until hung up!");
-    } else {
-       alert("Picture-in-Picture feature is blocked by your current browser settings.");
+       try {
+          let video = pipVideoEl;
+          if (!video) {
+             const canvas = document.createElement('canvas');
+             canvas.width = 300; canvas.height = 300;
+             const ctx = canvas.getContext('2d');
+             if (ctx) {
+                ctx.fillStyle = '#0a1014';
+                ctx.fillRect(0, 0, 300, 300);
+                ctx.fillStyle = '#00a884';
+                ctx.beginPath();
+                ctx.arc(150, 120, 50, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.fillStyle = 'white';
+                ctx.font = 'bold 36px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(targetUser.username[0].toUpperCase(), 150, 132);
+                ctx.font = '20px Arial';
+                ctx.fillText('StegoChat Audio Call', 150, 220);
+                ctx.font = '16px Arial';
+                ctx.fillStyle = '#8696a0';
+                ctx.fillText(targetUser.username, 150, 250);
+             }
+             const stream = canvas.captureStream(1);
+             video = document.createElement('video');
+             video.srcObject = stream;
+             video.muted = true;
+             await video.play();
+             setPipVideoEl(video);
+          }
+          
+          if (document.pictureInPictureElement) {
+             await document.exitPictureInPicture();
+          } else if (video) {
+             await video.requestPictureInPicture();
+          }
+       } catch(e) {
+          console.error("Audio PiP hack failed", e);
+          alert("Your browser completely blocks Picture-in-Picture logic.");
+       }
     }
   };
 
@@ -957,14 +1000,42 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 </div>
               )}
               
-              {/* Local PiP feed */}
-              <video 
-                ref={localVideoRef} 
-                autoPlay 
-                playsInline 
-                muted 
-                className={`absolute bottom-32 right-8 w-32 md:w-48 h-48 md:h-64 object-cover rounded-2xl shadow-xl border-2 border-[#2a3942] bg-[#202c33] transition-opacity ${isVideoCall && !isVideoOff && callState === 'connected' ? 'opacity-100' : 'opacity-0 hidden'}`} 
-              />
+              {/* Local PiP feed (Draggable) */}
+              <div 
+                className={`absolute z-50 cursor-move rounded-2xl overflow-hidden shadow-2xl border-2 border-[#2a3942] bg-[#202c33] transition-opacity w-32 md:w-48 h-48 md:h-64 ${isVideoCall && !isVideoOff && callState === 'connected' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                style={{ left: localVidPos.x, top: localVidPos.y, touchAction: 'none' }}
+                onPointerDown={(e) => {
+                  const target = e.currentTarget as HTMLElement;
+                  isDraggingRef.current = true;
+                  target.setPointerCapture(e.pointerId);
+                  offsetRef.current = { x: e.clientX - localVidPos.x, y: e.clientY - localVidPos.y };
+                }}
+                onPointerMove={(e) => {
+                  if (!isDraggingRef.current) return;
+                  setLocalVidPos({ x: e.clientX - offsetRef.current.x, y: e.clientY - offsetRef.current.y });
+                }}
+                onPointerUp={(e) => {
+                  isDraggingRef.current = false;
+                  const target = e.currentTarget as HTMLElement;
+                  target.releasePointerCapture(e.pointerId);
+                  const wX = window.innerWidth;
+                  const wY = window.innerHeight;
+                  const midX = wX / 2;
+                  const snapX = localVidPos.x > midX ? wX - (wX > 768 ? 220 : 150) : 20;
+                  let snapY = localVidPos.y;
+                  if (snapY < 20) snapY = 20;
+                  if (snapY > wY - 300) snapY = wY - 300;
+                  setLocalVidPos({ x: snapX, y: snapY });
+                }}
+              >
+                <video 
+                  ref={localVideoRef} 
+                  autoPlay 
+                  playsInline 
+                  muted 
+                  className="w-full h-full object-cover" 
+                />
+              </div>
 
               {/* Actions Bar */}
               <div className="absolute bottom-8 flex items-center justify-center space-x-6 w-full">
