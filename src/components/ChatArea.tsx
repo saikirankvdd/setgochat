@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../App';
 import { Socket } from 'socket.io-client';
-import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2 } from 'lucide-react';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createCarrierWav } from '../utils/stego';
@@ -476,6 +476,32 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
   };
 
+  const togglePiP = async () => {
+    if (callState !== 'connected') {
+       alert("Call must be connected to use Picture-in-Picture.");
+       return;
+    }
+    
+    if (remoteVideoRef.current && isVideoCall) {
+       try {
+         if (document.pictureInPictureElement) {
+            await document.exitPictureInPicture();
+         } else {
+            await remoteVideoRef.current.requestPictureInPicture();
+         }
+         return;
+       } catch (err) {
+         console.warn("Standard PiP failed", err);
+       }
+    }
+    
+    if (!isVideoCall) {
+       alert("For audio calls, simply select another chat or tab, or minimize your browser. The live audio channel will safely remain active in the background until hung up!");
+    } else {
+       alert("Picture-in-Picture feature is blocked by your current browser settings.");
+    }
+  };
+
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -863,6 +889,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                         {isVideoOff ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
                       </button>
                     )}
+
+                    <button onClick={togglePiP} className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors bg-[#202c33] hover:bg-[#2a3942] text-white">
+                      <ExternalLink className="w-6 h-6" />
+                    </button>
 
                     <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
                       <Phone className="w-7 h-7 text-white rotate-[135deg]" />
