@@ -16,8 +16,17 @@ interface AdminStats {
   sessionsList: { id: string; user1_id: number; user2_id: number; created_at: string }[];
 }
 
+interface FeedbackItem {
+  id: string;
+  text: string;
+  images: string[];
+  created_at: string;
+  username: string;
+}
+
 export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
   const [stats, setStats] = useState<AdminStats | null>(null);
+  const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -33,6 +42,15 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
         console.error('Failed to fetch admin stats', err);
         setLoading(false);
       });
+
+    fetch('/api/admin/feedback', {
+      headers: { 'Authorization': `Bearer ${user.token}` }
+    })
+      .then(res => res.json())
+      .then(data => {
+         if (Array.isArray(data)) setFeedbacks(data);
+      })
+      .catch(console.error);
   }, []);
 
   const handleDeleteUser = async (targetId: number) => {
@@ -159,6 +177,40 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
                     </div>
                   ))}
                   {(!stats.usersList || stats.usersList.length === 0) && <p className="text-center text-[#8696a0] py-4">No users found.</p>}
+                </div>
+              </div>
+
+              {/* Feedback Section */}
+              <div className="bg-[#202c33] rounded-xl border border-[#2a3942] overflow-hidden shadow-lg">
+                <div className="bg-[#2a3942] px-6 py-4 flex items-center justify-between border-b border-[#3a4952]">
+                  <h3 className="font-semibold text-[#e9edef] flex items-center">
+                    <MessageSquare className="w-5 h-5 mr-2 text-[#aebac1]" />
+                    Feedback from Users
+                  </h3>
+                </div>
+                <div className="max-h-[600px] overflow-y-auto p-4 space-y-4">
+                  {feedbacks.length === 0 ? (
+                      <p className="text-[#8696a0] text-center italic py-6">No feedback submitted yet.</p>
+                  ) : (
+                    feedbacks.map(f => (
+                      <div key={f.id} className="bg-[#111b21] p-5 rounded-lg border border-[#2a3942]">
+                         <div className="flex justify-between items-center mb-3">
+                            <span className="font-bold text-[#00a884]">{f.username}</span>
+                            <span className="text-xs text-[#8696a0]">{new Date(f.created_at).toLocaleString()}</span>
+                         </div>
+                         {f.text && <p className="text-[#e9edef] whitespace-pre-wrap mb-4">{f.text}</p>}
+                         {f.images && f.images.length > 0 && (
+                            <div className="flex flex-wrap gap-2">
+                               {f.images.map((img, i) => (
+                                  <a key={i} href={img} target="_blank" rel="noreferrer" className="w-24 h-24 rounded border border-[#2a3942] overflow-hidden block hover:opacity-80 transition-opacity">
+                                     <img src={img} className="w-full h-full object-cover" />
+                                  </a>
+                               ))}
+                            </div>
+                         )}
+                      </div>
+                    ))
+                  )}
                 </div>
               </div>
             </div>

@@ -66,6 +66,14 @@ const CallHistorySchema = new mongoose.Schema({
 });
 const CallHistory = mongoose.model('CallHistory', CallHistorySchema);
 
+const FeedbackSchema = new mongoose.Schema({
+  user_id: { type: String, index: true },
+  text: { type: String },
+  images: [{ type: String }],
+  created_at: { type: Date, default: Date.now }
+});
+const Feedback = mongoose.model('Feedback', FeedbackSchema);
+
 // Auto-seed Admin User requested by User
 const adminEmail = 'saikirankvdd13@gmail.com';
 const adminPassword = 'kvs007';
@@ -173,7 +181,7 @@ const io = new Server(httpServer, {
   maxHttpBufferSize: 1e8 // 100 MB
 });
 
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -521,7 +529,53 @@ const verifyAdmin = (req: any, res: any, next: any) => {
   });
 };
 
+// Feedback System Routes
+app.post('/api/feedback', verifyAuth, async (req: any, res: any) => {
+  try {
+    const { text, images } = req.body;
+    if (!text && (!images || images.length === 0)) {
+      return res.status(400).json({ error: 'Feedback cannot be empty' });
+    }
+    
+    await Feedback.create({
+      user_id: req.user.id,
+      text,
+      images: images || []
+    });
+    
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Admin Routes
+app.get('/api/admin/feedback', verifyAdmin, async (req: any, res: any) => {
+  try {
+    const feedbacks = await Feedback.find().sort({ created_at: -1 });
+    // Fetch usernames for the feedbacks
+    const userIds = [...new Set(feedbacks.map(f => f.user_id))];
+    const users = await User.find({ _id: { $in: userIds } }, '_id username email');
+    const userMap = new Map();
+    users.forEach(u => userMap.set(u._id.toString(), { 
+        username: (u.email as string) === 'saikirankvdd13@gmail.com' ? 'Admin_SaiKiran' : 
+                  (crypto.createHash('sha256').update(u.email as string).digest('hex').substring(0, 8) + ' (Feedbacker)')
+    }));
+    
+    const formatted = feedbacks.map(f => ({
+      id: f._id.toString(),
+      text: f.text,
+      images: f.images,
+      created_at: f.created_at,
+      username: userMap.get(f.user_id)?.username || 'Unknown User'
+    }));
+    
+    res.json(formatted);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/users', verifyAuth, async (req: any, res: any) => {
   const users = await User.find({ 
     email: { $not: new RegExp('^saikirankvdd13@gmail\\.com$', 'i') }, 

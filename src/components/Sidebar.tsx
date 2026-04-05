@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { User } from '../App';
-import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut } from 'lucide-react';
+import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut, X } from 'lucide-react';
 
 interface SidebarProps {
   currentUser: User;
@@ -23,6 +23,8 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
   const [otp, setOtp] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [otpSent, setOtpSent] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
 
   const getTargetUser = (call: any) => {
     const id = call.from_id === currentUser.id ? call.to_id : call.from_id;
@@ -57,6 +59,85 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
       } else { alert('Invalid OTP or error changing password'); }
     } catch (err) { console.error(err); }
   };
+
+const FeedbackModal = ({ onClose, token }: { onClose: () => void, token: string }) => {
+  const [text, setText] = useState('');
+  const [images, setImages] = useState<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    const files = Array.from(e.target.files) as File[];
+    if (images.length + files.length > 10) {
+       alert("Maximum 10 screenshots allowed.");
+       return;
+    }
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+         setImages(prev => [...prev].slice(0, 9).concat(reader.result as string));
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleSubmit = async () => {
+    if (!text.trim() && images.length === 0) {
+       alert("Please enter feedback or attach screenshots.");
+       return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/feedback', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ text, images })
+      });
+      if (res.ok) {
+         alert("Thank you! Your feedback has been sent directly to the admin.");
+         onClose();
+      } else {
+         const data = await res.json();
+         alert("Error: " + data.error);
+      }
+    } catch(err) {
+      alert("Error sending feedback.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+     <div className="fixed inset-0 bg-[#0b141a]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+        <div className="bg-[#202c33] rounded-2xl w-full max-w-md p-6 border border-[#2a3942] shadow-2xl">
+           <h2 className="text-xl font-bold text-white mb-4">Send Feedback</h2>
+           <textarea className="w-full bg-[#111b21] text-white p-3 rounded-lg min-h-[100px] mb-4 outline-none focus:border-[#00a884] border border-transparent" placeholder="Describe the issue or feedback..." value={text} onChange={e => setText(e.target.value)}></textarea>
+           
+           <div className="mb-4">
+              <label className="block text-sm text-[#00a884] mb-2 cursor-pointer font-bold w-full text-center py-2 border border-[#00a884] rounded border-dashed hover:bg-[#00a884]/10 transition-colors">
+                 + Attach Screenshots ({images.length}/10)
+                 <input type="file" multiple accept="image/*" className="hidden" onChange={handleImageUpload} />
+              </label>
+              <div className="flex flex-wrap gap-2 mt-3">
+                 {images.map((img, i) => (
+                    <div key={i} className="relative w-16 h-16 rounded overflow-hidden border border-[#2a3942]">
+                       <img src={img} className="object-cover w-full h-full" />
+                       <button onClick={() => setImages(images.filter((_, idx) => idx !== i))} className="absolute top-0 right-0 bg-red-500/80 hover:bg-red-500 text-white rounded-bl-lg p-0.5"><X className="w-3 h-3" /></button>
+                    </div>
+                 ))}
+              </div>
+           </div>
+           
+           <div className="flex justify-end gap-3 mt-6">
+              <button disabled={isSubmitting} onClick={onClose} className="px-4 py-2 text-[#8696a0] hover:text-white transition-colors">Cancel</button>
+              <button disabled={isSubmitting} onClick={handleSubmit} className="px-5 py-2 bg-[#00a884] hover:bg-[#06cf9c] text-white rounded-lg font-bold transition-colors shadow-lg">
+                  {isSubmitting ? 'Sending...' : 'Submit Feedback'}
+              </button>
+           </div>
+        </div>
+     </div>
+  );
+};
 
   if (showProfile) {
     return (
@@ -140,7 +221,16 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
           {currentUser.isAdmin && (
             <Activity className="w-5 h-5 cursor-pointer text-[#00a884] hover:text-[#06cf9c]" onClick={onShowAdmin} title="Admin Dashboard" />
           )}
-          <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" />
+          <div className="relative">
+             <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => setShowDropdown(!showDropdown)} />
+             {showDropdown && (
+                <div className="absolute right-0 mt-2 w-48 rounded-xl shadow-2xl bg-[#2a3942] border border-[#3a4952] z-50 overflow-hidden">
+                   <button onClick={() => { setShowFeedbackModal(true); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-[#e9edef] hover:bg-[#202c33] transition-colors font-medium">
+                      Submit Feedback
+                   </button>
+                </div>
+             )}
+          </div>
         </div>
       </div>
 
@@ -157,6 +247,10 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
            Calls
          </button>
       </div>
+
+      {showFeedbackModal && (
+          <FeedbackModal onClose={() => setShowFeedbackModal(false)} token={currentUser.token!} />
+      )}
 
       {/* Search */}
       <div className="p-3 bg-[#111b21] w-full">
