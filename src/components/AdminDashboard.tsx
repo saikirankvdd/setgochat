@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { User } from '../App';
-import { Users, MessageSquare, ShieldAlert, Activity, ArrowLeft, Trash2 } from 'lucide-react';
+import { Users, MessageSquare, ShieldAlert, Activity, ArrowLeft, Trash2, Flag, Check } from 'lucide-react';
 
 interface AdminDashboardProps {
   user: User;
@@ -24,9 +24,22 @@ interface FeedbackItem {
   username: string;
 }
 
+interface ReportItem {
+  id: string;
+  reporter_id: string;
+  reported_id: string;
+  reporter_name: string;
+  reported_name: string;
+  reported_warnings: number;
+  reason: string;
+  images: string[];
+  created_at: string;
+}
+
 export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
   const [stats, setStats] = useState<AdminStats | null>(null);
   const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
+  const [reports, setReports] = useState<ReportItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -49,6 +62,15 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
       .then(res => res.json())
       .then(data => {
          if (Array.isArray(data)) setFeedbacks(data);
+      })
+      .catch(console.error);
+
+    fetch('/api/admin/reports', {
+      headers: { 'Authorization': `Bearer ${user.token}` }
+    })
+      .then(res => res.json())
+      .then(data => {
+         if (Array.isArray(data)) setReports(data);
       })
       .catch(console.error);
   }, []);
@@ -77,6 +99,33 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
        } else {
           alert('Failed to delete user.');
        }
+    } catch(e) { console.error(e); }
+  };
+
+  const handleResolveFeedback = async (id: string) => {
+    try {
+      const res = await fetch(`/api/admin/feedback/${id}/resolve`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${user.token}` }
+      });
+      if (res.ok) {
+         setFeedbacks(prev => prev.filter(f => f.id !== id));
+      }
+    } catch(e) { console.error(e); }
+  };
+
+  const handleReviewReport = async (id: string, action: 'warn' | 'reject') => {
+    try {
+      const res = await fetch(`/api/admin/reports/${id}/review`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user.token}` },
+        body: JSON.stringify({ action })
+      });
+      if (res.ok) {
+         setReports(prev => prev.filter(r => r.id !== id));
+         if (action === 'warn') alert("Warning sent successfully. (If 3rd warning, user was banned).");
+         else alert("Report rejected and user notified.");
+      }
     } catch(e) { console.error(e); }
   };
 
@@ -208,6 +257,56 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
                                ))}
                             </div>
                          )}
+                         <div className="mt-4 flex justify-end">
+                             <button onClick={() => handleResolveFeedback(f.id)} className="bg-[#00a884] hover:bg-[#06cf9c] text-white px-4 py-2 rounded font-bold flex items-center transition-colors">
+                                <Check className="w-4 h-4 mr-2" /> Issue Resolved
+                             </button>
+                          </div>
+                       </div>
+                     ))
+                   )}
+                 </div>
+               </div>
+
+              {/* User Reports Section */}
+              <div className="bg-[#202c33] rounded-xl border border-[#2a3942] overflow-hidden shadow-lg mt-8">
+                <div className="bg-[#2a3942] px-6 py-4 flex items-center justify-between border-b border-[#3a4952]">
+                  <h3 className="font-semibold text-[#e9edef] flex items-center">
+                    <Flag className="w-5 h-5 mr-2 text-yellow-500" />
+                    Pending User Reports
+                  </h3>
+                </div>
+                <div className="max-h-[600px] overflow-y-auto p-4 space-y-4">
+                  {reports.length === 0 ? (
+                      <p className="text-[#8696a0] text-center italic py-6">No pending reports.</p>
+                  ) : (
+                    reports.map(r => (
+                      <div key={r.id} className="bg-[#111b21] p-5 rounded-lg border border-red-500/20">
+                         <div className="flex justify-between items-center mb-3">
+                            <span className="font-bold text-red-400">
+                               Flagged: {r.reported_name} <span className="text-[#8696a0] text-xs font-normal">({r.reported_warnings}/3 Warnings)</span>
+                            </span>
+                            <span className="text-xs text-[#8696a0]">{new Date(r.created_at).toLocaleString()}</span>
+                         </div>
+                         <p className="text-[#00a884] text-xs font-mono mb-2">Reported by: {r.reporter_name}</p>
+                         {r.reason && <p className="text-[#e9edef] whitespace-pre-wrap mb-4 bg-[#2a3942] p-3 rounded">{r.reason}</p>}
+                         {r.images && r.images.length > 0 && (
+                            <div className="flex flex-wrap gap-2 mb-4">
+                               {r.images.map((img, i) => (
+                                  <a key={i} href={img} target="_blank" rel="noreferrer" className="w-24 h-24 rounded border border-[#2a3942] overflow-hidden block hover:opacity-80 transition-opacity">
+                                     <img src={img} className="w-full h-full object-cover" />
+                                  </a>
+                               ))}
+                            </div>
+                         )}
+                         <div className="flex space-x-3 mt-4 border-t border-[#2a3942] pt-4">
+                            <button onClick={() => handleReviewReport(r.id, 'warn')} className="flex-1 bg-red-500 hover:bg-red-600 text-white rounded font-bold py-2 shadow-lg transition-colors">
+                               Send Warning ({r.reported_warnings + 1}/3)
+                            </button>
+                            <button onClick={() => handleReviewReport(r.id, 'reject')} className="flex-1 bg-[#3a4952] hover:bg-[#4a5962] text-white rounded font-bold py-2 shadow-lg transition-colors">
+                               Reject Report
+                            </button>
+                         </div>
                       </div>
                     ))
                   )}

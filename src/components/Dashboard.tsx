@@ -6,7 +6,7 @@ import { ChatArea } from './ChatArea';
 import { decodeLSB } from '../utils/stego';
 import { decryptData, binaryToString } from '../utils/crypto';
 import { AdminDashboard } from './AdminDashboard';
-import { Shield, Lock, Phone, Video } from 'lucide-react';
+import { Shield, Lock, Phone, Video, X } from 'lucide-react';
 
 interface DashboardProps {
   user: User;
@@ -25,6 +25,8 @@ export function Dashboard({ user, socket }: DashboardProps) {
   const [pendingCall, setPendingCall] = useState<any>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [calls, setCalls] = useState<any[]>([]);
+  const [blockedUsers, setBlockedUsers] = useState<number[]>([]);
+  const [systemAlert, setSystemAlert] = useState<{title: string, message: string} | null>(null);
   
   const pinsRef = useRef<Record<string, string>>({});
   const activeUserIdRef = useRef<number | null>(null);
@@ -51,6 +53,10 @@ export function Dashboard({ user, socket }: DashboardProps) {
     fetch('/api/users', { headers: { 'Authorization': `Bearer ${user.token}` } })
       .then(res => res.json())
       .then(data => { if (Array.isArray(data)) setUsers(data.filter((u: User) => u.id !== user.id)); });
+
+    fetch('/api/me', { headers: { 'Authorization': `Bearer ${user.token}` } })
+      .then(res => res.json())
+      .then(data => { if (data.blockedUsers) setBlockedUsers(data.blockedUsers); });
 
     fetch('/api/calls', { headers: { 'Authorization': `Bearer ${user.token}` } })
       .then(res => res.json())
@@ -195,6 +201,12 @@ export function Dashboard({ user, socket }: DashboardProps) {
     socket.on('receive_file', handleFile);
     socket.on('call_offer', handleCallOfferGlobal);
     socket.on('call_end', handleCallEndGlobal);
+    socket.on('system_alert', (data) => setSystemAlert(data));
+    socket.on('banned', () => {
+        alert("Your account has been permanently suspended.");
+        localStorage.removeItem('stego_user');
+        window.location.reload();
+    });
 
     return () => {
       socket.off('chat_started');
@@ -230,12 +242,14 @@ export function Dashboard({ user, socket }: DashboardProps) {
     } catch (err) { console.error('E2EE Handshake failed', err); }
   };
 
+  const visibleUsers = users.filter(u => !blockedUsers.includes(u.id as any));
+
   return (
     <div className="flex h-screen bg-[#111b21] overflow-hidden w-full max-w-full relative">
       <div className={`w-full md:w-[420px] border-r border-[#2a3942] flex flex-col z-10 transition-all shadow-xl ${activeChat ? 'hidden md:flex' : 'flex'}`}>
         <Sidebar 
           currentUser={user} 
-          users={users}
+          users={visibleUsers}
           sessions={sessions}
           calls={calls}
           onSelectUser={(u) => { setUnreadCounts(prev => ({ ...prev, [u.id]: 0 })); handleStartChat(u); }} 
@@ -248,7 +262,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
       </div>
 
       <div className={`flex-1 flex flex-col bg-[#0b141a] relative w-full h-full ${!activeChat ? 'hidden md:flex' : 'flex'}`}>
-        {users.filter(u => pinsRef.current[[user.id, u.id].sort().join('-')]).map(targetUser => {
+        {visibleUsers.filter(u => pinsRef.current[[user.id, u.id].sort().join('-')]).map(targetUser => {
            const sId = [user.id, targetUser.id].sort().join('-');
            const pin = pinsRef.current[sId];
            if (!pin) return null;
@@ -319,6 +333,19 @@ export function Dashboard({ user, socket }: DashboardProps) {
       </div>
 
       {showAdmin && <AdminDashboard user={user} onBack={() => setShowAdmin(false)} />}
+      
+      {systemAlert && (
+         <div className="fixed inset-0 bg-[#0b141a]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+            <div className="bg-[#202c33] rounded-2xl w-full max-w-md p-6 border border-red-500/50 shadow-2xl flex flex-col items-center text-center">
+               <Shield className="w-16 h-16 text-orange-500 mb-4" />
+               <h2 className="text-2xl font-bold text-white mb-2">{systemAlert.title}</h2>
+               <p className="text-[#e9edef] whitespace-pre-wrap mb-8 text-lg">{systemAlert.message}</p>
+               <button onClick={() => setSystemAlert(null)} className="w-full py-3 bg-[#00a884] hover:bg-[#06cf9c] text-white rounded-lg font-bold transition-colors">
+                  Acknowledge
+               </button>
+            </div>
+         </div>
+      )}
     </div>
   );
 }

@@ -29,12 +29,31 @@ mongoose.connect(mongoUri)
   .then(() => console.log('Connected to MongoDB successfully!'))
   .catch((err) => console.error('MongoDB connection error. Please ensuring MONGODB_URI is set in Render:', err));
 
+const BannedEmailSchema = new mongoose.Schema({
+  email: { type: String, unique: true },
+  reason: { type: String },
+  created_at: { type: Date, default: Date.now }
+});
+const BannedEmail = mongoose.model('BannedEmail', BannedEmailSchema);
+
+const ReportSchema = new mongoose.Schema({
+  reporter_id: { type: String },
+  reported_id: { type: String },
+  reason: { type: String },
+  images: [{ type: String }],
+  status: { type: String, default: 'pending' }, // pending, warned, rejected
+  created_at: { type: Date, default: Date.now }
+});
+const Report = mongoose.model('Report', ReportSchema);
+
 const UserSchema = new mongoose.Schema({
   username: { type: String, unique: true },
   email: { type: String, unique: true },
   password: { type: String },
   public_key: { type: String },
-  encrypted_private_key: { type: String }
+  encrypted_private_key: { type: String },
+  warningsCount: { type: Number, default: 0 },
+  blockedUsers: [{ type: String }]
 });
 const User = mongoose.model('User', UserSchema);
 
@@ -230,6 +249,9 @@ app.post('/api/signup', authLimiter, [
 
   const exactUsername = await User.findOne({ username: new RegExp(`^${req.body.username}$`, 'i') });
   if (exactUsername) return res.status(400).json({ error: 'Username already taken.' });
+
+  const isBanned = await BannedEmail.findOne({ email: new RegExp(`^${req.body.email}$`, 'i') });
+  if (isBanned) return res.status(403).json({ error: 'System Policy Block: This email has been permanently banned from StegoChat.' });
 
   const { username, email, password, otp, publicKey, encryptedPrivateKey } = req.body;
   if (!publicKey || !encryptedPrivateKey) {
@@ -559,7 +581,7 @@ app.get('/api/admin/feedback', verifyAdmin, async (req: any, res: any) => {
     const userMap = new Map();
     users.forEach(u => userMap.set(u._id.toString(), { 
         username: (u.email as string) === 'saikirankvdd13@gmail.com' ? 'Admin_SaiKiran' : 
-                  (crypto.createHash('sha256').update(u.email as string).digest('hex').substring(0, 8) + ' (Feedbacker)')
+                  (u.username + ' (' + crypto.createHash('sha256').update(u.email as string).digest('hex').substring(0, 5) + ')')
     }));
     
     const formatted = feedbacks.map(f => ({
@@ -574,6 +596,125 @@ app.get('/api/admin/feedback', verifyAdmin, async (req: any, res: any) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+// Resolve Feedback
+app.post('/api/admin/feedback/:id/resolve', verifyAdmin, async (req: any, res: any) => {
+  try {
+    const feedback = await Feedback.findById(req.params.id);
+    if (!feedback) return res.status(404).json({ error: 'Feedback not found' });
+    
+    const socketId = userSockets.get(feedback.user_id);
+    const alertBody = { title: 'Feedback Update', message: 'Thank you for your feedback. We have successfully resolved your issue.\n\n- Team StegoChat' };
+    if (socketId) {
+       io.to(socketId).emit('system_alert', alertBody);
+    } else {
+       await OfflineMessage.create({ to_id: feedback.user_id, payload: JSON.stringify({ type: 'system_alert', data: alertBody }) });
+    }
+    
+    await Feedback.findByIdAndDelete(req.params.id);
+    res.json({ success: true });
+  } catch(err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// Reports from Users
+app.post('/api/reports', verifyAuth, async (req: any, res: any) => {
+  try {
+    const { reportedId, reason, images } = req.body;
+    await Report.create({
+      reporter_id: req.user.id,
+      reported_id: reportedId,
+      reason,
+      images: images || []
+    });
+    res.json({ success: true });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/block', verifyAuth, async (req: any, res: any) => {
+  try {
+     const { targetId } = req.body;
+     await User.findByIdAndUpdate(req.user.id, { $addToSet: { blockedUsers: targetId } });
+     // Terminate any active sessions instantly
+     await Session.deleteMany({
+         $or: [
+             { user1_id: req.user.id, user2_id: targetId },
+             { user1_id: targetId, user2_id: req.user.id }
+         ]
+     });
+     res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+// Admin Report Fetch
+app.get('/api/admin/reports', verifyAdmin, async (req: any, res: any) => {
+  try {
+    const reports = await Report.find({ status: 'pending' }).sort({ created_at: -1 });
+    const userIds = [...new Set(reports.map(r => r.reporter_id).concat(reports.map(r => r.reported_id)))];
+    const users = await User.find({ _id: { $in: userIds } }, '_id username email warningsCount');
+    const userMap = new Map();
+    users.forEach(u => userMap.set(u._id.toString(), u));
+    
+    const formatted = reports.map(r => {
+      const reporter = userMap.get(r.reporter_id);
+      const reported = userMap.get(r.reported_id);
+      return {
+        id: r._id.toString(),
+        reporter_id: r.reporter_id,
+        reported_id: r.reported_id,
+        reporter_name: reporter ? reporter.username : 'Unknown',
+        reported_name: reported ? reported.username : 'Unknown',
+        reported_warnings: reported ? (reported as any).warningsCount : 0,
+        reason: r.reason,
+        images: r.images,
+        created_at: r.created_at
+      };
+    });
+    res.json(formatted);
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// Admin Review Report
+app.post('/api/admin/reports/:id/review', verifyAdmin, async (req: any, res: any) => {
+  try {
+    const { action } = req.body; // 'warn' or 'reject'
+    const report = await Report.findById(req.params.id);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    
+    if (action === 'warn') {
+       const reportedUser: any = await User.findById(report.reported_id);
+       if (reportedUser) {
+          const newCount = (reportedUser.warningsCount || 0) + 1;
+          
+          if (newCount >= 3) { 
+             await BannedEmail.create({ email: reportedUser.email, reason: 'Accumulated 3 policy warnings.' });
+             await Session.deleteMany({ $or: [{ user1_id: report.reported_id }, { user2_id: report.reported_id }] });
+             await User.findByIdAndDelete(report.reported_id);
+             
+             const socketId = userSockets.get(report.reported_id);
+             if (socketId) {
+                io.to(socketId).emit('banned');
+                io.sockets.sockets.get(socketId)?.disconnect(true);
+             }
+          } else {
+             await User.findByIdAndUpdate(report.reported_id, { warningsCount: newCount });
+             const socketId = userSockets.get(report.reported_id);
+             const alertBody = { title: 'Terms of Service Warning', message: `We received a report about you violating our community guidelines. This is warning ${newCount}/3.\n\nFurther violations will result in permanent account suspension and an irreversible email ban.\n\n- Team StegoChat Admin` };
+             if (socketId) io.to(socketId).emit('system_alert', alertBody);
+             else await OfflineMessage.create({ to_id: report.reported_id, payload: JSON.stringify({ type: 'system_alert', data: alertBody }) });
+          }
+       }
+       report.status = 'warned';
+    } else if (action === 'reject') {
+       const socketId = userSockets.get(report.reporter_id);
+       const alertBody = { title: 'Report Update', message: 'We have carefully reviewed your request. However, the user actions fall under our standard acceptable user policy, or insufficient evidence was provided. No action will be taken at this time.\n\n- Team StegoChat Admin' };
+       if (socketId) io.to(socketId).emit('system_alert', alertBody);
+       else await OfflineMessage.create({ to_id: report.reporter_id, payload: JSON.stringify({ type: 'system_alert', data: alertBody }) });
+       report.status = 'rejected';
+    }
+    await report.save();
+    res.json({ success: true });
+  } catch(e: any) { res.status(500).json({ error: e.message }); }
 });
 
 app.get('/api/users', verifyAuth, async (req: any, res: any) => {
@@ -638,6 +779,14 @@ app.delete('/api/admin/users/:id', verifyAdmin, async (req: any, res: any) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/api/me', verifyAuth, async (req: any, res: any) => {
+   try {
+      const u = await User.findById(req.user.id);
+      if (!u) return res.status(404).json({ error: 'Not found' });
+      res.json({ id: u._id, username: u.username, blockedUsers: (u as any).blockedUsers || [] });
+   } catch(e) { res.status(500).json({ error: 'Failed' }); }
 });
 
 // Vite Integration

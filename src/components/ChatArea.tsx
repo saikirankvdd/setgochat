@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../App';
 import { Socket } from 'socket.io-client';
-import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink } from 'lucide-react';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createCarrierWav } from '../utils/stego';
@@ -38,6 +38,85 @@ interface Message {
   };
 }
 
+const ReportModal = ({ onClose, token, reportedId }: { onClose: () => void, token: string, reportedId: number }) => {
+  const [reason, setReason] = useState('');
+  const [images, setImages] = useState<string[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files) return;
+    const files = Array.from(e.target.files) as File[];
+    if (images.length + files.length > 10) {
+       alert("Maximum 10 screenshots allowed.");
+       return;
+    }
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = () => {
+         setImages(prev => [...prev].slice(0, 9).concat(reader.result as string));
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleSubmit = async () => {
+    if (!reason.trim()) {
+       alert("Please enter a reason for reporting.");
+       return;
+    }
+    setIsSubmitting(true);
+    try {
+      const res = await fetch('/api/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ reportedId, reason, images })
+      });
+      if (res.ok) {
+         alert("Thank you. This user has been reported and details sent securely to the admin.");
+         onClose();
+      } else {
+         alert("Error submitting report.");
+      }
+    } catch(err) {
+      alert("Error submitting report.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+     <div className="fixed inset-0 bg-[#0b141a]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+        <div className="bg-[#202c33] rounded-2xl w-full max-w-md p-6 border border-[#2a3942] shadow-2xl">
+           <h2 className="text-xl font-bold text-white mb-4">Report User</h2>
+           <p className="text-xs text-[#8696a0] mb-4">Please provide detailed information on why you are reporting this user. Include any relevant screenshots.</p>
+           <textarea className="w-full bg-[#111b21] text-white p-3 rounded-lg min-h-[100px] mb-4 outline-none focus:border-[#00a884] border border-transparent" placeholder="Reason for reporting..." value={reason} onChange={e => setReason(e.target.value)}></textarea>
+           
+           <div className="mb-4">
+              <label className="block text-sm text-[#00a884] mb-2 cursor-pointer font-bold w-full text-center py-2 border border-[#00a884] rounded border-dashed hover:bg-[#00a884]/10 transition-colors">
+                 + Attach Evidence ({images.length}/10)
+                 <input type="file" multiple accept="image/*" className="hidden" onChange={handleImageUpload} />
+              </label>
+              <div className="flex flex-wrap gap-2 mt-3">
+                 {images.map((img, i) => (
+                    <div key={i} className="relative w-16 h-16 rounded overflow-hidden border border-[#2a3942]">
+                       <img src={img} className="object-cover w-full h-full" />
+                       <button onClick={() => setImages(images.filter((_, idx) => idx !== i))} className="absolute top-0 right-0 bg-red-500/80 hover:bg-red-500 text-white rounded-bl-lg p-0.5"><X className="w-3 h-3" /></button>
+                    </div>
+                 ))}
+              </div>
+           </div>
+           
+           <div className="flex justify-end gap-3 mt-6">
+              <button disabled={isSubmitting} onClick={onClose} className="px-4 py-2 text-[#8696a0] hover:text-white transition-colors">Cancel</button>
+              <button disabled={isSubmitting} onClick={handleSubmit} className="px-5 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg font-bold transition-colors shadow-lg">
+                  {isSubmitting ? 'Reporting...' : 'Submit Report'}
+              </button>
+           </div>
+        </div>
+     </div>
+  );
+};
+
 export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pendingCall, clearPendingCall, dbSession, onBack }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
@@ -57,6 +136,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [scanningStatus, setScanningStatus] = useState<{ active: boolean, type: 'link' | 'document' | null, name: string }>({ active: false, type: null, name: '' });
+  const [showDropdown, setShowDropdown] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
+  const [isBlocking, setIsBlocking] = useState(false);
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -81,6 +163,23 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
     };
   }, []);
+
+  const handleBlockUser = async () => {
+    if (!window.confirm("Are you sure you want to block this user? They will not be able to message or call you again.")) return;
+    setIsBlocking(true);
+    try {
+      const res = await fetch('/api/block', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user.token}` },
+        body: JSON.stringify({ targetId: targetUser.id })
+      });
+      if (res.ok) {
+         alert("User blocked successfully.");
+         window.location.reload();
+      }
+    } catch(e) { console.error(e); }
+    setIsBlocking(false);
+  };
 
   const onEmojiClick = (emojiObject: any) => {
     setInputText(prev => prev + emojiObject.emoji);
@@ -951,6 +1050,19 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           </button>
           <Phone className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(false)} />
           <Video className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(true)} />
+          <div className="relative">
+             <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => setShowDropdown(!showDropdown)} />
+             {showDropdown && (
+                <div className="absolute right-0 mt-2 w-48 rounded-xl shadow-2xl bg-[#2a3942] border border-[#3a4952] z-50 overflow-hidden">
+                   <button onClick={() => { setShowReportModal(true); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-yellow-500 hover:bg-[#202c33] transition-colors font-medium flex items-center">
+                      <Flag className="w-4 h-4 mr-2" /> Report User
+                   </button>
+                   <button onClick={() => { handleBlockUser(); setShowDropdown(false); }} disabled={isBlocking} className="block w-full text-left px-4 py-3 text-sm text-red-500 hover:bg-[#202c33] transition-colors font-medium flex items-center">
+                      <UserX className="w-4 h-4 mr-2" /> Block User
+                   </button>
+                </div>
+             )}
+          </div>
         </div>
       </div>
 
@@ -1181,6 +1293,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           </div>
         </div>
       )}
+  {showReportModal && (
+    <ReportModal onClose={() => setShowReportModal(false)} token={user.token!} reportedId={targetUser.id} />
+  )}
+
     </div>
   );
 }
