@@ -59,8 +59,9 @@ export function Dashboard({ user, socket }: DashboardProps) {
 
         setSessions(prev => {
            const exists = prev.find(s => s.id === data.sessionId);
-           if (exists) return prev.map(s => s.id === data.sessionId ? data : s);
-           return [...prev, data];
+           const newData = { ...data, id: data.sessionId };
+           if (exists) return prev.map(s => s.id === data.sessionId ? newData : s);
+           return [...prev, newData];
         });
       } catch (e) { console.error('Failed to decrypt session', e); }
     });
@@ -75,8 +76,9 @@ export function Dashboard({ user, socket }: DashboardProps) {
 
         setSessions(prev => {
            const exists = prev.find(s => s.id === data.sessionId);
-           if (exists) return prev.map(s => s.id === data.sessionId ? data : s);
-           return [...prev, data];
+           const newData = { ...data, id: data.sessionId };
+           if (exists) return prev.map(s => s.id === data.sessionId ? newData : s);
+           return [...prev, newData];
         });
       } catch (e) { console.error('Failed to decrypt session', e); }
     });
