@@ -491,6 +491,7 @@ io.on('connection', (socket: any) => {
     await CallHistory.create({ from_id: socket.userId, to_id: data.toId, status: data.status });
     const toSocketId = userSockets.get(data.toId);
     if (toSocketId) io.to(toSocketId).emit('new_call_log');
+    io.to(socket.id).emit('new_call_log');
   });
 });
 

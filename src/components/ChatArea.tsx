@@ -371,6 +371,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
       setCallState('connected');
       
+      setMessages(prev => [...prev, {
+        id: Math.random().toString(36).substr(2, 9),
+        fromId: "system",
+        text: '📞 Call connects safely.',
+        timestamp: Date.now(),
+        isSelfDestruct: false,
+        isOneTime: false,
+        timerSeconds: 0,
+        isRevealed: true,
+      }]);
+      
       // Attempt to play audio immediately to satisfy mobile browser user gesture requirements
       if (remoteVideoRef.current && remoteStream) {
         remoteVideoRef.current.srcObject = remoteStream;
@@ -391,8 +402,28 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     if (emit && callState === 'calling') {
       socket.emit('log_call', { toId: targetUser.id, status: 'missed' });
       socket.emit('send_message', { sessionId: sessionInfo.sessionId, fromId: user.id, toId: targetUser.id, type: 'missed_call' });
+      setMessages(prev => [...prev, {
+        id: Math.random().toString(36).substr(2, 9),
+        fromId: "system",
+        text: '❌ Missed Call',
+        timestamp: Date.now(),
+        isSelfDestruct: false,
+        isOneTime: false,
+        timerSeconds: 0,
+        isRevealed: true,
+      }]);
     } else if (emit && callState === 'connected') {
       socket.emit('log_call', { toId: callerId || targetUser.id, status: 'completed' });
+      setMessages(prev => [...prev, {
+        id: Math.random().toString(36).substr(2, 9),
+        fromId: "system",
+        text: '📞 Call Ended',
+        timestamp: Date.now(),
+        isSelfDestruct: false,
+        isOneTime: false,
+        timerSeconds: 0,
+        isRevealed: true,
+      }]);
     }
 
     setCallState('idle');
@@ -862,7 +893,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                   {isOnline ? 'Online' : 'Offline'}
                 </span>
                 <Shield className="w-3 h-3 mr-1 text-[#00a884]" />
-                <span className="text-[#00a884]">SECURE SESSION ACTIVE (PIN: {sessionInfo.pin})</span>
+                <span className="text-[#00a884]">SECURE SESSION ACTIVE</span>
               </div>
             </div>
           </div>

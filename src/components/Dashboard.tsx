@@ -28,6 +28,17 @@ export function Dashboard({ user, socket }: DashboardProps) {
   
   const pinsRef = useRef<Record<string, string>>({});
   const activeUserIdRef = useRef<number | null>(null);
+  const usersRef = useRef<User[]>([]);
+
+  useEffect(() => {
+    usersRef.current = users;
+  }, [users]);
+
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
 
   useEffect(() => {
     activeUserIdRef.current = activeChat?.id || null;
@@ -126,7 +137,14 @@ export function Dashboard({ user, socket }: DashboardProps) {
        
        if (msgType === 'missed_call') {
            setLastMessages(prev => ({ ...prev, [data.fromId]: 'Missed Call' }));
-           if (activeUserIdRef.current !== data.fromId) setUnreadCounts(prev => ({ ...prev, [data.fromId]: (prev[data.fromId] || 0) + 1 }));
+           if (activeUserIdRef.current !== data.fromId || document.hidden) {
+              setUnreadCounts(prev => ({ ...prev, [data.fromId]: (prev[data.fromId] || 0) + 1 }));
+              if ('Notification' in window && Notification.permission === 'granted') {
+                 const sender = usersRef.current.find(u => u.id === data.fromId);
+                 const senderName = sender ? sender.username : `User ${data.fromId}`;
+                 new Notification('StegoChat', { body: `From StegoChat: ${senderName} left a missed call` });
+              }
+           }
            return;
        }
 
@@ -145,8 +163,19 @@ export function Dashboard({ user, socket }: DashboardProps) {
 
        if (previewText) {
           setLastMessages(prev => ({ ...prev, [data.fromId]: previewText }));
-          if (activeUserIdRef.current !== data.fromId) {
+          if (activeUserIdRef.current !== data.fromId || document.hidden) {
              setUnreadCounts(prev => ({ ...prev, [data.fromId]: (prev[data.fromId] || 0) + 1 }));
+             
+             if ('Notification' in window && Notification.permission === 'granted') {
+               const sender = usersRef.current.find(u => u.id === data.fromId);
+               const senderName = sender ? sender.username : `User ${data.fromId}`;
+               
+               if (msgType === 'missed_call') {
+                 new Notification('StegoChat', { body: `Missed call from ${senderName}` });
+               } else {
+                 new Notification('StegoChat', { body: `From StegoChat: ${senderName} sent a message` });
+               }
+             }
           }
        }
     };
