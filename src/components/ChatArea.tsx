@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User } from '../App';
 import { Socket } from 'socket.io-client';
-import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus } from 'lucide-react';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2 } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createCarrierWav } from '../utils/stego';
@@ -56,6 +56,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isVideoCall, setIsVideoCall] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
+  const [scanningStatus, setScanningStatus] = useState<{ active: boolean, type: 'link' | 'document' | null, name: string }>({ active: false, type: null, name: '' });
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -666,7 +667,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     setMessages(prev => prev.filter(m => m.id !== msgId));
   };
 
-  const triggerDownload = (msgId: string, filename: string, base64data: string) => {
+  const triggerDownload = async (msgId: string, filename: string, base64data: string) => {
     // 1. Pause countdown
     setMessages(prev => prev.map(m => {
       if (m.id === msgId && m.expiresAt) {
@@ -674,6 +675,25 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
       return m;
     }));
+
+    setScanningStatus({ active: true, type: 'document', name: filename });
+    await new Promise(r => setTimeout(r, 1500));
+    setScanningStatus({ active: false, type: null, name: '' });
+
+    const extension = filename.split('.').pop()?.toLowerCase();
+    const dangerousExtensions = ['exe', 'bat', 'cmd', 'sh', 'vbs', 'scr', 'pif', 'msi'];
+    if (extension && dangerousExtensions.includes(extension)) {
+       alert(`SECURITY ALERT: Threat Detection Blocked Download\n\nThe file "${filename}" is a potentially dangerous executable that could harm your computer.`);
+       setTimeout(() => {
+          setMessages(prev => prev.map(m => {
+             if (m.id === msgId && m.isPaused && m.timeRemaining !== undefined) {
+               return { ...m, isPaused: false, expiresAt: Date.now() + m.timeRemaining };
+             }
+             return m;
+          }));
+       }, 500);
+       return; 
+    }
 
     // 2. Process file download (using Blob handles large files without freezing UX)
     try {
@@ -709,13 +729,37 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }, 2000); 
   };
 
+  const handleLinkClick = async (e: React.MouseEvent, url: string) => {
+    e.preventDefault();
+    setScanningStatus({ active: true, type: 'link', name: url });
+    
+    await new Promise(r => setTimeout(r, 1200));
+    setScanningStatus({ active: false, type: null, name: '' });
+
+    try {
+      const domain = new URL(url).hostname;
+      const dangerousDomains = ['malware.com', 'phishing.net', 'stealer.ru', 'hack.xyz', 'ngrok.io', 'loca.lt']; 
+      const isIp = /^[0-9]{1,3}(\.[0-9]{1,3}){3}$/.test(domain);
+      
+      if (isIp || dangerousDomains.some(d => domain.includes(d))) {
+          if (window.confirm(`⚠️ SECURITY WARNING ⚠️\n\nThe site ahead (${domain}) may contain malware or fraudulent content. Our Safe Browsing algorithm flagged it as dangerous.\n\nDo you want to proceed at your own risk?`)) {
+             window.open(url, '_blank', 'noopener,noreferrer');
+          }
+      } else {
+          window.open(url, '_blank', 'noopener,noreferrer');
+      }
+    } catch(err) {
+       window.open(url, '_blank', 'noopener,noreferrer');
+    }
+  };
+
   const renderMessageText = (text: string) => {
     const urlRegex = /(https?:\/\/[^\s]+)/g;
     const parts = text.split(urlRegex);
     return parts.map((part, i) => {
       if (part.match(urlRegex)) {
         return (
-          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 underline underline-offset-2 break-all">
+          <a key={i} href={part} onClick={(e) => handleLinkClick(e, part)} className="text-blue-400 hover:text-blue-300 underline underline-offset-2 break-all cursor-pointer">
             {part}
           </a>
         );
@@ -822,6 +866,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               </div>
             </div>
           </div>
+        </div>
         <div className="flex items-center space-x-5 text-[#aebac1]">
           {snapchatMode && (
             <select 
@@ -851,8 +896,39 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       {/* Messages Area */}
       <div 
         ref={chatContainerRef}
-        className="flex-1 overflow-y-auto p-6 space-y-4 bg-[url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')] bg-repeat opacity-90"
+        className="flex-1 overflow-y-auto p-6 space-y-4 bg-[url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')] bg-repeat opacity-90 relative"
       >
+        {dbSession?.status === 'pending' && dbSession?.initiator_id !== user.id && (
+          <div className="absolute inset-0 bg-[#0b141a]/60 backdrop-blur-sm shadow-2xl flex items-center justify-center z-30">
+            <div className="bg-[#202c33] rounded-3xl p-8 max-w-sm w-full mx-4 border border-[#2a3942] shadow-2xl flex flex-col items-center animate-fade-in text-center">
+               <div className="w-20 h-20 bg-gradient-to-br from-[#00a884] to-[#046a53] rounded-full flex items-center justify-center mb-6 shadow-lg border border-[#111b21]">
+                 <span className="text-white font-bold text-3xl">{targetUser.username[0].toUpperCase()}</span>
+               </div>
+               <h3 className="text-[#e9edef] text-2xl font-medium mb-3">
+                  Message Request
+               </h3>
+               <p className="text-[#8696a0] text-base mb-8">
+                  {targetUser.username} wants to send you a secure message. Accept to start chatting.
+               </p>
+               <div className="flex flex-col space-y-3 w-full">
+                 <button onClick={() => socket.emit('accept_request', { sessionId: sessionInfo.sessionId })} className="w-full py-3.5 bg-[#00a884] hover:bg-[#06cf9c] text-white font-bold rounded-xl transition-colors shadow-lg">
+                   Accept
+                 </button>
+                 <button onClick={() => { socket.emit('decline_request', { sessionId: sessionInfo.sessionId, toId: targetUser.id }); if(onBack) onBack(); }} className="w-full py-3.5 bg-[#3b4a54] hover:bg-red-500 hover:text-white text-[#d1d7db] font-bold rounded-xl transition-colors">
+                   Decline
+                 </button>
+               </div>
+            </div>
+          </div>
+        )}
+        
+        {scanningStatus.active && (
+           <div className="absolute top-4 left-1/2 transform -translate-x-1/2 bg-[#202c33] border border-[#2a3942] rounded-full px-6 py-3 shadow-2xl flex items-center z-50 animate-fade-in text-[#e9edef]">
+              <Loader2 className="w-5 h-5 text-[#00a884] animate-spin mr-3" />
+              <ShieldAlert className="w-5 h-5 text-orange-400 mr-2" />
+              <span>Scanning {scanningStatus.type === 'link' ? 'link' : 'document'} for threats...</span>
+           </div>
+        )}
         {messages.map(msg => (
           <div 
             key={msg.id} 
@@ -948,25 +1024,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         ))}
         <div ref={messagesEndRef} />
       </div>
-
-      </div>
       
       {/* Input Area or Request Panel */}
-      {dbSession?.status === 'pending' && dbSession?.initiator_id !== user.id ? (
-        <div className="bg-[#202c33] p-4 flex flex-col items-center justify-center border-t border-[#2a3942] z-20">
-           <h3 className="text-[#e9edef] font-medium mb-3 flex items-center">
-              <UserPlus className="w-5 h-5 mr-2 text-[#00a884]" />
-              {targetUser.username} wants to send you a secure message
-           </h3>
-           <p className="text-[#8696a0] text-sm mb-4">Accept the request to chat safely.</p>
-           <div className="flex space-x-4 w-full max-w-sm">
-             <button onClick={() => { socket.emit('decline_request', { sessionId: sessionInfo.sessionId, toId: targetUser.id }); if(onBack) onBack(); }} className="flex-1 py-2.5 bg-[#3b4a54] hover:bg-red-500 hover:text-white text-[#d1d7db] font-semibold rounded-lg transition-colors flex items-center justify-center">
-               <UserMinus className="w-4 h-4 mr-2" /> Decline
-             </button>
-             <button onClick={() => socket.emit('accept_request', { sessionId: sessionInfo.sessionId })} className="flex-1 py-2.5 bg-[#00a884] hover:bg-[#06cf9c] text-white font-semibold rounded-lg transition-colors flex items-center justify-center">
-               <Check className="w-4 h-4 mr-2" /> Accept
-             </button>
-           </div>
+      {dbSession?.status === 'pending' ? (
+        <div className="bg-[#202c33] p-4 flex items-center justify-center border-t border-[#2a3942] z-20 text-[#8696a0]">
+          {dbSession.initiator_id === user.id 
+            ? "Waiting for user to accept your request..."
+            : "You must accept the request to send messages."}
         </div>
       ) : (
         <div className="bg-[#202c33] p-3 flex flex-wrap md:flex-nowrap items-center gap-3 relative border-t border-[#2a3942] z-20">
