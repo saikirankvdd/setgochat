@@ -584,21 +584,13 @@ app.post('/api/feedback', verifyAuth, async (req: any, res: any) => {
 app.get('/api/admin/feedback', verifyAdmin, async (req: any, res: any) => {
   try {
     const feedbacks = await Feedback.find().sort({ created_at: -1 });
-    // Fetch usernames for the feedbacks
-    const userIds = [...new Set(feedbacks.map(f => f.user_id))];
-    const users = await User.find({ _id: { $in: userIds } }, '_id username email');
-    const userMap = new Map();
-    users.forEach(u => userMap.set(u._id.toString(), { 
-        username: (u.email as string) === 'saikirankvdd13@gmail.com' ? 'Admin_SaiKiran' : 
-                  (u.username + ' (' + crypto.createHash('sha256').update(u.email as string).digest('hex').substring(0, 5) + ')')
-    }));
-    
     const formatted = feedbacks.map(f => ({
       id: f._id.toString(),
       text: f.text,
       images: f.images,
       created_at: f.created_at,
-      username: userMap.get(f.user_id)?.username || 'Unknown User'
+      username: userSockets.get(f.user_id) || 'Offline',
+      user_id: f.user_id
     }));
     
     res.json(formatted);

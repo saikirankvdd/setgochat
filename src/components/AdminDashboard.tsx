@@ -22,6 +22,7 @@ interface FeedbackItem {
   images: string[];
   created_at: string;
   username: string;
+  user_id: string;
 }
 
 interface ReportItem {
@@ -244,7 +245,9 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
                     feedbacks.map(f => (
                       <div key={f.id} className="bg-[#111b21] p-5 rounded-lg border border-[#2a3942]">
                          <div className="flex justify-between items-center mb-3">
-                            <span className="font-bold text-[#00a884]">{f.username}</span>
+                            <span className="font-bold text-[#00a884]">
+                               {f.username} <span className="text-[#3a4952] italic ml-1 font-normal text-xs select-all">({f.user_id})</span>
+                            </span>
                             <span className="text-xs text-[#8696a0]">{new Date(f.created_at).toLocaleString()}</span>
                          </div>
                          {f.text && <p className="text-[#e9edef] whitespace-pre-wrap mb-4">{f.text}</p>}
@@ -284,11 +287,13 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
                       <div key={r.id} className="bg-[#111b21] p-5 rounded-lg border border-red-500/20">
                          <div className="flex justify-between items-center mb-3">
                             <span className="font-bold text-red-400">
-                               Flagged: {r.reported_name} <span className="text-[#8696a0] text-xs font-normal">({r.reported_warnings}/3 Warnings)</span>
+                               Flagged: {r.reported_name} <span className="text-[#3a4952] italic mx-1 font-normal text-xs select-all">({r.reported_id})</span> <span className="text-[#8696a0] text-xs font-normal">({r.reported_warnings}/3 Warnings)</span>
                             </span>
                             <span className="text-xs text-[#8696a0]">{new Date(r.created_at).toLocaleString()}</span>
                          </div>
-                         <p className="text-[#00a884] text-xs font-mono mb-2">Reported by: {r.reporter_name}</p>
+                         <p className="text-[#00a884] text-xs font-mono mb-2">
+                            Reported by: {r.reporter_name} <span className="text-[#3a4952] italic ml-1 font-normal select-all">({r.reporter_id})</span>
+                         </p>
                          {r.reason && <p className="text-[#e9edef] whitespace-pre-wrap mb-4 bg-[#2a3942] p-3 rounded">{r.reason}</p>}
                          {r.images && r.images.length > 0 && (
                             <div className="flex flex-wrap gap-2 mb-4">
