@@ -1,0 +1,76 @@
+{
+  "timestamp": "2026-04-10T17:53:02.117Z",
+  "tests": [
+    {
+      "name": "Rate Limiting",
+      "status": "PASS",
+      "details": "Bypassed: 0/20, Blocked: 0/20",
+      "timestamp": 1775843582224
+    },
+    {
+      "name": "5MB Payload",
+      "status": "ERROR",
+      "details": "fetch failed",
+      "timestamp": 1775843582248
+    },
+    {
+      "name": "NoSQL Injection",
+      "status": "PASS",
+      "details": "Vulnerable to 0 payloads",
+      "timestamp": 1775843582253
+    },
+    {
+      "name": "Brute Force Protection",
+      "status": "PASS",
+      "details": "0 attempts allowed without lockout",
+      "timestamp": 1775843582328
+    },
+    {
+      "name": "XSS Protection",
+      "status": "PASS",
+      "details": "0/7 XSS payloads accepted",
+      "timestamp": 1775843582338
+    },
+    {
+      "name": "Header Injection",
+      "status": "PASS",
+      "details": "Header handling appears safe",
+      "timestamp": 1775843582342
+    },
+    {
+      "name": "Unauthenticated Access",
+      "status": "PASS",
+      "details": "0/5 endpoints accessible without auth",
+      "timestamp": 1775843582348
+    },
+    {
+      "name": "Message Flood",
+      "status": "SKIPPED",
+      "details": "Requires authenticated session",
+      "timestamp": 1775843582348
+    },
+    {
+      "name": "ReDoS Protection",
+      "status": "PASS",
+      "details": "0 inputs caused slow responses",
+      "timestamp": 1775843582354
+    },
+    {
+      "name": "JWT Validation",
+      "status": "ERROR",
+      "details": "fetch failed",
+      "timestamp": 1775843582357
+    }
+  ],
+  "vulnerabilities": [],
+  "summary": {
+    "total": 10,
+    "passed": 7,
+    "failed": 0,
+    "errors": 2,
+    "skipped": 1,
+    "vulnerabilitiesFound": 0,
+    "criticalVulns": 0,
+    "highVulns": 0
+  }
+}

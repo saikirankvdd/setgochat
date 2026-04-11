@@ -197,10 +197,13 @@ const allowedOrigins = process.env.NODE_ENV === 'production'
 
 const io = new Server(httpServer, {
   cors: { origin: allowedOrigins },
-  maxHttpBufferSize: 1e8 // 100 MB
+  maxHttpBufferSize: 1e8 // 100 MB (restored per user request, but be careful of DoS)
 });
 
-app.use(express.json({ limit: '100mb' }));
+// Helper to escape regex values to prevent ReDoS
+const escapeRegex = (str: string) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+app.use(express.json({ limit: '2mb' })); // Reduced from 100MB to prevent DoS
 
 const upload = multer({ dest: 'uploads/' });
 
@@ -217,7 +220,7 @@ app.post('/api/request-register-otp', authLimiter, [
      return res.status(400).json({ error: 'Cannot register using admin email.' });
   }
 
-  const existing = await User.findOne({ email: new RegExp(`^${email}$`, 'i') });
+  const existing = await User.findOne({ email: new RegExp(`^${escapeRegex(email)}$`, 'i') });
   if (existing) {
      return res.status(400).json({ error: 'Email already registered.' });
   }
@@ -247,10 +250,10 @@ app.post('/api/signup', authLimiter, [
   const errors = validationResult(req);
   if (!errors.isEmpty()) return res.status(400).json({ error: 'Invalid input data detected.' });
 
-  const exactUsername = await User.findOne({ username: new RegExp(`^${req.body.username}$`, 'i') });
+  const exactUsername = await User.findOne({ username: new RegExp(`^${escapeRegex(req.body.username)}$`, 'i') });
   if (exactUsername) return res.status(400).json({ error: 'Username already taken.' });
 
-  const isBanned = await BannedEmail.findOne({ email: new RegExp(`^${req.body.email}$`, 'i') });
+  const isBanned = await BannedEmail.findOne({ email: new RegExp(`^${escapeRegex(req.body.email)}$`, 'i') });
   if (isBanned) return res.status(403).json({ error: 'System Policy Block: This email has been permanently banned from StegoChat.' });
 
   const { username, email, password, otp, publicKey, encryptedPrivateKey } = req.body;
@@ -294,8 +297,8 @@ app.post('/api/login', authLimiter, async (req: any, res: any) => {
   
   const user = await User.findOne({ 
       $or: [
-          { username: new RegExp(`^${safeUsername}$`, 'i') }, 
-          { email: new RegExp(`^${safeUsername}$`, 'i') }
+          { username: new RegExp(`^${escapeRegex(safeUsername)}$`, 'i') }, 
+          { email: new RegExp(`^${escapeRegex(safeUsername)}$`, 'i') }
       ] 
   });
   
@@ -322,8 +325,8 @@ app.post('/api/request-otp', authLimiter, async (req: any, res: any) => {
   
   const user = await User.findOne({
       $or: [
-          { username: new RegExp(`^${emailOrUsername}$`, 'i') }, 
-          { email: new RegExp(`^${emailOrUsername}$`, 'i') }
+          { username: new RegExp(`^${escapeRegex(emailOrUsername)}$`, 'i') }, 
+          { email: new RegExp(`^${escapeRegex(emailOrUsername)}$`, 'i') }
       ] 
   });
   
@@ -358,8 +361,8 @@ app.post('/api/change-password', authLimiter, async (req: any, res: any) => {
 
   const user = await User.findOne({
       $or: [
-          { username: new RegExp(`^${emailOrUsername}$`, 'i') }, 
-          { email: new RegExp(`^${emailOrUsername}$`, 'i') }
+          { username: new RegExp(`^${escapeRegex(emailOrUsername)}$`, 'i') }, 
+          { email: new RegExp(`^${escapeRegex(emailOrUsername)}$`, 'i') }
       ] 
   });
   
@@ -487,7 +490,10 @@ io.on('connection', (socket: any) => {
     if (toSocketId) {
       io.to(toSocketId).emit('receive_message', safeData);
     } else {
-      await OfflineMessage.create({ to_id: safeData.toId, payload: JSON.stringify({ type: 'text', data: safeData }) });
+      const msgCount = await OfflineMessage.countDocuments({ to_id: safeData.toId });
+      if (msgCount < 50) {
+        await OfflineMessage.create({ to_id: safeData.toId, payload: JSON.stringify({ type: 'text', data: safeData }) });
+      }
     }
   });
 
@@ -497,7 +503,10 @@ io.on('connection', (socket: any) => {
     if (toSocketId) {
       io.to(toSocketId).emit('receive_file', safeData);
     } else {
-      await OfflineMessage.create({ to_id: safeData.toId, payload: JSON.stringify({ type: 'file', data: safeData }) });
+      const fileCount = await OfflineMessage.countDocuments({ to_id: safeData.toId });
+      if (fileCount < 20) {
+        await OfflineMessage.create({ to_id: safeData.toId, payload: JSON.stringify({ type: 'file', data: safeData }) });
+      }
     }
   });
 
@@ -662,8 +671,8 @@ app.get('/api/admin/reports', verifyAdmin, async (req: any, res: any) => {
         id: r._id.toString(),
         reporter_id: r.reporter_id,
         reported_id: r.reported_id,
-        reporter_name: reporter ? reporter.username : 'Unknown',
-        reported_name: reported ? reported.username : 'Unknown',
+        reporter_name: userSockets.get(r.reporter_id) || 'Offline',
+        reported_name: userSockets.get(r.reported_id) || 'Offline',
         reported_warnings: reported ? (reported as any).warningsCount : 0,
         reason: r.reason,
         images: r.images,
