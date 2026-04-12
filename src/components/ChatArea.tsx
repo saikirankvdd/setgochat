@@ -4,7 +4,7 @@ import { Socket } from 'socket.io-client';
 import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
-import { encodeLSB, decodeLSB, createCarrierWav } from '../utils/stego';
+import { encodeLSB, decodeLSB, createDynamicCarrier } from '../utils/stego';
 
 interface ChatAreaProps {
   key?: string | number;
@@ -805,8 +805,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       // 2. Convert to Binary
       const binary = stringToBinary(encrypted);
       
-      // 3. Create Carrier Audio
-      const carrier = createCarrierWav(2); // 2 seconds carrier
+      // 3. Create Carrier Audio — sized exactly to the payload (no wasted bytes)
+      const carrier = createDynamicCarrier(binary.length);
       
       // 4. Hide Data in Carrier
       const stegoAudio = encodeLSB(carrier, binary);
