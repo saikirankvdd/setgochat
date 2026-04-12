@@ -1,7 +1,0 @@
-{
-  "name": "Secure Audio Steganography Platform",
-  "description": "A high-security communication platform using AES encryption and Audio LSB steganography to hide messages in audio files.",
-  "requestFramePermissions": [
-    "microphone"
-  ]
-}

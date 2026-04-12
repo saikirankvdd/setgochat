@@ -10,3 +10,24 @@ database.db
 uploads/
 *.pem
 shannon-pentester/
+
+# Test & stress test files
+stress_test.js
+comprehensive_stress_test.js
+stress_logs.txt
+stress_test_results.json
+test_mongo.js
+patch.js
+
+# Internal dev docs (keep locally, not in repo)
+API_REFERENCE.md
+DOCUMENTATION_INDEX.md
+PROJECT_DOCUMENTATION.md
+SETUP_GUIDE.md
+SECURITY.md
+SECURITY_FIXES_IMPLEMENTATION.md
+SECURITY_VULNERABILITY_REPORT.md
+metadata.json
+
+# Demo files
+attacker-demo.html
