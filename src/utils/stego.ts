@@ -65,13 +65,14 @@ export const decodeLSB = (audioBuffer: ArrayBuffer): string => {
 };
 
 /**
+/**
  * Create a WAV carrier whose size is calculated dynamically from the actual
- * binary payload length — so a short message like "Hi" produces a tiny file
- * and a long message produces a proportionally larger one.
+ * binary payload length — so a short message produces a tiny file and a long
+ * message produces a proportionally larger one.
  *
- * Each carrier is filled with a unique random mix of 4–9 sine waves at
- * random frequencies (200–4000 Hz), random amplitudes, and random phase
- * offsets — so every audio file sounds different every time.
+ * Audio content is White Gaussian Noise (Box-Muller transform), identical in
+ * character to natural recording noise — statistically flat spectrum, maximum
+ * entropy, ideal for hiding LSB data without detectable patterns.
  *
  * @param binaryLength - number of bits in the binary string to be hidden
  */
@@ -106,46 +107,27 @@ export const createDynamicCarrier = (binaryLength: number): ArrayBuffer => {
   view.setUint32(36, 0x64617461, false); // "data"
   view.setUint32(40, dataSize, true);
 
-  // ── Randomised multi-tone content ─────────────────────────
-  // Pick 4–9 sine components — completely random every call,
-  // so two identical messages still produce different-sounding carriers.
-  interface SineComponent { freq: number; amp: number; phase: number; }
-  const numComponents = 4 + Math.floor(Math.random() * 6); // [4, 9]
-  const components: SineComponent[] = [];
+  // ── White Gaussian Noise via Box-Muller transform ──────────
+  // Generates pairs of independent normally-distributed samples.
+  // stdDev = 1500 → audible static that stays well within 16-bit range.
+  const stdDev = 1500;
+  for (let i = 0; i < numSamples; i += 2) {
+    let u1 = 0, u2 = 0;
+    while (u1 === 0) u1 = Math.random(); // ensure (0, 1]
+    while (u2 === 0) u2 = Math.random();
 
-  for (let c = 0; c < numComponents; c++) {
-    components.push({
-      freq:  200 + Math.random() * 3800,  // 200 Hz – 4000 Hz
-      amp:   0.3 + Math.random() * 0.7,   // random weight
-      phase: Math.random() * 2 * Math.PI, // random starting phase
-    });
-  }
+    const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
+    const z1 = Math.sqrt(-2.0 * Math.log(u1)) * Math.sin(2.0 * Math.PI * u2);
 
-  // Normalise so the signal stays within ±1 before we scale to 16-bit
-  const totalAmp = components.reduce((sum, c) => sum + c.amp, 0);
+    const s0 = Math.max(-32768, Math.min(32767, Math.floor(z0 * stdDev)));
+    const s1 = Math.max(-32768, Math.min(32767, Math.floor(z1 * stdDev)));
 
-  // Very small noise floor keeps the carrier from being purely periodic,
-  // which would make steganalysis easier.
-  const noiseSigma = 0.02;
-
-  for (let i = 0; i < numSamples; i++) {
-    // Sum normalised sine waves
-    let sample = 0;
-    for (const comp of components) {
-      sample += (comp.amp / totalAmp) *
-                Math.sin(2 * Math.PI * comp.freq * i / sampleRate + comp.phase);
+    view.setInt16(44 + i * 2, s0, true);
+    if (i + 1 < numSamples) {
+      view.setInt16(44 + (i + 1) * 2, s1, true);
     }
-
-    // Box-Muller Gaussian noise floor
-    const u1 = Math.random() || 1e-10;
-    sample += Math.sqrt(-2 * Math.log(u1)) *
-              Math.cos(2 * Math.PI * Math.random()) * noiseSigma;
-
-    // Scale to 16-bit with headroom (×12000 ≈ 37% of 32767) so LSB
-    // modifications during encoding never push samples out of range
-    const clamped = Math.max(-32768, Math.min(32767, Math.round(sample * 12000)));
-    view.setInt16(44 + i * 2, clamped, true);
   }
 
   return buffer;
 };
+
