@@ -28,7 +28,9 @@ export function Dashboard({ user, socket }: DashboardProps) {
   const [blockedUsers, setBlockedUsers] = useState<number[]>([]);
   const [systemAlert, setSystemAlert] = useState<{title: string, message: string} | null>(null);
   const [pinsReady, setPinsReady] = useState(false);
+  const [usersLoaded, setUsersLoaded] = useState(false);
   
+  const requestedOfflineMsgs = useRef(false);
   const pinsRef = useRef<Record<string, string>>({});
   const activeUserIdRef = useRef<number | null>(null);
   const usersRef = useRef<User[]>([]);
@@ -65,10 +67,33 @@ export function Dashboard({ user, socket }: DashboardProps) {
   }, [user.id, user.token]);
 
   useEffect(() => {
-    if (pinsReady) {
+    if (pinsReady && usersLoaded && !requestedOfflineMsgs.current) {
+      requestedOfflineMsgs.current = true;
       socket.emit('request_offline_messages');
     }
-  }, [pinsReady]);
+  }, [pinsReady, usersLoaded]);
+
+  const playNotificationSound = () => {
+    try {
+      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      
+      osc.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(600, audioCtx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.1);
+      
+      gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+      gainNode.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.05);
+      gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.2);
+      
+      osc.start(audioCtx.currentTime);
+      osc.stop(audioCtx.currentTime + 0.2);
+    } catch(e) {}
+  };
 
   useEffect(() => {
     if (!socket) return;
@@ -119,7 +144,12 @@ export function Dashboard({ user, socket }: DashboardProps) {
       setOnlineUsers(userIds); 
       fetch('/api/users', { headers: { 'Authorization': `Bearer ${user.token}` } })
         .then(res => res.json())
-        .then(data => { if (Array.isArray(data)) setUsers(data.filter((u: User) => u.id !== user.id)); });
+        .then(data => { 
+          if (Array.isArray(data)) {
+            setUsers(data.filter((u: User) => u.id !== user.id));
+            setUsersLoaded(true);
+          }
+        });
     });
 
     socket.on('session_pins', async (sessionsData: any[]) => {
@@ -153,6 +183,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
            setLastMessages(prev => ({ ...prev, [data.fromId]: 'Missed Call' }));
            if (activeUserIdRef.current !== data.fromId || document.hidden) {
               setUnreadCounts(prev => ({ ...prev, [data.fromId]: (prev[data.fromId] || 0) + 1 }));
+              playNotificationSound();
               if ('Notification' in window && Notification.permission === 'granted') {
                  const sender = usersRef.current.find(u => u.id === data.fromId);
                  const senderName = sender ? sender.username : `User ${data.fromId}`;
@@ -179,7 +210,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
           setLastMessages(prev => ({ ...prev, [data.fromId]: previewText }));
           if (activeUserIdRef.current !== data.fromId || document.hidden) {
              setUnreadCounts(prev => ({ ...prev, [data.fromId]: (prev[data.fromId] || 0) + 1 }));
-             
+             playNotificationSound();
              if ('Notification' in window && Notification.permission === 'granted') {
                const sender = usersRef.current.find(u => u.id === data.fromId);
                const senderName = sender ? sender.username : `User ${data.fromId}`;
