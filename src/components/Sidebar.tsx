@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { User } from '../App';
-import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut, X } from 'lucide-react';
+import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut, X, ShieldAlert } from 'lucide-react';
 
 interface SidebarProps {
   currentUser: User;
@@ -13,9 +14,10 @@ interface SidebarProps {
   onlineUsers: number[];
   lastMessages?: Record<number, string>;
   unreadCounts?: Record<number, number>;
+  blockedUsersList?: User[];
 }
 
-export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, activeUserId, onShowAdmin, onlineUsers, lastMessages, unreadCounts }: SidebarProps) {
+export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, activeUserId, onShowAdmin, onlineUsers, lastMessages, unreadCounts, blockedUsersList = [] }: SidebarProps) {
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<'chats' | 'requests' | 'calls'>('chats');
   const [showProfile, setShowProfile] = useState(false);
@@ -25,6 +27,7 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
   const [otpSent, setOtpSent] = useState(false);
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [showBlockedUsersModal, setShowBlockedUsersModal] = useState(false);
 
   const getTargetUser = (call: any) => {
     const id = call.from_id === currentUser.id ? call.to_id : call.from_id;
@@ -107,35 +110,68 @@ const FeedbackModal = ({ onClose, token }: { onClose: () => void, token: string 
     }
   };
 
-  return (
-     <div className="fixed inset-0 bg-[#0b141a]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-        <div className="bg-[#202c33] rounded-2xl w-full max-w-md p-6 border border-[#2a3942] shadow-2xl">
-           <h2 className="text-xl font-bold text-white mb-4">Send Feedback</h2>
-           <textarea className="w-full bg-[#111b21] text-white p-3 rounded-lg min-h-[100px] mb-4 outline-none focus:border-[#00a884] border border-transparent" placeholder="Describe the issue or feedback..." value={text} onChange={e => setText(e.target.value)}></textarea>
-           
-           <div className="mb-4">
-              <label className="block text-sm text-[#00a884] mb-2 cursor-pointer font-bold w-full text-center py-2 border border-[#00a884] rounded border-dashed hover:bg-[#00a884]/10 transition-colors">
-                 + Attach Screenshots ({images.length}/10)
-                 <input type="file" multiple accept="image/*" className="hidden" onChange={handleImageUpload} />
-              </label>
-              <div className="flex flex-wrap gap-2 mt-3">
-                 {images.map((img, i) => (
-                    <div key={i} className="relative w-16 h-16 rounded overflow-hidden border border-[#2a3942]">
-                       <img src={img} className="object-cover w-full h-full" />
-                       <button onClick={() => setImages(images.filter((_, idx) => idx !== i))} className="absolute top-0 right-0 bg-red-500/80 hover:bg-red-500 text-white rounded-bl-lg p-0.5"><X className="w-3 h-3" /></button>
-                    </div>
-                 ))}
-              </div>
-           </div>
-           
-           <div className="flex justify-end gap-3 mt-6">
-              <button disabled={isSubmitting} onClick={onClose} className="px-4 py-2 text-[#8696a0] hover:text-white transition-colors">Cancel</button>
-              <button disabled={isSubmitting} onClick={handleSubmit} className="px-5 py-2 bg-[#00a884] hover:bg-[#06cf9c] text-white rounded-lg font-bold transition-colors shadow-lg">
-                  {isSubmitting ? 'Sending...' : 'Submit Feedback'}
-              </button>
-           </div>
-        </div>
-     </div>
+   return createPortal(
+      <div className="fixed inset-0 bg-[#0b141a]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+         <div className="bg-[#202c33] rounded-2xl w-full max-w-md p-6 border border-[#2a3942] shadow-2xl">
+            <h2 className="text-xl font-bold text-white mb-4">Send Feedback</h2>
+            <textarea className="w-full bg-[#111b21] text-white p-3 rounded-lg min-h-[100px] mb-4 outline-none focus:border-[#00a884] border border-transparent" placeholder="Describe the issue or feedback..." value={text} onChange={e => setText(e.target.value)}></textarea>
+            
+            <div className="mb-4">
+               <label className="block text-sm text-[#00a884] mb-2 cursor-pointer font-bold w-full text-center py-2 border border-[#00a884] rounded border-dashed hover:bg-[#00a884]/10 transition-colors">
+                  + Attach Screenshots ({images.length}/10)
+                  <input type="file" multiple accept="image/*" className="hidden" onChange={handleImageUpload} />
+               </label>
+               <div className="flex flex-wrap gap-2 mt-3">
+                  {images.map((img, i) => (
+                     <div key={i} className="relative w-16 h-16 rounded overflow-hidden border border-[#2a3942]">
+                        <img src={img} className="object-cover w-full h-full" />
+                        <button onClick={() => setImages(images.filter((_, idx) => idx !== i))} className="absolute top-0 right-0 bg-red-500/80 hover:bg-red-500 text-white rounded-bl-lg p-0.5"><X className="w-3 h-3" /></button>
+                     </div>
+                  ))}
+               </div>
+            </div>
+            
+            <div className="flex justify-end gap-3 mt-6">
+               <button disabled={isSubmitting} onClick={onClose} className="px-4 py-2 text-[#8696a0] hover:text-white transition-colors">Cancel</button>
+               <button disabled={isSubmitting} onClick={handleSubmit} className="px-5 py-2 bg-[#00a884] hover:bg-[#06cf9c] text-white rounded-lg font-bold transition-colors shadow-lg">
+                   {isSubmitting ? 'Sending...' : 'Submit Feedback'}
+               </button>
+            </div>
+         </div>
+      </div>,
+      document.body
+   );
+};
+
+const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, users: User[], onSelect: (u: User) => void }) => {
+  return createPortal(
+    <div className="fixed inset-0 bg-[#0b141a]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+       <div className="bg-[#202c33] rounded-2xl w-full max-w-md p-6 border border-[#2a3942] shadow-2xl flex flex-col max-h-[80vh]">
+          <div className="flex justify-between items-center mb-4">
+            <h2 className="text-xl font-bold text-white flex items-center"><ShieldAlert className="w-5 h-5 mr-2 text-red-500" /> Blocked Users</h2>
+            <button onClick={onClose} className="text-[#8696a0] hover:text-white"><X className="w-5 h-5" /></button>
+          </div>
+          
+          <div className="flex-1 overflow-y-auto mb-4 border border-[#2a3942] rounded-lg bg-[#111b21] divide-y divide-[#2a3942]">
+            {users.length === 0 ? (
+               <p className="text-[#8696a0] p-6 text-center">No blocked users.</p>
+            ) : (
+               users.map(u => (
+                  <div key={u.id} className="flex items-center justify-between p-3 hover:bg-[#202c33] cursor-pointer" onClick={() => { onSelect(u); onClose(); }}>
+                     <div className="flex items-center">
+                        <div className="w-10 h-10 bg-gradient-to-br from-red-500 to-red-700 rounded-full flex items-center justify-center mr-3">
+                           <span className="text-white font-bold">{u.username[0].toUpperCase()}</span>
+                        </div>
+                        <span className="text-[#e9edef] font-medium">{u.username}</span>
+                     </div>
+                     <span className="text-xs text-[#8696a0]">Tap to view</span>
+                  </div>
+               ))
+            )}
+          </div>
+       </div>
+    </div>,
+    document.body
   );
 };
 
@@ -228,6 +264,9 @@ const FeedbackModal = ({ onClose, token }: { onClose: () => void, token: string 
                    <button onClick={() => { setShowFeedbackModal(true); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-[#e9edef] hover:bg-[#202c33] transition-colors font-medium">
                       Submit Feedback
                    </button>
+                   <button onClick={() => { setShowBlockedUsersModal(true); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-[#e9edef] hover:bg-[#202c33] transition-colors font-medium">
+                      Blocked Users
+                   </button>
                 </div>
              )}
           </div>
@@ -250,6 +289,10 @@ const FeedbackModal = ({ onClose, token }: { onClose: () => void, token: string 
 
       {showFeedbackModal && (
           <FeedbackModal onClose={() => setShowFeedbackModal(false)} token={currentUser.token!} />
+      )}
+      
+      {showBlockedUsersModal && (
+          <BlockedUsersModal onClose={() => setShowBlockedUsersModal(false)} users={blockedUsersList} onSelect={onSelectUser} />
       )}
 
       {/* Search */}

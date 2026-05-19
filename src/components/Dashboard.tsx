@@ -258,11 +258,12 @@ export function Dashboard({ user, socket }: DashboardProps) {
           onlineUsers={onlineUsers}
           lastMessages={lastMessages}
           unreadCounts={unreadCounts}
+          blockedUsersList={users.filter(u => blockedUsers.includes(u.id as any))}
         />
       </div>
 
       <div className={`flex-1 flex flex-col bg-[#0b141a] relative w-full h-full ${!activeChat ? 'hidden md:flex' : 'flex'}`}>
-        {visibleUsers.filter(u => pinsRef.current[[user.id, u.id].sort().join('-')]).map(targetUser => {
+        {users.filter(u => pinsRef.current[[user.id, u.id].sort().join('-')]).map(targetUser => {
            const sId = [user.id, targetUser.id].sort().join('-');
            const pin = pinsRef.current[sId];
            if (!pin) return null;
@@ -276,9 +277,22 @@ export function Dashboard({ user, socket }: DashboardProps) {
                   sessionInfo={{ sessionId: sId, pin }} 
                   isOnline={onlineUsers.includes(targetUser.id)}
                   pendingCall={pendingCall}
-                  clearPendingCall={() => setPendingCall(null)}
                   dbSession={targetSession}
                   onBack={() => setActiveChat(null)}
+                  isBlocked={blockedUsers.includes(targetUser.id as any)}
+                  onUnblock={async () => {
+                     try {
+                       const res = await fetch('/api/unblock', {
+                         method: 'POST',
+                         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user.token}` },
+                         body: JSON.stringify({ targetId: targetUser.id })
+                       });
+                       if (res.ok) {
+                         setBlockedUsers(prev => prev.filter(id => id !== targetUser.id));
+                         alert("User unblocked successfully.");
+                       }
+                     } catch(e) { console.error(e); }
+                  }}
                 />
               </div>
            );
