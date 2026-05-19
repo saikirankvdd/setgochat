@@ -411,7 +411,15 @@ io.on('connection', (socket: any) => {
     console.log(`User ${userId} registered with socket ${socket.id}`);
     broadcastOnlineUsers();
 
-    // Send all offline messages
+    // Send all pins for this user
+    try {
+      const sessions = await Session.find({ $or: [{ user1_id: userId }, { user2_id: userId }] });
+      io.to(socket.id).emit('session_pins', sessions);
+    } catch(e) { console.error('Error syncing pins:', e); }
+  });
+
+  socket.on('request_offline_messages', async () => {
+    const userId = socket.userId;
     try {
       const offlineMsgs = await OfflineMessage.find({ to_id: userId });
       if (offlineMsgs.length > 0) {
@@ -425,10 +433,6 @@ io.on('connection', (socket: any) => {
         });
         await OfflineMessage.deleteMany({ to_id: userId });
       }
-
-      // Send all pins for this user
-      const sessions = await Session.find({ $or: [{ user1_id: userId }, { user2_id: userId }] });
-      io.to(socket.id).emit('session_pins', sessions);
     } catch(e) { console.error('Error syncing offline data:', e); }
   });
 

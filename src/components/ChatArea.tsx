@@ -689,8 +689,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             isSelfDestruct: snapchatMode,
             isOneTime: oneTimeView,
             timerSeconds: timer,
-            isRevealed: true,
-            expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined,
+            isRevealed: !(snapchatMode || oneTimeView),
+            expiresAt: undefined,
             file: {
               name: file.name,
               type: file.type,
@@ -765,8 +765,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 isSelfDestruct: snapchatMode,
                 isOneTime: oneTimeView,
                 timerSeconds: timer,
-                isRevealed: true,
-                expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined,
+                isRevealed: !(snapchatMode || oneTimeView),
+                expiresAt: undefined,
                 file: {
                   name: 'Voice Message.webm',
                   type: 'audio/webm',
@@ -841,8 +841,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         isSelfDestruct: snapchatMode,
         isOneTime: false, // Text messages never use One Time View
         timerSeconds: timer,
-        isRevealed: true,
-        expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined
+        isRevealed: !snapchatMode,
+        expiresAt: undefined
       }]);
 
       setInputText('');
@@ -1190,12 +1190,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 >
                   <div className="relative">
                     {msg.isOneTime ? (
-                      <span className="flex items-center justify-center w-8 h-8 rounded-full border-2 border-[#00a884] text-[#00a884] font-bold text-sm mb-2 group-hover:scale-110 transition-transform">1</span>
+                      <span className="flex items-center justify-center w-12 h-12 rounded-full border-[3px] border-[#00a884] text-[#00a884] font-bold text-xl mb-3 group-hover:scale-110 transition-transform">1</span>
                     ) : (
-                      <Clock className="w-8 h-8 text-[#00a884] mb-2 group-hover:scale-110 transition-transform" />
+                      <Clock className="w-12 h-12 text-[#00a884] mb-3 group-hover:scale-110 transition-transform" />
                     )}
                   </div>
-                  <span className="text-[#00a884] font-medium text-sm text-center">
+                  <span className="text-[#00a884] font-semibold text-base text-center">
                     Tap to view
                   </span>
                 </div>

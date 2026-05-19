@@ -27,6 +27,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
   const [calls, setCalls] = useState<any[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<number[]>([]);
   const [systemAlert, setSystemAlert] = useState<{title: string, message: string} | null>(null);
+  const [, forceRender] = useState({});
   
   const pinsRef = useRef<Record<string, string>>({});
   const activeUserIdRef = useRef<number | null>(null);
@@ -127,6 +128,8 @@ export function Dashboard({ user, socket }: DashboardProps) {
           } catch(e) {}
         }));
         pinsRef.current = newPins;
+        forceRender({});
+        setTimeout(() => socket.emit('request_offline_messages'), 100);
       } catch(e) {}
     });
 
