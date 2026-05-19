@@ -449,6 +449,8 @@ io.on('connection', (socket: any) => {
       console.log(`User ${disconnectedUserId} disconnected`);
       broadcastOnlineUsers();
     }
+  });
+
   const isUserBlocked = async (fromId: string, toId: string) => {
     const toUser: any = await User.findById(toId);
     return toUser && toUser.blockedUsers && toUser.blockedUsers.includes(fromId);
