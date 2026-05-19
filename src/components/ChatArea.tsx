@@ -1175,7 +1175,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               <span>Scanning {scanningStatus.type === 'link' ? 'link' : 'document'} for threats...</span>
            </div>
         )}
-        {messages.map(msg => (
+        
+        {messages.length === 0 ? (
+          <div className="flex items-center justify-center pt-10">
+            <div className="bg-[#182229] text-[#ffd279] px-4 py-2 rounded-lg text-xs shadow-sm text-center max-w-xs flex items-center">
+              <Lock className="w-3 h-3 mr-2 flex-shrink-0" />
+              Messages and calls are end-to-end encrypted. No one outside of this chat can read or listen to them.
+            </div>
+          </div>
+        ) : (
+          messages.map(msg => (
           <div 
             key={msg.id} 
             className={`flex ${msg.fromId === user.id ? 'justify-end' : 'justify-start'}`}

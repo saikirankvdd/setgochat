@@ -43,6 +43,28 @@ export function Dashboard({ user, socket }: DashboardProps) {
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
+
+    const unlockAudio = () => {
+      try {
+        const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+        const audioCtx = new AudioContext();
+        const buffer = audioCtx.createBuffer(1, 1, 22050);
+        const source = audioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(audioCtx.destination);
+        source.start(0);
+        audioCtx.resume();
+      } catch (e) {}
+      document.removeEventListener('click', unlockAudio);
+      document.removeEventListener('touchstart', unlockAudio);
+    };
+    
+    document.addEventListener('click', unlockAudio);
+    document.addEventListener('touchstart', unlockAudio);
+    return () => {
+      document.removeEventListener('click', unlockAudio);
+      document.removeEventListener('touchstart', unlockAudio);
+    };
   }, []);
 
   useEffect(() => {
@@ -76,6 +98,9 @@ export function Dashboard({ user, socket }: DashboardProps) {
   const playNotificationSound = () => {
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      if (audioCtx.state === 'suspended') {
+         audioCtx.resume();
+      }
       const osc = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
       

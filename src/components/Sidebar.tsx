@@ -111,7 +111,7 @@ const FeedbackModal = ({ onClose, token }: { onClose: () => void, token: string 
   };
 
    return createPortal(
-      <div className="fixed inset-0 bg-[#0b141a]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+       <div className="fixed inset-0 bg-[#0b141a]/80 z-[9999] flex items-center justify-center p-4">
          <div className="bg-[#202c33] rounded-2xl w-full max-w-md p-6 border border-[#2a3942] shadow-2xl">
             <h2 className="text-xl font-bold text-white mb-4">Send Feedback</h2>
             <textarea className="w-full bg-[#111b21] text-white p-3 rounded-lg min-h-[100px] mb-4 outline-none focus:border-[#00a884] border border-transparent" placeholder="Describe the issue or feedback..." value={text} onChange={e => setText(e.target.value)}></textarea>
@@ -145,7 +145,7 @@ const FeedbackModal = ({ onClose, token }: { onClose: () => void, token: string 
 
 const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, users: User[], onSelect: (u: User) => void }) => {
   return createPortal(
-    <div className="fixed inset-0 bg-[#0b141a]/80 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+    <div className="fixed inset-0 bg-[#0b141a]/80 z-[9999] flex items-center justify-center p-4">
        <div className="bg-[#202c33] rounded-2xl w-full max-w-md p-6 border border-[#2a3942] shadow-2xl flex flex-col max-h-[80vh]">
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-bold text-white flex items-center"><ShieldAlert className="w-5 h-5 mr-2 text-red-500" /> Blocked Users</h2>
