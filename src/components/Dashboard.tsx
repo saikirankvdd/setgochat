@@ -27,7 +27,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
   const [calls, setCalls] = useState<any[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<number[]>([]);
   const [systemAlert, setSystemAlert] = useState<{title: string, message: string} | null>(null);
-  const [, forceRender] = useState({});
+  const [pinsReady, setPinsReady] = useState(false);
   
   const pinsRef = useRef<Record<string, string>>({});
   const activeUserIdRef = useRef<number | null>(null);
@@ -63,6 +63,12 @@ export function Dashboard({ user, socket }: DashboardProps) {
       .then(res => res.json())
       .then(data => { if (Array.isArray(data)) setCalls(data); });
   }, [user.id, user.token]);
+
+  useEffect(() => {
+    if (pinsReady) {
+      socket.emit('request_offline_messages');
+    }
+  }, [pinsReady]);
 
   useEffect(() => {
     if (!socket) return;
@@ -128,8 +134,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
           } catch(e) {}
         }));
         pinsRef.current = newPins;
-        forceRender({});
-        setTimeout(() => socket.emit('request_offline_messages'), 100);
+        setPinsReady(true);
       } catch(e) {}
     });
 

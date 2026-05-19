@@ -449,9 +449,13 @@ io.on('connection', (socket: any) => {
       console.log(`User ${disconnectedUserId} disconnected`);
       broadcastOnlineUsers();
     }
-  });
+  const isUserBlocked = async (fromId: string, toId: string) => {
+    const toUser: any = await User.findById(toId);
+    return toUser && toUser.blockedUsers && toUser.blockedUsers.includes(fromId);
+  };
 
   socket.on('start_chat', async ({ toId, pin1, pin2 }) => {
+    if (await isUserBlocked(socket.userId, toId)) return;
     const fromId = socket.userId; // Trusted ID
     const sessionId = [fromId, toId].sort().join('-');
     const [sorted1, sorted2] = [fromId, toId].sort();
@@ -489,6 +493,7 @@ io.on('connection', (socket: any) => {
   });
 
   socket.on('send_message', async (data) => {
+    if (await isUserBlocked(socket.userId, data.toId)) return;
     const safeData = { ...data, fromId: socket.userId };
     const toSocketId = userSockets.get(safeData.toId);
     if (toSocketId) {
@@ -502,6 +507,7 @@ io.on('connection', (socket: any) => {
   });
 
   socket.on('send_file', async (data) => {
+    if (await isUserBlocked(socket.userId, data.toId)) return;
     const safeData = { ...data, fromId: socket.userId };
     const toSocketId = userSockets.get(safeData.toId);
     if (toSocketId) {
@@ -514,7 +520,8 @@ io.on('connection', (socket: any) => {
     }
   });
 
-  socket.on('call_offer', (data) => {
+  socket.on('call_offer', async (data) => {
+    if (await isUserBlocked(socket.userId, data.toId)) return;
     socket.to(data.sessionId).emit('call_offer', data);
   });
 
@@ -640,13 +647,6 @@ app.post('/api/block', verifyAuth, async (req: any, res: any) => {
   try {
      const { targetId } = req.body;
      await User.findByIdAndUpdate(req.user.id, { $addToSet: { blockedUsers: targetId } });
-     // Terminate any active sessions instantly
-     await Session.deleteMany({
-         $or: [
-             { user1_id: req.user.id, user2_id: targetId },
-             { user1_id: targetId, user2_id: req.user.id }
-         ]
-     });
      res.json({ success: true });
   } catch(e) { res.status(500).json({ error: 'Failed' }); }
 });
