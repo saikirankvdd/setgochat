@@ -647,6 +647,15 @@ app.post('/api/block', verifyAuth, async (req: any, res: any) => {
   } catch(e) { res.status(500).json({ error: 'Failed' }); }
 });
 
+app.post('/api/unblock', verifyAuth, async (req: any, res: any) => {
+  try {
+     const { targetId } = req.body;
+     await User.findByIdAndUpdate(req.user.id, { $pull: { blockedUsers: targetId } });
+     res.json({ success: true });
+  } catch(e) { res.status(500).json({ error: 'Failed' }); }
+});
+
+
 // Admin Report Fetch
 app.get('/api/admin/reports', verifyAdmin, async (req: any, res: any) => {
   try {

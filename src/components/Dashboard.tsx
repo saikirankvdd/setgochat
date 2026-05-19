@@ -289,6 +289,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
                        });
                        if (res.ok) {
                          setBlockedUsers(prev => prev.filter(id => id !== targetUser.id));
+                         handleStartChat(targetUser); // Recreate the session instantly
                          alert("User unblocked successfully.");
                        }
                      } catch(e) { console.error(e); }
