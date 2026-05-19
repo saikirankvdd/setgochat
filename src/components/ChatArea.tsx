@@ -1276,7 +1276,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               )}
             </div>
           </div>
-        ))}
+        )))}
         <div ref={messagesEndRef} />
       </div>
       
