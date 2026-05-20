@@ -1312,9 +1312,38 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                       <ExternalLink className="w-4 h-4 text-[#00a884]" />
                       💾 Keep Permanent
                    </button>
-                   <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, '24h'); alert('Chat set to 24 Hours. Older messages will auto-delete on refresh.'); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-white text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors">
+                   <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, '24h'); alert('Chat set to 24 Hours. Older messages will auto-delete on refresh.'); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-white text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors border-b border-[#202c33]">
                       <Clock className="w-4 h-4 text-[#00a884]" />
                       🕒 Keep for 24 Hours
+                   </button>
+                   <div className="px-4 py-3 hover:bg-[#202c33] transition-colors flex items-center justify-between">
+                     <div className="flex items-center gap-3">
+                       <Clock className="w-4 h-4 text-orange-400" />
+                       <span className="text-sm text-white font-medium">Instant</span>
+                     </div>
+                     <div className="flex items-center gap-2">
+                       <select 
+                         className="bg-[#111b21] text-xs font-bold text-orange-400 border border-[#3b4a54] rounded-md px-1 py-1 outline-none cursor-pointer"
+                         value={timer}
+                         onChange={(e) => setTimer(Number(e.target.value))}
+                       >
+                         <option value={5}>5s</option>
+                         <option value={10}>10s</option>
+                         <option value={30}>30s</option>
+                         <option value={60}>1m</option>
+                       </select>
+                       <input 
+                         type="checkbox" 
+                         checked={snapchatMode}
+                         onChange={() => setSnapchatMode(!snapchatMode)}
+                         className="w-4 h-4 accent-orange-400"
+                       />
+                     </div>
+                   </div>
+                   <div className="px-4 py-2 text-xs text-[#8696a0] font-bold uppercase tracking-wider bg-[#111b21]">Data Management</div>
+                   <button onClick={() => { setShowBackupModal(true); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-blue-400 text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors">
+                      <Download className="w-4 h-4" />
+                      Export / Import Chat
                    </button>
                 </div>
              )}
