@@ -91,7 +91,9 @@ export function Dashboard({ user, socket }: DashboardProps) {
   useEffect(() => {
     if (pinsReady && usersLoaded && !requestedOfflineMsgs.current) {
       requestedOfflineMsgs.current = true;
-      socket.emit('request_offline_messages');
+      setTimeout(() => {
+        socket.emit('request_offline_messages');
+      }, 500); // Wait for ChatArea components to fully mount and register listeners
     }
   }, [pinsReady, usersLoaded]);
 
