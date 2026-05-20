@@ -301,6 +301,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             await deleteMessageLocal(msg.id);
             continue;
           }
+          if (msg.isSelfDestruct) {
+            await deleteMessageLocal(msg.id);
+            continue;
+          }
           let text = '';
           if (msg.encryptedText) text = decryptData(msg.encryptedText, sessionInfo.pin) || '';
           let file;
@@ -1372,7 +1376,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                      </div>
                    </div>
                    <div className="px-4 py-2 text-xs text-[#8696a0] font-bold uppercase tracking-wider bg-[#111b21]">Data Management</div>
-                   <button onClick={() => { setShowBackupModal(true); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-blue-400 text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors">
+                   <button onClick={() => { setShowDataModal(true); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-blue-400 text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors">
                       <Download className="w-4 h-4" />
                       Export / Import Chat
                    </button>
