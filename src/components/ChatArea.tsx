@@ -121,102 +121,6 @@ const ReportModal = ({ onClose, token, reportedId }: { onClose: () => void, toke
 };
 
 
-const BackupModal = ({ onClose, sessionInfo }: { onClose: () => void, sessionInfo: any }) => {
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
-  const [isExporting, setIsExporting] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
-
-  const handleExport = async () => {
-    if (!startDate || !endDate) return alert("Please select start and end dates.");
-    setIsExporting(true);
-    try {
-       const msgs = await getAllMessagesLocal();
-       const startTs = new Date(startDate).setHours(0,0,0,0);
-       const endTs = new Date(endDate).setHours(23,59,59,999);
-       const filteredMsgs = msgs.filter(m => m.timestamp >= startTs && m.timestamp <= endTs && m.sessionId === sessionInfo.sessionId);
-       
-       if (filteredMsgs.length === 0) {
-          alert("No messages found in that date range for this chat.");
-          setIsExporting(false);
-          return;
-       }
-       
-       const blob = new Blob([JSON.stringify(filteredMsgs)], { type: 'application/json' });
-       const url = URL.createObjectURL(blob);
-       const a = document.createElement('a');
-       a.href = url;
-       a.download = `stegochat_backup_${startDate}_to_${endDate}.stego`;
-       a.click();
-       URL.revokeObjectURL(url);
-       alert(`Successfully exported ${filteredMsgs.length} messages.`);
-    } catch(e) {
-       console.error(e);
-       alert("Failed to export chats.");
-    }
-    setIsExporting(false);
-  };
-
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setIsImporting(true);
-    try {
-      const text = await file.text();
-      const msgs = JSON.parse(text);
-      if (!Array.isArray(msgs)) throw new Error("Invalid backup format");
-      
-      await importMessagesLocal(msgs);
-      alert(`Successfully imported ${msgs.length} messages!`);
-      window.location.reload(); 
-    } catch (e: any) {
-      console.error(e);
-      alert("Failed to import chats: " + e.message);
-    }
-    setIsImporting(false);
-  };
-
-  return createPortal(
-    <div className="fixed inset-0 bg-[#0b141a]/80 z-[9999] flex items-center justify-center p-4">
-       <div className="bg-[#202c33] rounded-2xl w-full max-w-md p-6 border border-[#2a3942] shadow-2xl">
-          <div className="flex justify-between items-center mb-6">
-            <h2 className="text-xl font-bold text-white flex items-center"><Download className="w-5 h-5 mr-2 text-[#00a884]"/> Chat Backup</h2>
-            <button onClick={onClose} className="text-[#8696a0] hover:text-white"><X className="w-6 h-6"/></button>
-          </div>
-          
-          <div className="mb-6 space-y-4">
-             <div className="bg-[#111b21] p-4 rounded-lg border border-[#2a3942]">
-                <h3 className="text-[#e9edef] font-medium mb-2">Export Chats</h3>
-                <p className="text-[#8696a0] text-sm mb-4">Download a secure .stego file containing your chat history within a specific date range.</p>
-                <div className="flex gap-2 mb-4">
-                   <div className="flex-1">
-                      <label className="text-xs text-[#8696a0] mb-1 block">From</label>
-                      <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-[#202c33] text-white p-2 rounded outline-none border border-transparent focus:border-[#00a884]" />
-                   </div>
-                   <div className="flex-1">
-                      <label className="text-xs text-[#8696a0] mb-1 block">To</label>
-                      <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-[#202c33] text-white p-2 rounded outline-none border border-transparent focus:border-[#00a884]" />
-                   </div>
-                </div>
-                <button onClick={handleExport} disabled={isExporting} className="w-full py-2 bg-[#00a884] hover:bg-[#06cf9c] text-white font-bold rounded shadow-lg disabled:opacity-50 transition-colors">
-                   {isExporting ? 'Exporting...' : 'Export to .stego'}
-                </button>
-             </div>
-             
-             <div className="bg-[#111b21] p-4 rounded-lg border border-[#2a3942]">
-                <h3 className="text-[#e9edef] font-medium mb-2">Import Chats</h3>
-                <p className="text-[#8696a0] text-sm mb-4">Restore your messages from a previous .stego backup file.</p>
-                <label className="w-full py-2 bg-[#2a3942] hover:bg-[#3a4952] text-white font-bold rounded shadow-lg flex items-center justify-center cursor-pointer transition-colors">
-                   {isImporting ? 'Importing...' : <><Upload className="w-4 h-4 mr-2" /> Import from .stego</>}
-                   <input type="file" accept=".stego,.json" className="hidden" onChange={handleImport} disabled={isImporting} />
-                </label>
-             </div>
-          </div>
-       </div>
-    </div>,
-    document.body
-  );
-};
 
 export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pendingCall, clearPendingCall, dbSession, onBack, isBlocked, onUnblock }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -238,7 +142,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [scanningStatus, setScanningStatus] = useState<{ active: boolean, type: 'link' | 'document' | null, name: string }>({ active: false, type: null, name: '' });
   const [showDropdown, setShowDropdown] = useState(false);
-  const [showBackupModal, setShowBackupModal] = useState(false);
+
   const [showReportModal, setShowReportModal] = useState(false);
   const [isBlocking, setIsBlocking] = useState(false);
   
