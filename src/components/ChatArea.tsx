@@ -267,6 +267,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [scanningStatus, setScanningStatus] = useState<{ active: boolean, type: 'link' | 'document' | null, name: string }>({ active: false, type: null, name: '' });
   const [showDropdown, setShowDropdown] = useState(false);
+  const [dropdownView, setDropdownView] = useState<'main' | 'export'>('main');
+  const [exportType, setExportType] = useState<'full' | 'range'>('full');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
   const [showDataModal, setShowDataModal] = useState(false);
 
   const [showReportModal, setShowReportModal] = useState(false);
@@ -1333,7 +1339,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           <Phone className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(false)} />
           <Video className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(true)} />
           <div className="relative">
-             <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => setShowDropdown(!showDropdown)} />
+             <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => { setShowDropdown(!showDropdown); setDropdownView('main'); }} />
              {showDropdown && (
                 <div className="absolute right-0 mt-2 w-56 rounded-xl shadow-2xl bg-[#2a3942] border border-[#3a4952] z-50 overflow-hidden">
                    <button onClick={() => { setShowReportModal(true); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-yellow-500 hover:bg-[#202c33] transition-colors font-medium flex items-center">
