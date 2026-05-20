@@ -24,7 +24,8 @@ interface ChatAreaProps {
 
 interface Message {
   id: string;
-  fromId: number;
+  fromId: string | number;
+  toId?: string | number;
   text: string;
   timestamp: number;
   isSelfDestruct?: boolean;
@@ -320,8 +321,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           }
           decryptedMsgs.push({
             id: msg.id,
-            fromId: parseInt(msg.fromId),
-            toId: parseInt(msg.toId),
+            fromId: msg.fromId,
+            toId: msg.toId,
             text,
             timestamp: msg.timestamp,
             isSelfDestruct: msg.isSelfDestruct,
