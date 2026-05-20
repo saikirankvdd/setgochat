@@ -934,8 +934,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         isSelfDestruct: snapchatMode,
         isOneTime: false, // Text messages never use One Time View
         timerSeconds: timer,
-        isRevealed: !snapchatMode,
-        expiresAt: undefined
+        isRevealed: true,
+        expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined
       };
       setMessages(prev => [...prev, newMsg]);
       addMessageLocal(newMsg);
