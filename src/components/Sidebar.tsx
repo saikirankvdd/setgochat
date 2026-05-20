@@ -127,7 +127,7 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [showBlockedUsersModal, setShowBlockedUsersModal] = useState(false);
-  const [showBackupModal, setShowBackupModal] = useState(false);
+  
 
   const getTargetUser = (call: any) => {
     const id = call.from_id === currentUser.id ? call.to_id : call.from_id;
