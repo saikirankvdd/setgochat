@@ -5,6 +5,7 @@ import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, S
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createDynamicCarrier } from '../utils/stego';
+import { saveMessageLocal, getMessagesLocal, deleteMessageLocal } from '../utils/db';
 
 interface ChatAreaProps {
   key?: string | number;
@@ -160,6 +161,71 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const offsetRef = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
+    // Load local messages
+    const loadLocalMessages = async () => {
+      try {
+        const localMsgs = await getMessagesLocal(sessionInfo.sessionId);
+        const decryptedMsgs: Message[] = [];
+        const now = Date.now();
+        for (const msg of localMsgs) {
+          if (msg.expiresAt && msg.expiresAt < now) {
+            await deleteMessageLocal(msg.id);
+            continue;
+          }
+          let text = '';
+          if (msg.encryptedText) text = decryptData(msg.encryptedText, sessionInfo.pin) || '';
+          let file;
+          if (msg.encryptedFile) {
+            const decFile = decryptData(msg.encryptedFile, sessionInfo.pin);
+            if (decFile) file = JSON.parse(decFile);
+          }
+          decryptedMsgs.push({
+            id: msg.id,
+            fromId: parseInt(msg.fromId),
+            toId: parseInt(msg.toId),
+            text,
+            timestamp: msg.timestamp,
+            isSelfDestruct: msg.isSelfDestruct,
+            expiresAt: msg.expiresAt,
+            file
+          });
+        }
+        setMessages(decryptedMsgs);
+      } catch (err) {
+        console.error("Failed to load local messages", err);
+      }
+    };
+    loadLocalMessages();
+  }, [sessionInfo.sessionId, sessionInfo.pin]);
+
+  const addMessageLocal = async (msg: Message) => {
+    try {
+      const duration = localStorage.getItem('duration_' + sessionInfo.sessionId) || 'permanent';
+      let expiresAt = msg.expiresAt;
+      if (duration === '24h' && !expiresAt) {
+         expiresAt = Date.now() + 24 * 60 * 60 * 1000;
+      }
+      
+      const encryptedText = msg.text ? encryptData(msg.text, sessionInfo.pin) : '';
+      const encryptedFile = msg.file ? encryptData(JSON.stringify(msg.file), sessionInfo.pin) : undefined;
+      
+      await saveMessageLocal({
+        id: msg.id,
+        sessionId: sessionInfo.sessionId,
+        fromId: msg.fromId.toString(),
+        toId: (msg.fromId === user.id ? targetUser.id : user.id).toString(),
+        encryptedText,
+        encryptedFile,
+        timestamp: msg.timestamp,
+        isSelfDestruct: !!msg.isSelfDestruct,
+        expiresAt: expiresAt
+      });
+    } catch (e) {
+      console.error("Failed to save local message", e);
+    }
+  };
+
+  useEffect(() => {
     return () => {
       // Cleanup media tracks on unmount to prevent stuck recording icons
       if (localStreamRef.current) {
@@ -229,6 +295,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             expiresAt: data.isSelfDestruct ? Date.now() + (data.timer * 1000) : undefined // Start countdown immediately
           };
           setMessages(prev => [...prev, newMessage]);
+          addMessageLocal(newMessage);
         }
       } catch (err: any) {
         console.error('Failed to process incoming message', err);
@@ -263,6 +330,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             file: filePayload
           };
           setMessages(prev => [...prev, newMessage]);
+          addMessageLocal(newMessage);
         }
       } catch (err: any) {
         console.error('Failed to process incoming file', err);
@@ -699,7 +767,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             timer: timer
           });
 
-          setMessages(prev => [...prev, {
+          const newMsg: Message = {
             id: Math.random().toString(36).substr(2, 9),
             fromId: user.id,
             text: '',
@@ -714,7 +782,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               type: file.type,
               data: base64Data
             }
-          }]);
+          };
+          setMessages(prev => [...prev, newMsg]);
+          addMessageLocal(newMsg);
         } catch (err) {
           console.error(err);
         } finally {
@@ -775,7 +845,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 timer: timer
               });
 
-              setMessages(prev => [...prev, {
+              const newMsg: Message = {
                 id: Math.random().toString(36).substr(2, 9),
                 fromId: user.id,
                 text: '',
@@ -790,7 +860,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                   type: 'audio/webm',
                   data: base64Data
                 }
-              }]);
+              };
+              setMessages(prev => [...prev, newMsg]);
+              addMessageLocal(newMsg);
             } catch (err) {
               console.error(err);
             } finally {
@@ -851,7 +923,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       });
 
       // Add to local UI
-      setMessages(prev => [...prev, {
+      const newMsg: Message = {
         id: Math.random().toString(36).substr(2, 9),
         fromId: user.id,
         text: inputText,
@@ -861,7 +933,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         timerSeconds: timer,
         isRevealed: !snapchatMode,
         expiresAt: undefined
-      }]);
+      };
+      setMessages(prev => [...prev, newMsg]);
+      addMessageLocal(newMsg);
 
       setInputText('');
     } catch (err) {
@@ -884,6 +958,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   const destroyMessage = (msgId: string) => {
     setMessages(prev => prev.filter(m => m.id !== msgId));
+    deleteMessageLocal(msgId).catch(e => console.error(e));
   };
 
   const triggerDownload = async (msgId: string, filename: string, base64data: string) => {
@@ -1144,12 +1219,21 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           <div className="relative">
              <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => setShowDropdown(!showDropdown)} />
              {showDropdown && (
-                <div className="absolute right-0 mt-2 w-48 rounded-xl shadow-2xl bg-[#2a3942] border border-[#3a4952] z-50 overflow-hidden">
+                <div className="absolute right-0 mt-2 w-56 rounded-xl shadow-2xl bg-[#2a3942] border border-[#3a4952] z-50 overflow-hidden">
                    <button onClick={() => { setShowReportModal(true); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-yellow-500 hover:bg-[#202c33] transition-colors font-medium flex items-center">
                       <Flag className="w-4 h-4 mr-2" /> Report User
                    </button>
-                   <button onClick={() => { handleBlockUser(); setShowDropdown(false); }} disabled={isBlocking} className="block w-full text-left px-4 py-3 text-sm text-red-500 hover:bg-[#202c33] transition-colors font-medium flex items-center">
+                   <button onClick={() => { handleBlockUser(); setShowDropdown(false); }} disabled={isBlocking} className="block w-full text-left px-4 py-3 text-sm text-red-500 hover:bg-[#202c33] transition-colors font-medium flex items-center border-b border-[#202c33]">
                       <UserX className="w-4 h-4 mr-2" /> Block User
+                   </button>
+                   <div className="px-4 py-2 text-xs text-[#8696a0] font-bold uppercase tracking-wider bg-[#111b21]">Chat Duration</div>
+                   <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, 'permanent'); alert('Chat set to Permanent Storage'); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-white text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors">
+                      <ExternalLink className="w-4 h-4 text-[#00a884]" />
+                      💾 Keep Permanent
+                   </button>
+                   <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, '24h'); alert('Chat set to 24 Hours. Older messages will auto-delete on refresh.'); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-white text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors">
+                      <Clock className="w-4 h-4 text-[#00a884]" />
+                      🕒 Keep for 24 Hours
                    </button>
                 </div>
              )}
