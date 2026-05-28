@@ -1618,22 +1618,74 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             <h2 className="text-lg font-medium">Contact info</h2>
           </div>
           <div className="flex-1 overflow-y-auto">
+            
             <div className="flex flex-col items-center py-8 bg-[#111b21] shadow-sm">
               <div className="w-48 h-48 bg-[#4f5e67] rounded-full flex items-center justify-center mb-4">
                 <span className="text-6xl text-[#d1d7db] font-bold">{targetUser.username[0].toUpperCase()}</span>
               </div>
               <h2 className="text-2xl text-[#e9edef] font-medium">{targetUser.username}</h2>
               <p className="text-[#8696a0] text-lg mb-6">{targetUser.email}</p>
-              <button 
-                 onClick={() => { setShowDataModal(true); setShowUserProfile(false); }} 
-                 className="flex items-center space-x-2 text-[#00a884] hover:text-[#06cf9c] transition-colors bg-[#202c33] px-6 py-3 rounded-xl border border-[#2a3942]"
-              >
-                 <Download className="w-5 h-5" />
-                 <span className="font-medium">Export / Import Chat</span>
-              </button>
             </div>
-            <div className="mt-2 bg-[#111b21] p-4 shadow-sm">
+            
+            <div className="mt-2 bg-[#111b21] py-2 shadow-sm">
+               <button onClick={() => { setShowReportModal(true); setShowUserProfile(false); }} className="w-full text-left px-6 py-4 text-orange-400 hover:bg-[#202c33] flex items-center gap-4 transition-colors">
+                  <Flag className="w-5 h-5" />
+                  <span className="font-medium">Report User</span>
+               </button>
+               <button onClick={handleBlockUser} className="w-full text-left px-6 py-4 text-red-500 hover:bg-[#202c33] flex items-center gap-4 transition-colors">
+                  <UserX className="w-5 h-5" />
+                  <span className="font-medium">Block User</span>
+               </button>
+            </div>
+
+            <div className="mt-2 bg-[#111b21] py-4 shadow-sm">
+               <div className="px-6 py-2 text-xs text-[#8696a0] font-bold uppercase tracking-wider">Chat Duration</div>
+               <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, 'permanent'); alert('Chat set to Permanent Storage'); }} className="w-full text-left px-6 py-4 text-white hover:bg-[#202c33] flex items-center gap-4 transition-colors">
+                  <ExternalLink className="w-5 h-5 text-[#00a884]" />
+                  <span className="font-medium text-sm">Keep Permanent</span>
+               </button>
+               <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, '24h'); alert('Chat set to 24 Hours. Older messages will auto-delete on refresh.'); }} className="w-full text-left px-6 py-4 text-white hover:bg-[#202c33] flex items-center gap-4 transition-colors">
+                  <Clock className="w-5 h-5 text-[#00a884]" />
+                  <span className="font-medium text-sm">Keep for 24 Hours</span>
+               </button>
+               
+               <div className="px-6 py-4 hover:bg-[#202c33] transition-colors flex items-center justify-between mt-2">
+                 <div className="flex items-center gap-4">
+                   <Clock className="w-5 h-5 text-orange-400" />
+                   <span className="text-sm text-white font-medium">Instant</span>
+                 </div>
+                 <div className="flex items-center gap-3">
+                   <select 
+                     className="bg-[#202c33] text-xs font-bold text-orange-400 border border-[#3b4a54] rounded-md px-2 py-1.5 outline-none cursor-pointer"
+                     value={timer}
+                     onChange={(e) => setTimer(Number(e.target.value))}
+                   >
+                     <option value={5}>5s</option>
+                     <option value={10}>10s</option>
+                     <option value={30}>30s</option>
+                     <option value={60}>1m</option>
+                   </select>
+                   <input 
+                     type="checkbox" 
+                     checked={snapchatMode}
+                     onChange={() => setSnapchatMode(!snapchatMode)}
+                     className="w-5 h-5 accent-orange-400 cursor-pointer"
+                   />
+                 </div>
+               </div>
+            </div>
+
+            <div className="mt-2 bg-[#111b21] py-4 shadow-sm">
+               <div className="px-6 py-2 text-xs text-[#8696a0] font-bold uppercase tracking-wider">Data Management</div>
+               <button onClick={() => { setShowDataModal(true); setShowUserProfile(false); }} className="w-full text-left px-6 py-4 text-blue-400 hover:bg-[#202c33] flex items-center gap-4 transition-colors">
+                  <Download className="w-5 h-5" />
+                  <span className="font-medium text-sm">Export / Import Chat</span>
+               </button>
+            </div>
+
+            <div className="mt-2 bg-[#111b21] p-6 shadow-sm">
               <h3 className="text-[#00a884] text-sm mb-4">Shared Media</h3>
+
               <div className="grid grid-cols-3 gap-2">
                 {messages.filter(m => m.file && m.file.type.startsWith('image/')).map(m => (
                   <img key={m.id} src={m.file!.data} alt="shared" className="w-full h-24 object-cover rounded" />
