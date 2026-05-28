@@ -1623,7 +1623,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 <span className="text-6xl text-[#d1d7db] font-bold">{targetUser.username[0].toUpperCase()}</span>
               </div>
               <h2 className="text-2xl text-[#e9edef] font-medium">{targetUser.username}</h2>
-              <p className="text-[#8696a0] text-lg">{targetUser.email}</p>
+              <p className="text-[#8696a0] text-lg mb-6">{targetUser.email}</p>
+              <button 
+                 onClick={() => { setShowDataModal(true); setShowUserProfile(false); }} 
+                 className="flex items-center space-x-2 text-[#00a884] hover:text-[#06cf9c] transition-colors bg-[#202c33] px-6 py-3 rounded-xl border border-[#2a3942]"
+              >
+                 <Download className="w-5 h-5" />
+                 <span className="font-medium">Export / Import Chat</span>
+              </button>
             </div>
             <div className="mt-2 bg-[#111b21] p-4 shadow-sm">
               <h3 className="text-[#00a884] text-sm mb-4">Shared Media</h3>
