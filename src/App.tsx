@@ -9,7 +9,7 @@ import { Dashboard } from './components/Dashboard';
 import { io, Socket } from 'socket.io-client';
 
 export type User = {
-  id: number;
+  id: string | number;
   username: string;
   email: string;
   token?: string;

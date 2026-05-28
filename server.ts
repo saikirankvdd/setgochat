@@ -737,7 +737,7 @@ app.get('/api/users', verifyAuth, async (req: any, res: any) => {
   const users = await User.find({ 
     email: { $not: new RegExp('^saikirankvdd13@gmail\\.com$', 'i') }, 
     username: { $not: new RegExp('^admin_saikiran$', 'i') } 
-  }, 'id username public_key');
+  }, 'username public_key');
   
   // map _id and public_key -> publicKey to match old sqlite response
   const formatUsers = users.map(u => ({ id: u._id.toString(), username: u.username, publicKey: u.public_key }));
