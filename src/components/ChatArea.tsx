@@ -155,10 +155,22 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
           return rest as any;
         });
       }
-      setPreviewMsgs(filteredMsgs.slice(-5)); // show last 5 msgs as preview
+      
+      const { decryptData } = await import('../utils/crypto');
+      const previewSlice = filteredMsgs.slice(-5).map(m => {
+        const pMsg = { ...m } as any;
+        if (pMsg.encryptedText) {
+          pMsg.text = decryptData(pMsg.encryptedText, sessionInfo.pin) || '';
+        }
+        if (pMsg.encryptedFile) {
+          pMsg.file = { type: 'media' };
+        }
+        return pMsg;
+      });
+      setPreviewMsgs(previewSlice); // show last 5 msgs as preview
     };
     fetchPreview();
-  }, [exportOption, startDate, endDate, sessionInfo.sessionId]);
+  }, [exportOption, startDate, endDate, sessionInfo.sessionId, sessionInfo.pin]);
 
   const handleExport = async () => {
     if ((exportOption === 'range_media' || exportOption === 'range_text') && (!startDate || !endDate)) {
@@ -194,7 +206,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        }
        
        const { strToU8, gzipSync } = await import('fflate');
-       const { encryptData } = await import('../utils/crypto');
+       const { encryptData, stringToBinary } = await import('../utils/crypto');
        
        const jsonString = JSON.stringify(filteredMsgs);
        const compressed = gzipSync(strToU8(jsonString), { level: 9 });
@@ -208,10 +220,11 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        
        // Encrypt
        const encryptedData = encryptData(base64Data, password);
+       const binaryEncryptedData = stringToBinary(encryptedData);
        
        // Hide in Audio
-       const carrierBuffer = createDynamicCarrier4Bit(encryptedData.length);
-       const finalBuffer = encodeLSB4Bit(carrierBuffer, encryptedData);
+       const carrierBuffer = createDynamicCarrier4Bit(binaryEncryptedData.length);
+       const finalBuffer = encodeLSB4Bit(carrierBuffer, binaryEncryptedData);
        
        const blob = new Blob([finalBuffer], { type: 'audio/wav' });
        const url = URL.createObjectURL(blob);
@@ -245,10 +258,11 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
     try {
       const arrayBuffer = await file.arrayBuffer();
       
-      const { decryptData } = await import('../utils/crypto');
+      const { decryptData, binaryToString } = await import('../utils/crypto');
       const { strFromU8, gunzipSync } = await import('fflate');
       
-      const encryptedData = decodeLSB4Bit(arrayBuffer);
+      const extractedBinaryData = decodeLSB4Bit(arrayBuffer);
+      const encryptedData = binaryToString(extractedBinaryData);
       const base64Data = decryptData(encryptedData, password);
       
       if (!base64Data) {
