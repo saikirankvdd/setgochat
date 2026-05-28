@@ -1846,12 +1846,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
             <div className="mt-2 bg-[#111b21] p-6 shadow-sm">
               <h3 className="text-[#00a884] text-sm mb-4">Shared Media</h3>
-
-              <div className="grid grid-cols-3 gap-2">
-                {messages.filter(m => m.file && m.file.type.startsWith('image/')).map(m => (
-                  <img key={m.id} src={m.file!.data} alt="shared" className="w-full h-24 object-cover rounded" />
-                ))}
-
               <div className="grid grid-cols-3 gap-2">
                 {messages.filter(m => m.file && m.file.type.startsWith('image/')).map(m => (
                   <img key={m.id} src={m.file!.data} alt="shared" className="w-full h-24 object-cover rounded" />
