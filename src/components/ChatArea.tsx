@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { User } from '../App';
 import { Socket } from 'socket.io-client';
-import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX } from 'lucide-react';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX, Upload } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createDynamicCarrier, encodeLSB4Bit, decodeLSB4Bit, createDynamicCarrier4Bit } from '../utils/stego';
