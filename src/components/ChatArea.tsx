@@ -1851,6 +1851,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 {messages.filter(m => m.file && m.file.type.startsWith('image/')).map(m => (
                   <img key={m.id} src={m.file!.data} alt="shared" className="w-full h-24 object-cover rounded" />
                 ))}
+
+              <div className="grid grid-cols-3 gap-2">
+                {messages.filter(m => m.file && m.file.type.startsWith('image/')).map(m => (
+                  <img key={m.id} src={m.file!.data} alt="shared" className="w-full h-24 object-cover rounded" />
+                ))}
               </div>
             </div>
           </div>
@@ -1858,6 +1863,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       )}
   {showReportModal && (
     <ReportModal onClose={() => setShowReportModal(false)} token={user.token!} reportedId={targetUser.id} />
+  )}
+  {showDataModal && (
+    <DataManagementModal onClose={() => setShowDataModal(false)} sessionInfo={sessionInfo} targetUser={targetUser} />
   )}
 
     </div>
