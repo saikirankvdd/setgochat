@@ -252,7 +252,6 @@ if (fs.existsSync('cert.pem') && fs.existsSync('key.pem')) {
   } catch(e) {}
 }
 
-const isProduction = process.env.NODE_ENV === 'production';
 const httpServer = isProduction 
   ? createHttpServer(app) 
   : createHttpsServer(httpsOptions, app);
