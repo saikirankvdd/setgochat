@@ -5,7 +5,9 @@ import { Socket } from 'socket.io-client';
 import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX, Upload } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
-import { encodeLSB, decodeLSB, createDynamicCarrier, encodeLSB4Bit, decodeLSB4Bit, createDynamicCarrier4Bit } from '../utils/stego';
+import { encodeLSB, decodeLSB, createDynamicCarrier, encodeLSB4Bit, decodeLSB4Bit, createDynamicCarrier4Bit, generateMusicCarrier, encodeLSB1Bit, decodeLSB1Bit } from '../utils/stego';
+import { generateWallpaperCanvas, encodeImageLSB, decodeImageLSB } from '../utils/imageStego';
+import { strToU8, gzipSync, strFromU8, gunzipSync } from 'fflate';
 import { saveMessageLocal, getMessagesLocal, deleteMessageLocal, getAllMessagesLocal, importMessagesLocal } from '../utils/db';
 
 interface ChatAreaProps {
@@ -201,7 +203,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
         });
       }
       
-      const { decryptData } = await import('../utils/crypto');
+
       const previewSlice = filteredMsgs.slice(-5).map(m => {
         const pMsg = { ...m } as any;
         if (pMsg.encryptedText) {
@@ -221,34 +223,39 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
 
   useEffect(() => {
     const calc = async () => {
-       const msgs = await getAllMessagesLocal();
-       let filteredMsgs = msgs.filter(m => m.sessionId === sessionInfo.sessionId);
-       if (exportOption === 'range_media' || exportOption === 'range_text') {
-         const startTs = startDate ? new Date(startDate).setHours(0,0,0,0) : 0;
-         const endTs = endDate ? new Date(endDate).setHours(23,59,59,999) : Infinity;
-         filteredMsgs = filteredMsgs.filter(m => m.timestamp >= startTs && m.timestamp <= endTs);
+       try {
+         const msgs = await getAllMessagesLocal();
+         let filteredMsgs = msgs.filter(m => m.sessionId === sessionInfo.sessionId);
+         if (exportOption === 'range_media' || exportOption === 'range_text') {
+           const startTs = startDate ? new Date(startDate).setHours(0,0,0,0) : 0;
+           const endTs = endDate ? new Date(endDate).setHours(23,59,59,999) : Infinity;
+           filteredMsgs = filteredMsgs.filter(m => m.timestamp >= startTs && m.timestamp <= endTs);
+         }
+         if (exportOption === 'full_text' || exportOption === 'range_text') {
+           filteredMsgs = filteredMsgs.map(m => {
+             const { file, encryptedFile, ...rest } = m as any;
+             return rest as any;
+           });
+         }
+         const mediaCount = filteredMsgs.filter(m => !!(m as any).file || !!(m as any).encryptedFile).length;
+         const payloadStr = JSON.stringify({ backupId: "est", messages: filteredMsgs });
+         const estSize = Math.floor(payloadStr.length * (mediaCount > 0 ? 0.95 : 0.3));
+         
+         let format = "Audio File (.wav)";
+         let reason = "Your chat is small enough to be hidden inside a ringtone audio file.";
+         if (estSize > 3 * 1024 * 1024) {
+           format = "Encrypted Data File (.dat)";
+           reason = "Your chat contains large media files. It will be exported as an encrypted data file to prevent crashing.";
+         } else if (estSize > 1024 * 1024) {
+           format = "Image File (.png)";
+           reason = "Your chat contains some media. It will be hidden inside a 4K wallpaper image.";
+         }
+         
+         setExportEstimate({ msgs: filteredMsgs.length, media: mediaCount, sizeBytes: estSize, format, reason });
+       } catch (err: any) {
+         console.error("Estimation failed", err);
+         setExportEstimate({ msgs: 0, media: 0, sizeBytes: 0, format: "Error", reason: err.message || "Failed to estimate size" });
        }
-       if (exportOption === 'full_text' || exportOption === 'range_text') {
-         filteredMsgs = filteredMsgs.map(m => {
-           const { file, encryptedFile, ...rest } = m as any;
-           return rest as any;
-         });
-       }
-       const mediaCount = filteredMsgs.filter(m => !!(m as any).file || !!(m as any).encryptedFile).length;
-       const payloadStr = JSON.stringify({ backupId: "est", messages: filteredMsgs });
-       const estSize = Math.floor(payloadStr.length * (mediaCount > 0 ? 0.95 : 0.3));
-       
-       let format = "Audio File (.wav)";
-       let reason = "Your chat is small enough to be hidden inside a ringtone audio file.";
-       if (estSize > 3 * 1024 * 1024) {
-         format = "Encrypted Data File (.dat)";
-         reason = "Your chat contains large media files. It will be exported as an encrypted data file to prevent crashing.";
-       } else if (estSize > 1024 * 1024) {
-         format = "Image File (.png)";
-         reason = "Your chat contains some media. It will be hidden inside a 4K wallpaper image.";
-       }
-       
-       setExportEstimate({ msgs: filteredMsgs.length, media: mediaCount, sizeBytes: estSize, format, reason });
     };
     calc();
   }, [exportOption, startDate, endDate, sessionInfo.sessionId]);
@@ -290,8 +297,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        log(`  ✅ Found ${filteredMsgs.length} messages (${mediaCount} with media)`);
        
        log("[2/6] Compressing data...");
-       const { strToU8, gzipSync } = await import('fflate');
-       const { encryptData, stringToBinary } = await import('../utils/crypto');
+
        
        const backupPayload = {
          backupId: Date.now() + "_" + Math.random().toString(36).substring(2, 10),
@@ -326,7 +332,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        } else if (sizeBytes > 1024 * 1024) {
          // Tier 2: .png Image Steganography
          log("[4/6] Generating 4K Abstract Wallpaper...");
-         const { generateWallpaperCanvas, encodeImageLSB } = await import('../utils/imageStego');
+
          const canvas = generateWallpaperCanvas();
          log("[5/6] Embedding data into image pixels...");
          finalBlob = await encodeImageLSB(canvas, binaryEncryptedData, password);
@@ -334,7 +340,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        } else {
          // Tier 1: .wav Audio Steganography
          log("[4/6] Generating procedural audio carrier...");
-         const { generateMusicCarrier, encodeLSB1Bit } = await import('../utils/stego');
+
          const carrier = await generateMusicCarrier(binaryEncryptedData.length);
          log("[5/6] Embedding data into audio track...");
          const finalBuffer = encodeLSB1Bit(carrier.buffer, binaryEncryptedData, password);
@@ -377,8 +383,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
     try {
       const arrayBuffer = await file.arrayBuffer();
       
-      const { decryptData, binaryToString } = await import('../utils/crypto');
-      const { strFromU8, gunzipSync } = await import('fflate');
+
       
       const isLegacyFormat = file.name.endsWith('.stego');
       const isDatFormat = file.name.endsWith('.dat');
@@ -392,7 +397,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
          extractedBinaryData = decoder.decode(arrayBuffer);
       } else if (isPngFormat) {
          // Tier 2: Image LSB Decode
-         const { decodeImageLSB } = await import('../utils/imageStego');
+
          const img = new Image();
          const blob = new Blob([arrayBuffer]);
          const url = URL.createObjectURL(blob);
@@ -405,7 +410,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
          URL.revokeObjectURL(url);
       } else {
          // Tier 1: Audio LSB Decode
-         const { decodeLSB4Bit, decodeLSB1Bit } = await import('../utils/stego');
+
          if (isLegacyFormat) {
             extractedBinaryData = decodeLSB4Bit(arrayBuffer);
          } else {
