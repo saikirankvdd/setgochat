@@ -558,7 +558,14 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
 
                          {isProcessing && exportLog.length > 0 && (
                            <div className="bg-[#111b21] p-4 rounded-xl border border-[#00a884] space-y-1 font-mono text-[10px] sm:text-xs text-[#00a884] max-h-48 overflow-y-auto animate-fade-in">
-                             {exportLog.map((log, idx) => <div key={idx}>{log}</div>)}
+                             {exportLog.map((log, idx) => (
+                               <div key={idx} className="flex items-center gap-2">
+                                 <span>{log}</span>
+                                 {idx === exportLog.length - 1 && !log.includes('✅') && (
+                                   <Loader2 className="w-3 h-3 animate-spin" />
+                                 )}
+                               </div>
+                             ))}
                            </div>
                          )}
 
