@@ -557,17 +557,32 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                          )}
 
                          {isProcessing && exportLog.length > 0 && (
-                           <div className="bg-[#111b21] p-4 rounded-xl border border-[#00a884] space-y-1 font-mono text-[10px] sm:text-xs text-[#00a884] max-h-48 overflow-y-auto animate-fade-in">
-                             {exportLog.map((log, idx) => (
-                               <div key={idx} className="flex items-center gap-2">
-                                 <span>{log}</span>
-                                 {idx === exportLog.length - 1 && !log.includes('✅') && (
-                                   <Loader2 className="w-3 h-3 animate-spin" />
-                                 )}
-                               </div>
-                             ))}
-                           </div>
-                         )}
+                            <div className="bg-[#111b21] p-4 rounded-xl border border-[#00a884] space-y-3 font-mono text-[10px] sm:text-xs text-[#00a884] max-h-64 overflow-y-auto animate-fade-in">
+                              {(() => {
+                                const latestStepMatch = [...exportLog].reverse().find(l => l.match(/\[(\d+)\/6\]/));
+                                const currentStep = latestStepMatch ? parseInt(latestStepMatch.match(/\[(\d+)\/6\]/)![1]) : 0;
+                                const progressPercent = exportLog[exportLog.length - 1].includes('Download ready! ✅') ? 100 : Math.round((currentStep / 6) * 100);
+                                return (
+                                  <div className="w-full bg-[#202c33] rounded-full h-2 mb-2 overflow-hidden border border-[#2a3942]">
+                                    <div 
+                                      className="bg-[#00a884] h-2 rounded-full transition-all duration-500 ease-out" 
+                                      style={{ width: `${progressPercent}%` }}
+                                    ></div>
+                                  </div>
+                                );
+                              })()}
+                              <div className="space-y-1">
+                                {exportLog.map((log, idx) => (
+                                  <div key={idx} className="flex items-center gap-2">
+                                    <span>{log}</span>
+                                    {idx === exportLog.length - 1 && !log.includes('✅') && (
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
 
                          <div className="bg-[#202c33] p-5 rounded-xl border border-[#2a3942] space-y-2 mt-auto">
                             <div className="flex justify-between items-center">
