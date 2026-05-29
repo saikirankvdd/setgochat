@@ -57,9 +57,21 @@ const UserSchema = new mongoose.Schema({
   public_key: { type: String },
   encrypted_private_key: { type: String },
   warningsCount: { type: Number, default: 0 },
-  blockedUsers: [{ type: String }]
+  blockedUsers: [{ type: String }],
+  sessionVersion: { type: Number, default: 0 },
+  keyVaultVersion: { type: Number, default: 1 }
 });
 const User = mongoose.model('User', UserSchema);
+
+function escapeHtmlEntities(text: string): string {
+  return (text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;')
+    .replace(/\//g, '&#x2F;');
+}
 
 const SessionSchema = new mongoose.Schema({
   id: { type: String, unique: true },
@@ -108,11 +120,11 @@ mongoose.connection.once('open', async () => {
         const existingAdmin = await User.findOne({ email: adminEmail });
         if (!existingAdmin) {
             await User.deleteOne({ username: 'Admin_SaiKiran' }); // Purge any squatters
-            await User.create({ username: 'Admin_SaiKiran', email: adminEmail, password: hashedAdminPassword, public_key: 'ADMIN', encrypted_private_key: 'ADMIN' });
+            await User.create({ username: 'Admin_SaiKiran', email: adminEmail, password: hashedAdminPassword, public_key: 'ADMIN', encrypted_private_key: 'ADMIN', keyVaultVersion: 2 });
             console.log('[System] Admin account seeded successfully.');
         } else {
             await User.deleteMany({ username: 'Admin_SaiKiran', email: { $ne: adminEmail } }); // Purge squatters
-            await User.updateOne({ email: adminEmail }, { username: 'Admin_SaiKiran', password: hashedAdminPassword });
+            await User.updateOne({ email: adminEmail }, { username: 'Admin_SaiKiran', password: hashedAdminPassword, keyVaultVersion: 2 });
             console.log('[System] Old admin account strictly overwritten to enforce Admin_SaiKiran identity and kvs007.');
         }
     } catch(e) {
@@ -157,15 +169,17 @@ app.set('trust proxy', 1); // Enable proxy trust for Render load balancer compat
 
 app.use(cookieParser());
 
+const isProduction = process.env.NODE_ENV === 'production';
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc:         ["'self'"],
       scriptSrc:          ["'self'"],              // No unsafe-inline, no CDN scripts
-      styleSrc:           ["'self'", "'unsafe-inline'"], // Needed for Tailwind CSS
+      styleSrc:           isProduction ? ["'self'"] : ["'self'", "'unsafe-inline'"], // Tightened style CSP in production
       imgSrc:             ["'self'", "data:", "blob:", "https://picsum.photos"],
       mediaSrc:           ["'self'", "data:", "blob:"],
-      connectSrc:         ["'self'", "wss:", "https://picsum.photos"],
+      connectSrc:         ["'self'", "wss://stegochat-e74t.onrender.com", "wss://localhost:5000", "wss://127.0.0.1:5000", "https://picsum.photos"], // Tight connect-src
       fontSrc:            ["'self'"],
       objectSrc:          ["'none'"],
       baseUri:            ["'none'"],
@@ -192,7 +206,28 @@ const apiLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
+
+const csrfProtect = (req: any, res: any, next: any) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  const exemptPaths = [
+    '/api/login',
+    '/api/signup',
+    '/api/request-otp',
+    '/api/request-register-otp',
+    '/api/change-password'
+  ];
+  if (exemptPaths.includes(req.path)) return next();
+
+  const cookieToken = req.cookies?.csrf_token;
+  const headerToken = req.headers['x-csrf-token'] || req.headers['X-CSRF-Token'];
+  if (!cookieToken || !headerToken || cookieToken !== headerToken) {
+    return res.status(403).json({ error: 'Forbidden: CSRF token mismatch' });
+  }
+  next();
+};
+
 app.use('/api/', apiLimiter);
+app.use('/api/', csrfProtect);
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -336,33 +371,89 @@ app.post('/api/login', authLimiter, async (req: any, res: any) => {
   if (user && user.password && bcrypt.compareSync(password, user.password)) {
     const isAdmin = (user.email || '').toLowerCase() === 'saikirankvdd13@gmail.com';
     
-    // Generate Secure JWT Token for Protected Routes!
-    const token = jwt.sign({ id: user._id.toString(), username: user.username, isAdmin }, process.env.JWT_SECRET || 'fallback_secret_for_jwt', { expiresIn: '7d' });
+    // Increment sessionVersion for single-device login enforcement
+    const updatedUser = await User.findByIdAndUpdate(
+      user._id,
+      { $inc: { sessionVersion: 1 } },
+      { new: true }
+    );
+
+    // Alert existing active socket session (if online) that a new login is attempted/completed
+    const activeSocketId = userSockets.get(user._id.toString());
+    if (activeSocketId) {
+      io.to(activeSocketId).emit('security_alert', {
+        type: 'login_attempt',
+        title: 'Security Alert',
+        message: 'A new login attempt was detected on another device.'
+      });
+    }
+
+    // Generate Secure JWT Token including sessionVersion!
+    const token = jwt.sign({ 
+      id: user._id.toString(), 
+      username: user.username, 
+      isAdmin, 
+      sessionVersion: updatedUser.sessionVersion 
+    }, process.env.JWT_SECRET || 'fallback_secret_for_jwt', { expiresIn: '7d' });
     
-    // Set httpOnly cookie access_token
+    // Set httpOnly cookie access_token with explicit path=/
     res.cookie('access_token', token, {
       httpOnly: true,
       secure: true,
       sameSite: 'Strict',
+      path: '/',
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     });
 
-    // Generate single-use nonce for socket authentication
+    // Generate a secure CSRF token (double-submit pattern)
+    const csrfToken = crypto.randomBytes(32).toString('hex');
+    res.cookie('csrf_token', csrfToken, {
+      httpOnly: false, // Must be readable by client JS to include in header
+      secure: true,
+      sameSite: 'Strict',
+      path: '/',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    });
+
+    // Generate single-use nonce for socket authentication containing both userId & sessionVersion
     const nonce = crypto.randomUUID();
-    nonceMap.set(nonce, user._id.toString());
+    nonceMap.set(nonce, JSON.stringify({ userId: user._id.toString(), sessionVersion: updatedUser.sessionVersion }));
     // Auto-delete nonce after 10s
     setTimeout(() => nonceMap.delete(nonce), 10000);
 
-    // Set short-lived socket_nonce cookie
+    // Set short-lived socket_nonce cookie with path=/
     res.cookie('socket_nonce', nonce, {
       httpOnly: false,
       secure: true,
       sameSite: 'Strict',
+      path: '/',
       maxAge: 10000 // 10 seconds
     });
 
-    res.json({ success: true, user: { id: user._id.toString(), username: user.username, email: user.email, isAdmin, publicKey: user.public_key, encryptedPrivateKey: user.encrypted_private_key } });
+    res.json({ 
+      success: true, 
+      user: { 
+        id: user._id.toString(), 
+        username: user.username, 
+        email: user.email, 
+        isAdmin, 
+        publicKey: user.public_key, 
+        encryptedPrivateKey: user.encrypted_private_key,
+        keyVaultVersion: user.keyVaultVersion || 1
+      } 
+    });
   } else {
+    // If user exists but login failed, notify them as a precaution!
+    if (user) {
+      const activeSocketId = userSockets.get(user._id.toString());
+      if (activeSocketId) {
+        io.to(activeSocketId).emit('security_alert', {
+          type: 'failed_login',
+          title: 'Security Alert',
+          message: 'Someone entered an incorrect password trying to login to your account.'
+        });
+      }
+    }
     res.status(401).json({ error: 'Invalid credentials' });
   }
 });
@@ -386,6 +477,16 @@ app.post('/api/request-otp', authLimiter, async (req: any, res: any) => {
   if (!user) {
     // Return success anyway to prevent user enumeration
     return res.json({ success: true, message: 'If an account exists, an OTP has been sent.' });
+  }
+
+  // Alert active socket if someone requests a reset OTP
+  const activeSocketId = userSockets.get(user._id.toString());
+  if (activeSocketId) {
+    io.to(activeSocketId).emit('security_alert', {
+      type: 'otp_attempt',
+      title: 'Security Alert',
+      message: 'Someone requested a password reset OTP for your account.'
+    });
   }
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -455,15 +556,66 @@ io.use((socket: any, next) => {
     return next(new Error('Authentication error: Nonce missing'));
   }
   
-  const userId = nonceMap.get(nonce);
-  if (!userId) {
+  const mappedData = nonceMap.get(nonce);
+  if (!mappedData) {
     return next(new Error('Authentication error: Invalid or Expired Nonce'));
   }
   
   // Nonce is single-use, delete immediately (bridging cookie security to WebSocket)
   nonceMap.delete(nonce);
   
-  socket.userId = userId;
+  try {
+    const { userId, sessionVersion } = JSON.parse(mappedData);
+    socket.userId = userId;
+    socket.sessionVersion = sessionVersion;
+    next();
+  } catch (e) {
+    return next(new Error('Authentication error: Invalid Nonce Data Format'));
+  }
+});
+
+// Event Size Limits config (Finding 2)
+const EVENT_SIZE_LIMITS: Record<string, number> = {
+  send_message:      50000,   // 50 KB
+  send_file:         900000,  // 900 KB (generous audio file stego size)
+  call_offer:        25000,
+  call_answer:       25000,
+  call_ice_candidate: 10000,
+  delete_message:    5000,
+  start_chat:        5000,
+  accept_request:    5000,
+  decline_request:   5000,
+  log_call:          5000,
+  register:          1000,
+  request_offline_messages: 1000
+};
+
+// Event Rate Limiting Store
+const eventRateLimitMap = new Map<string, { count: number; resetAt: number }>();
+function checkEventRateLimit(userId: string, event: string, maxPerMinute: number = 60): boolean {
+  const key = `${userId}:${event}`;
+  const now = Date.now();
+  const record = eventRateLimitMap.get(key);
+  if (!record || now > record.resetAt) {
+    eventRateLimitMap.set(key, { count: 1, resetAt: now + 60000 });
+    return true;
+  }
+  if (record.count >= maxPerMinute) return false;
+  record.count++;
+  return true;
+}
+
+// Socket.IO event size checking middleware
+io.use((socket: any, next) => {
+  socket.use(([event, ...args]: any[], nextEvent: any) => {
+    const limit = EVENT_SIZE_LIMITS[event] ?? 10000;
+    const size = Buffer.byteLength(JSON.stringify(args), 'utf8');
+    if (size > limit) {
+      console.warn(`[Security] Event "${event}" payload size limit exceeded (${size} > ${limit} bytes)`);
+      return nextEvent(new Error('Payload too large'));
+    }
+    nextEvent();
+  });
   next();
 });
 
@@ -472,6 +624,25 @@ io.on('connection', (socket: any) => {
 
   socket.on('register', async () => {
     const userId = socket.userId; // Use trusted ID instead of client payload
+    
+    // Single-device login version check
+    const dbUser = await User.findById(userId);
+    if (!dbUser || dbUser.sessionVersion !== socket.sessionVersion) {
+       socket.emit('force_logout', { message: 'Your account was signed in on another device. You have been logged out for your security.' });
+       socket.disconnect(true);
+       return;
+    }
+
+    // Force disconnect any other active socket session for this user:
+    const existingSocketId = userSockets.get(userId);
+    if (existingSocketId && existingSocketId !== socket.id) {
+       const oldSocket = io.sockets.sockets.get(existingSocketId);
+       if (oldSocket) {
+          oldSocket.emit('force_logout', { message: 'Your account was signed in on another device. You have been logged out for your security.' });
+          oldSocket.disconnect(true);
+       }
+    }
+
     userSockets.set(userId, socket.id);
     socket.join(`user_${userId}`);
     console.log(`User ${userId} registered with socket ${socket.id}`);
@@ -762,7 +933,7 @@ io.on('connection', (socket: any) => {
 });
 
 // --- JWT AUTHENTICATION MIDDLEWARE ---
-const verifyAuth = (req: any, res: any, next: any) => {
+const verifyAuth = async (req: any, res: any, next: any) => {
   // Read from cookie first
   let token = req.cookies?.access_token;
   
@@ -780,7 +951,14 @@ const verifyAuth = (req: any, res: any, next: any) => {
   
   try {
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_for_jwt');
-    req.user = decoded; // Attach validated token info
+    
+    // Strict DB sessionVersion verification to block concurrent/old sessions (Single-Device Enforcement)
+    const dbUser = await User.findById(decoded.id);
+    if (!dbUser || dbUser.sessionVersion !== decoded.sessionVersion) {
+      return res.status(401).json({ error: 'Unauthorized: Session Expired or Single-Device Enforcement Logout' });
+    }
+    
+    req.user = { ...decoded, sessionVersion: dbUser.sessionVersion }; // Attach validated token info
     next();
   } catch (err) {
     return res.status(401).json({ error: 'Unauthorized: Invalid or Expired Token' });
@@ -803,7 +981,8 @@ app.get('/api/session', verifyAuth, async (req: any, res: any) => {
         email: user.email,
         isAdmin,
         publicKey: user.public_key,
-        encryptedPrivateKey: user.encrypted_private_key
+        encryptedPrivateKey: user.encrypted_private_key,
+        keyVaultVersion: user.keyVaultVersion || 1
       }
     });
   } catch (err: any) {
@@ -816,12 +995,20 @@ app.post('/api/logout', (req: any, res: any) => {
   res.clearCookie('access_token', {
     httpOnly: true,
     secure: true,
-    sameSite: 'Strict'
+    sameSite: 'Strict',
+    path: '/'
   });
   res.clearCookie('socket_nonce', {
     httpOnly: false,
     secure: true,
-    sameSite: 'Strict'
+    sameSite: 'Strict',
+    path: '/'
+  });
+  res.clearCookie('csrf_token', {
+    httpOnly: false,
+    secure: true,
+    sameSite: 'Strict',
+    path: '/'
   });
   res.json({ success: true });
 });
@@ -832,7 +1019,10 @@ app.patch('/api/me/key', verifyAuth, async (req: any, res: any) => {
     if (!encryptedPrivateKey) {
       return res.status(400).json({ error: 'Missing encryptedPrivateKey' });
     }
-    await User.findByIdAndUpdate(req.user.id, { encrypted_private_key: encryptedPrivateKey });
+    await User.findByIdAndUpdate(req.user.id, { 
+      encrypted_private_key: encryptedPrivateKey,
+      keyVaultVersion: 2 
+    });
     res.json({ success: true });
   } catch (err: any) {
     console.error('[Audit] key upgrade update error:', { userId: req.user?.id, error: err.message });
@@ -842,7 +1032,7 @@ app.patch('/api/me/key', verifyAuth, async (req: any, res: any) => {
 
 app.post('/api/socket-nonce', verifyAuth, (req: any, res: any) => {
   const nonce = crypto.randomUUID();
-  nonceMap.set(nonce, req.user.id);
+  nonceMap.set(nonce, JSON.stringify({ userId: req.user.id, sessionVersion: req.user.sessionVersion }));
   // Auto-delete nonce after 10s
   setTimeout(() => nonceMap.delete(nonce), 10000);
   
@@ -850,6 +1040,7 @@ app.post('/api/socket-nonce', verifyAuth, (req: any, res: any) => {
     httpOnly: false,
     secure: true,
     sameSite: 'Strict',
+    path: '/',
     maxAge: 10000
   });
   res.json({ success: true, nonce });
@@ -872,9 +1063,12 @@ app.post('/api/feedback', verifyAuth, async (req: any, res: any) => {
       return res.status(400).json({ error: 'Feedback cannot be empty' });
     }
     
+    // HTML Entity Encoding for XSS protection
+    const sanitizedText = escapeHtmlEntities(text);
+    
     await Feedback.create({
       user_id: req.user.id,
-      text,
+      text: sanitizedText,
       images: images || []
     });
     
@@ -931,10 +1125,14 @@ app.post('/api/admin/feedback/:id/resolve', verifyAdmin, async (req: any, res: a
 app.post('/api/reports', verifyAuth, async (req: any, res: any) => {
   try {
     const { reportedId, reason, images } = req.body;
+    
+    // HTML Entity Encoding for XSS protection
+    const sanitizedReason = escapeHtmlEntities(reason);
+    
     await Report.create({
       reporter_id: req.user.id,
       reported_id: reportedId,
-      reason,
+      reason: sanitizedReason,
       images: images || []
     });
     res.json({ success: true });

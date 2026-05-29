@@ -19,7 +19,7 @@ export type User = {
 };
 
 // Cryptographic helper to read same-origin cookies (Finding 1)
-function getCookie(name: string): string | null {
+export function getCookie(name: string): string | null {
   const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
   return match ? decodeURIComponent(match[2]) : null;
 }
@@ -49,21 +49,11 @@ export default function App() {
     bootstrapSession();
   }, []);
 
-  // Sync profile metadata locally (excluding critical credentials / JWT tokens)
+  // Sync profile metadata locally (removed for strict security audit compliance)
   useEffect(() => {
-    if (user) {
-      localStorage.setItem('stego_profile', JSON.stringify({
-        id: user.id,
-        username: user.username,
-        email: user.email,
-        publicKey: user.publicKey,
-        encryptedPrivateKey: user.encryptedPrivateKey,
-        isAdmin: user.isAdmin
-      }));
-    } else {
-      localStorage.removeItem('stego_profile');
-    }
-  }, [user]);
+    // No sensitive key or user data stored in localStorage anymore
+    localStorage.removeItem('stego_profile');
+  }, []);
 
   // Connect to Socket.IO using secure single-use handshakes (Finding 1)
   useEffect(() => {
@@ -90,8 +80,13 @@ export default function App() {
       
       newSocket.on('banned', () => {
          setUser(null);
-         localStorage.removeItem('stego_profile');
          alert('Your account has been permanently terminated by the Administrator.');
+      });
+
+      newSocket.on('force_logout', (data) => {
+         setUser(null);
+         alert(data.message || 'Your account was signed in on another device. You have been logged out for security.');
+         window.location.reload();
       });
 
       setSocket(newSocket);

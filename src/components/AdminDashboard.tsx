@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { User } from '../App';
+import { User, getCookie } from '../App';
 import { Users, MessageSquare, ShieldAlert, Activity, ArrowLeft, Trash2, Flag, Check } from 'lucide-react';
 
 interface AdminDashboardProps {
@@ -86,6 +86,7 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
     try {
        const res = await fetch(`/api/admin/users/${targetId}`, { 
           method: 'DELETE',
+          headers: { 'x-csrf-token': getCookie('csrf_token') || '' },
           credentials: 'include'
        });
        if (res.ok) {
@@ -107,6 +108,7 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
     try {
       const res = await fetch(`/api/admin/feedback/${id}/resolve`, {
         method: 'POST',
+        headers: { 'x-csrf-token': getCookie('csrf_token') || '' },
         credentials: 'include'
       });
       if (res.ok) {
@@ -119,7 +121,10 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
     try {
       const res = await fetch(`/api/admin/reports/${id}/review`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-csrf-token': getCookie('csrf_token') || ''
+        },
         body: JSON.stringify({ action }),
         credentials: 'include'
       });

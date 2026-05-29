@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { User } from '../App';
-import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut, X, ShieldAlert, Download, Upload, BookOpen } from 'lucide-react';
+import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut, X, ShieldAlert, Download, Upload, BookOpen, Bell, Shield, Trash2 } from 'lucide-react';
 import { getAllMessagesLocal, importMessagesLocal } from '../utils/db';
 
 interface SidebarProps {
@@ -17,6 +17,8 @@ interface SidebarProps {
   unreadCounts?: Record<number, number>;
   blockedUsersList?: User[];
   onShowOnboarding?: () => void;
+  notifications: any[];
+  onClearNotifications: () => void;
 }
 
 
@@ -117,7 +119,7 @@ const BackupModal = ({ onClose, currentUser }: { onClose: () => void, currentUse
   );
 };
 
-export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, activeUserId, onShowAdmin, onlineUsers, lastMessages, unreadCounts, blockedUsersList = [] }: SidebarProps) {
+export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, activeUserId, onShowAdmin, onlineUsers, lastMessages, unreadCounts, blockedUsersList = [], onShowOnboarding, notifications, onClearNotifications }: SidebarProps) {
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<'chats' | 'requests' | 'calls'>('chats');
   const [showProfile, setShowProfile] = useState(false);
@@ -128,6 +130,21 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
   const [showDropdown, setShowDropdown] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [showBlockedUsersModal, setShowBlockedUsersModal] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [hasUnreadAlerts, setHasUnreadAlerts] = useState(true);
+
+  const handleToggleNotifications = () => {
+    setShowNotifications(!showNotifications);
+    if (!showNotifications) {
+      setHasUnreadAlerts(false);
+    }
+  };
+
+  useEffect(() => {
+    if (notifications.length > 0) {
+      setHasUnreadAlerts(true);
+    }
+  }, [notifications.length]);
   
 
   const getTargetUser = (call: any) => {
@@ -196,7 +213,10 @@ const FeedbackModal = ({ onClose }: { onClose: () => void }) => {
     try {
       const res = await fetch('/api/feedback', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-csrf-token': getCookie('csrf_token') || ''
+        },
         body: JSON.stringify({ text, images }),
         credentials: 'include'
       });
@@ -325,7 +345,11 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
               <button
                 onClick={async () => {
                   try {
-                    await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+                    await fetch('/api/logout', { 
+                      method: 'POST', 
+                      headers: { 'x-csrf-token': getCookie('csrf_token') || '' },
+                      credentials: 'include' 
+                    });
                   } catch(e) {}
                   localStorage.removeItem('stego_profile');
                   window.location.reload();
@@ -370,6 +394,59 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
           {currentUser.isAdmin && (
             <Activity className="w-5 h-5 cursor-pointer text-[#00a884] hover:text-[#06cf9c]" onClick={onShowAdmin} title="Admin Dashboard" />
           )}
+
+          {/* Notifications Bell Icon */}
+          <div className="relative">
+             <Bell className="w-5 h-5 cursor-pointer hover:text-[#d1d7db] transition-colors" onClick={handleToggleNotifications} />
+             {hasUnreadAlerts && notifications.length > 0 && (
+                <span className="absolute top-[-2px] right-[-2px] w-2.5 h-2.5 bg-red-500 rounded-full animate-pulse border border-[#202c33]"></span>
+             )}
+             {showNotifications && (
+                <div className="absolute right-[-40px] mt-2 w-80 rounded-2xl shadow-2xl bg-[#2a3942] border border-[#3a4952] z-[999] overflow-hidden flex flex-col max-h-[400px]">
+                   <div className="p-4 border-b border-[#3a4952] flex justify-between items-center bg-[#202c33]">
+                      <h3 className="text-white font-bold text-sm flex items-center">
+                         <Bell className="w-4 h-4 mr-2 text-[#00a884]" /> Notifications
+                      </h3>
+                      {notifications.length > 0 && (
+                         <button onClick={onClearNotifications} className="text-xs text-red-400 hover:text-red-300 font-bold flex items-center gap-1">
+                            <Trash2 className="w-3.5 h-3.5" /> Clear All
+                         </button>
+                      )}
+                   </div>
+                   <div className="flex-1 overflow-y-auto divide-y divide-[#3a4952] max-h-64 custom-scrollbar bg-[#111b21]">
+                      {notifications.length === 0 ? (
+                         <div className="p-6 text-center text-[#8696a0] text-xs">
+                            No alerts or updates.
+                         </div>
+                      ) : (
+                         notifications.map((n) => (
+                            <div key={n.id} className="p-4 hover:bg-[#202c33] transition-colors flex gap-3 text-xs leading-relaxed">
+                               <div className="flex-shrink-0">
+                                  {n.type === 'alert' ? (
+                                     <div className="w-8 h-8 bg-red-500/10 border border-red-500/30 rounded-full flex items-center justify-center text-red-500">
+                                        <ShieldAlert className="w-4 h-4" />
+                                     </div>
+                                  ) : (
+                                     <div className="w-8 h-8 bg-[#00a884]/10 border border-[#00a884]/30 rounded-full flex items-center justify-center text-[#00a884]">
+                                        <Shield className="w-4 h-4" />
+                                     </div>
+                                  )}
+                               </div>
+                               <div className="flex-1 min-w-0">
+                                  <h4 className="font-bold text-white mb-1">{n.title}</h4>
+                                  <p className="text-[#8696a0] text-left">{n.message}</p>
+                                  <span className="text-[10px] text-[#8696a0] mt-1 block">
+                                     {new Date(n.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                  </span>
+                               </div>
+                            </div>
+                         ))
+                      )}
+                   </div>
+                </div>
+             )}
+          </div>
+
           <div className="relative">
              <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => setShowDropdown(!showDropdown)} />
              {showDropdown && (

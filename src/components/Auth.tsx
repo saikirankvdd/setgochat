@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { User } from '../App';
+import { User, getCookie } from '../App';
 import { Lock, Mail, User as UserIcon, ShieldCheck, Key, X } from 'lucide-react';
 
 interface AuthProps {
@@ -116,7 +116,10 @@ export function Auth({ onLogin }: AuthProps) {
                   fetch('/api/me/key', {
                      method: 'PATCH',
                      credentials: 'include',
-                     headers: { 'Content-Type': 'application/json' },
+                     headers: { 
+                        'Content-Type': 'application/json',
+                        'x-csrf-token': getCookie('csrf_token') || ''
+                     },
                      body: JSON.stringify({ encryptedPrivateKey: newEncrypted })
                   }).catch(e => console.error('[Audit] Silent private key vault upgrade update failed:', e));
                }

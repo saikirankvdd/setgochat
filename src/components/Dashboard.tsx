@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { User } from '../App';
+import { User, getCookie } from '../App';
 import { Socket } from 'socket.io-client';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
@@ -31,6 +31,15 @@ export function Dashboard({ user, socket }: DashboardProps) {
   const [pinsReady, setPinsReady] = useState(false);
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [notifications, setNotifications] = useState<any[]>([
+    {
+      id: 'sec-update',
+      type: 'update',
+      title: '🔒 Core Security Reinforcements',
+      message: 'We have updated all vault algorithms to PBKDF2 (310,000 iterations) + AES-GCM, enabled secure cookie authentication, added strict connect-src Content Security Policies, enforced horizontal authorization checks across sessions, and deployed double-submit CSRF tokens.',
+      timestamp: Date.now()
+    }
+  ]);
   
   const requestedOfflineMsgs = useRef(false);
   const pinsRef = useRef<Record<string, string>>({});
@@ -274,9 +283,21 @@ export function Dashboard({ user, socket }: DashboardProps) {
     socket.on('call_offer', handleCallOfferGlobal);
     socket.on('call_end', handleCallEndGlobal);
     socket.on('system_alert', (data) => setSystemAlert(data));
+    socket.on('security_alert', (data) => {
+       setNotifications(prev => [
+         {
+            id: Math.random().toString(),
+            type: 'alert',
+            title: data.title || 'Security Alert',
+            message: data.message,
+            timestamp: Date.now()
+         },
+         ...prev
+       ]);
+       playNotificationSound();
+    });
     socket.on('banned', () => {
         alert("Your account has been permanently suspended.");
-        localStorage.removeItem('stego_profile');
         window.location.reload();
     });
 
@@ -292,6 +313,9 @@ export function Dashboard({ user, socket }: DashboardProps) {
       socket.off('receive_file', handleFile);
       socket.off('call_offer', handleCallOfferGlobal);
       socket.off('call_end', handleCallEndGlobal);
+      socket.off('system_alert');
+      socket.off('security_alert');
+      socket.off('banned');
     };
   }, [socket, user.id, user.privateKey]);
 
@@ -332,6 +356,8 @@ export function Dashboard({ user, socket }: DashboardProps) {
           unreadCounts={unreadCounts}
           blockedUsersList={users.filter(u => blockedUsers.includes(u.id as any))}
           onShowOnboarding={() => setShowOnboarding(true)}
+          notifications={notifications}
+          onClearNotifications={() => setNotifications([])}
         />
       </div>
 
@@ -357,7 +383,10 @@ export function Dashboard({ user, socket }: DashboardProps) {
                      try {
                        const res = await fetch('/api/unblock', {
                          method: 'POST',
-                         headers: { 'Content-Type': 'application/json' },
+                         headers: { 
+                           'Content-Type': 'application/json',
+                           'x-csrf-token': getCookie('csrf_token') || ''
+                         },
                          body: JSON.stringify({ targetId: targetUser.id }),
                          credentials: 'include'
                        });

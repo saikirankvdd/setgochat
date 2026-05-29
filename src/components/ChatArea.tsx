@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { User } from '../App';
+import { User, getCookie } from '../App';
 import { Socket } from 'socket.io-client';
 import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX, Upload } from 'lucide-react';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
@@ -75,7 +75,10 @@ const ReportModal = ({ onClose, reportedId }: { onClose: () => void, reportedId:
     try {
       const res = await fetch('/api/reports', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-csrf-token': getCookie('csrf_token') || ''
+        },
         body: JSON.stringify({ reportedId, reason, images }),
         credentials: 'include'
       });
@@ -802,7 +805,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     try {
       const res = await fetch('/api/block', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'x-csrf-token': getCookie('csrf_token') || ''
+        },
         body: JSON.stringify({ targetId: targetUser.id }),
         credentials: 'include'
       });
@@ -1859,7 +1865,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       {/* Messages Area */}
       <div 
         ref={chatContainerRef}
-        className="flex-1 overflow-y-auto p-6 space-y-4 bg-[url('https://user-images.githubusercontent.com/15075759/28719144-86dc0f70-73b1-11e7-911d-60d70fcded21.png')] bg-repeat opacity-90 relative"
+        className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#0b141a] relative"
+        style={{
+          backgroundImage: `
+            radial-gradient(at 0% 0%, hsla(168, 100%, 8%, 0.4) 0px, transparent 50%),
+            radial-gradient(at 100% 100%, hsla(168, 100%, 6%, 0.5) 0px, transparent 50%),
+            linear-gradient(rgba(32, 44, 51, 0.15) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(32, 44, 51, 0.15) 1px, transparent 1px)
+          `,
+          backgroundSize: '100% 100%, 100% 100%, 32px 32px, 32px 32px'
+        }}
       >
         {dbSession?.status === 'pending' && dbSession?.initiator_id !== user.id && (
           <div className="absolute inset-0 bg-[#0b141a]/60 backdrop-blur-sm shadow-2xl flex items-center justify-center z-30">
