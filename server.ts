@@ -180,7 +180,7 @@ app.use(helmet({
       imgSrc:             ["'self'", "data:", "blob:", "https://picsum.photos"],
       mediaSrc:           ["'self'", "data:", "blob:"],
       connectSrc:         ["'self'", "wss://stegochat-e74t.onrender.com", "wss://localhost:5000", "wss://127.0.0.1:5000", "https://picsum.photos"], // Tight connect-src
-      fontSrc:            ["'self'"],
+      fontSrc:            ["'self'", "data:"],
       objectSrc:          ["'none'"],
       baseUri:            ["'none'"],
       frameAncestors:     ["'none'"],

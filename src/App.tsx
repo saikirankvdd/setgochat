@@ -64,7 +64,11 @@ export default function App() {
             let nonce = getCookie('socket_nonce');
             if (!nonce) {
               // Request a fresh single-use nonce if cookie expired or reconnecting
-              const res = await fetch('/api/socket-nonce', { method: 'POST', credentials: 'include' });
+              const res = await fetch('/api/socket-nonce', { 
+                method: 'POST', 
+                credentials: 'include',
+                headers: { 'x-csrf-token': getCookie('csrf_token') || '' }
+              });
               const data = await res.json();
               nonce = data.nonce;
             }
