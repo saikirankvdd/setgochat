@@ -240,10 +240,12 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
          }
          const mediaCount = filteredMsgs.filter(m => !!(m as any).file || !!(m as any).encryptedFile).length;
          const payloadStr = JSON.stringify({ backupId: "est", messages: filteredMsgs });
-         const estSize = Math.floor(payloadStr.length * (mediaCount > 0 ? 0.95 : 0.3));
+         // Account for Base64 (1.33x) and AES Base64 (1.33x) expansion: 1.33 * 1.33 = ~1.77
+         const estSize = Math.floor(payloadStr.length * (mediaCount > 0 ? 0.95 : 0.3) * 1.77);
          
          let format = "Audio File (.wav)";
          let reason = "Your chat is small enough to be hidden inside a ringtone audio file.";
+         // 4K image can hold exactly ~3.11 MB of data. 
          if (estSize > 3 * 1024 * 1024) {
            format = "Encrypted Data File (.dat)";
            reason = "Your chat contains large media files. It will be exported as an encrypted data file to prevent crashing.";
@@ -319,7 +321,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        log("  ✅ Encryption complete");
        
        const dateStr = new Date().toISOString().split('T')[0];
-       const sizeBytes = compressed.byteLength;
+       const sizeBytes = encryptedData.length;
        
        let finalBlob: Blob;
        let filename = '';
