@@ -6,6 +6,7 @@ import { ChatArea } from './ChatArea';
 import { decodeLSB } from '../utils/stego';
 import { decryptData, binaryToString } from '../utils/crypto';
 import { AdminDashboard } from './AdminDashboard';
+import { OnboardingModal } from './OnboardingModal';
 import { Shield, Lock, Phone, Video, X } from 'lucide-react';
 
 interface DashboardProps {
@@ -29,6 +30,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
   const [systemAlert, setSystemAlert] = useState<{title: string, message: string} | null>(null);
   const [pinsReady, setPinsReady] = useState(false);
   const [usersLoaded, setUsersLoaded] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
   
   const requestedOfflineMsgs = useRef(false);
   const pinsRef = useRef<Record<string, string>>({});
@@ -40,6 +42,10 @@ export function Dashboard({ user, socket }: DashboardProps) {
   }, [users]);
 
   useEffect(() => {
+    if (!localStorage.getItem('stegochat_guide_done')) {
+      setShowOnboarding(true);
+    }
+    
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
@@ -325,6 +331,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
           lastMessages={lastMessages}
           unreadCounts={unreadCounts}
           blockedUsersList={users.filter(u => blockedUsers.includes(u.id as any))}
+          onShowOnboarding={() => setShowOnboarding(true)}
         />
       </div>
 
@@ -355,7 +362,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
                        });
                        if (res.ok) {
                          setBlockedUsers(prev => prev.filter(id => id !== targetUser.id));
-                         handleStartChat(targetUser); // Recreate the session instantly
+                         handleStartChat(targetUser); 
                          alert("User unblocked successfully.");
                        }
                      } catch(e) { console.error(e); }
@@ -426,6 +433,13 @@ export function Dashboard({ user, socket }: DashboardProps) {
                </button>
             </div>
          </div>
+      )}
+
+      {showOnboarding && (
+        <OnboardingModal onClose={() => {
+          localStorage.setItem('stegochat_guide_done', '1');
+          setShowOnboarding(false);
+        }} />
       )}
     </div>
   );

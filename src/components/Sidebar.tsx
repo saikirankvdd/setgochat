@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { User } from '../App';
-import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut, X, ShieldAlert, Download, Upload } from 'lucide-react';
+import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut, X, ShieldAlert, Download, Upload, BookOpen } from 'lucide-react';
 import { getAllMessagesLocal, importMessagesLocal } from '../utils/db';
 
 interface SidebarProps {
@@ -16,6 +16,7 @@ interface SidebarProps {
   lastMessages?: Record<number, string>;
   unreadCounts?: Record<number, number>;
   blockedUsersList?: User[];
+  onShowOnboarding?: () => void;
 }
 
 
@@ -361,6 +362,9 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
              <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => setShowDropdown(!showDropdown)} />
              {showDropdown && (
                 <div className="absolute right-0 mt-2 w-48 rounded-xl shadow-2xl bg-[#2a3942] border border-[#3a4952] z-50 overflow-hidden">
+                   <button onClick={() => { onShowOnboarding?.(); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-[#00a884] hover:bg-[#202c33] transition-colors font-medium flex items-center border-b border-[#3a4952]">
+                      <BookOpen className="w-4 h-4 mr-2" /> User Guide
+                   </button>
                    <button onClick={() => { setShowFeedbackModal(true); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-[#e9edef] hover:bg-[#202c33] transition-colors font-medium">
                       Submit Feedback
                    </button>
