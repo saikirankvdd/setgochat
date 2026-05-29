@@ -217,6 +217,42 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
     fetchPreview();
   }, [exportOption, startDate, endDate, sessionInfo.sessionId, sessionInfo.pin]);
 
+  const [exportEstimate, setExportEstimate] = useState<{ msgs: number, media: number, sizeBytes: number, format: string, reason: string } | null>(null);
+
+  useEffect(() => {
+    const calc = async () => {
+       const msgs = await getAllMessagesLocal();
+       let filteredMsgs = msgs.filter(m => m.sessionId === sessionInfo.sessionId);
+       if (exportOption === 'range_media' || exportOption === 'range_text') {
+         const startTs = startDate ? new Date(startDate).setHours(0,0,0,0) : 0;
+         const endTs = endDate ? new Date(endDate).setHours(23,59,59,999) : Infinity;
+         filteredMsgs = filteredMsgs.filter(m => m.timestamp >= startTs && m.timestamp <= endTs);
+       }
+       if (exportOption === 'full_text' || exportOption === 'range_text') {
+         filteredMsgs = filteredMsgs.map(m => {
+           const { file, encryptedFile, ...rest } = m as any;
+           return rest as any;
+         });
+       }
+       const mediaCount = filteredMsgs.filter(m => !!(m as any).file || !!(m as any).encryptedFile).length;
+       const payloadStr = JSON.stringify({ backupId: "est", messages: filteredMsgs });
+       const estSize = Math.floor(payloadStr.length * (mediaCount > 0 ? 0.95 : 0.3));
+       
+       let format = "Audio File (.wav)";
+       let reason = "Your chat is small enough to be hidden inside a ringtone audio file.";
+       if (estSize > 3 * 1024 * 1024) {
+         format = "Encrypted Data File (.dat)";
+         reason = "Your chat contains large media files. It will be exported as an encrypted data file to prevent crashing.";
+       } else if (estSize > 1024 * 1024) {
+         format = "Image File (.png)";
+         reason = "Your chat contains some media. It will be hidden inside a 4K wallpaper image.";
+       }
+       
+       setExportEstimate({ msgs: filteredMsgs.length, media: mediaCount, sizeBytes: estSize, format, reason });
+    };
+    calc();
+  }, [exportOption, startDate, endDate, sessionInfo.sessionId]);
+
   const handleExport = async () => {
     if ((exportOption === 'range_media' || exportOption === 'range_text') && (!startDate || !endDate)) {
       return alert("Please select start and end dates.");
@@ -224,10 +260,13 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
     if (!password) {
       return alert("Please enter an export password to encrypt the backup.");
     }
-    if (!window.confirm("Do you want to export this chat? This will generate a secure .stego (audio) file.")) return;
     
     setIsProcessing(true);
+    setExportLog([]);
+    const log = (msg: string) => setExportLog(prev => [...prev, msg]);
+
     try {
+       log("[1/6] Loading messages from local database...");
        const msgs = await getAllMessagesLocal();
        let filteredMsgs = msgs.filter(m => m.sessionId === sessionInfo.sessionId);
        
@@ -236,63 +275,84 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
          const endTs = new Date(endDate).setHours(23,59,59,999);
          filteredMsgs = filteredMsgs.filter(m => m.timestamp >= startTs && m.timestamp <= endTs);
        }
-
        if (exportOption === 'full_text' || exportOption === 'range_text') {
          filteredMsgs = filteredMsgs.map(m => {
            const { file, encryptedFile, ...rest } = m as any;
            return rest as any;
          });
        }
-       
        if (filteredMsgs.length === 0) {
           alert("No messages found to export.");
           setIsProcessing(false);
           return;
        }
+       const mediaCount = filteredMsgs.filter(m => !!(m as any).file || !!(m as any).encryptedFile).length;
+       log(`  ✅ Found ${filteredMsgs.length} messages (${mediaCount} with media)`);
        
+       log("[2/6] Compressing data...");
        const { strToU8, gzipSync } = await import('fflate');
        const { encryptData, stringToBinary } = await import('../utils/crypto');
        
-       // Include a unique ID to enforce one-time use
        const backupPayload = {
          backupId: Date.now() + "_" + Math.random().toString(36).substring(2, 10),
          messages: filteredMsgs
        };
        const jsonString = JSON.stringify(backupPayload);
        const compressed = gzipSync(strToU8(jsonString), { level: 9 });
+       log(`  ✅ Raw: ${(jsonString.length/1024).toFixed(1)} KB → Compressed: ${(compressed.byteLength/1024).toFixed(1)} KB`);
        
-       // Convert Uint8Array to base64
+       log("[3/6] Encrypting with password...");
        let binary = '';
        for (let i = 0; i < compressed.byteLength; i++) {
          binary += String.fromCharCode(compressed[i]);
        }
        const base64Data = window.btoa(binary);
-       
-       // Encrypt
        const encryptedData = encryptData(base64Data, password);
        const binaryEncryptedData = stringToBinary(encryptedData);
+       log("  ✅ Encryption complete");
        
-       // Hide in Audio
-       const { generateMusicCarrier, encodeLSB1Bit } = await import('../utils/stego');
-       const carrier = await generateMusicCarrier(binaryEncryptedData.length);
-       const finalBuffer = encodeLSB1Bit(carrier.buffer, binaryEncryptedData, password);
+       const dateStr = new Date().toISOString().split('T')[0];
+       const sizeBytes = compressed.byteLength;
        
-       const blob = new Blob([finalBuffer], { type: 'audio/wav' });
-       const url = URL.createObjectURL(blob);
+       let finalBlob: Blob;
+       let filename = '';
+
+       if (sizeBytes > 3 * 1024 * 1024) {
+         // Tier 3: .dat Encrypted File
+         log("[4/6] Payload too large for media. Packaging as encrypted file...");
+         log("[5/6] Writing binary data...");
+         finalBlob = new Blob([encryptedData], { type: 'application/octet-stream' });
+         filename = `app_data_${dateStr}.dat`;
+       } else if (sizeBytes > 1024 * 1024) {
+         // Tier 2: .png Image Steganography
+         log("[4/6] Generating 4K Abstract Wallpaper...");
+         const { generateWallpaperCanvas, encodeImageLSB } = await import('../utils/imageStego');
+         const canvas = generateWallpaperCanvas();
+         log("[5/6] Embedding data into image pixels...");
+         finalBlob = await encodeImageLSB(canvas, binaryEncryptedData, password);
+         filename = `wallpaper_${dateStr}.png`;
+       } else {
+         // Tier 1: .wav Audio Steganography
+         log("[4/6] Generating procedural audio carrier...");
+         const { generateMusicCarrier, encodeLSB1Bit } = await import('../utils/stego');
+         const carrier = await generateMusicCarrier(binaryEncryptedData.length);
+         log("[5/6] Embedding data into audio track...");
+         const finalBuffer = encodeLSB1Bit(carrier.buffer, binaryEncryptedData, password);
+         finalBlob = new Blob([finalBuffer], { type: 'audio/wav' });
+         const innocentNames = ['ringtone', 'notification_tone', 'alarm_sound', 'voice_memo'];
+         const pickedName = innocentNames[Math.floor(Math.random() * innocentNames.length)];
+         filename = `${pickedName}_${dateStr}.wav`;
+       }
+       
+       log(`[6/6] Download ready! ✅ ${filename}`);
+       
+       const url = URL.createObjectURL(finalBlob);
        const a = document.createElement('a');
        a.href = url;
-       const dateStr = new Date().toISOString().split('T')[0];
-       const innocentNames: Record<string, string[]> = {
-         ringtone: ['ringtone', 'notification_tone', 'alarm_sound'],
-         ambient: ['voice_memo', 'recording', 'audio_note'],
-         song: ['mixtape', 'playlist_export', 'music_draft'],
-         playlist: ['album_mix', 'compilation', 'audio_collection']
-       };
-       const names = innocentNames[carrier.type] || ['audio'];
-       const pickedName = names[Math.floor(Math.random() * names.length)];
-       a.download = `${pickedName}_${dateStr}.wav`;
+       a.download = filename;
        a.click();
-       URL.revokeObjectURL(url);
+       setTimeout(() => URL.revokeObjectURL(url), 1000);
+       
     } catch(e) {
        console.error(e);
        alert("Failed to export chats.");
@@ -321,13 +381,36 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
       const { strFromU8, gunzipSync } = await import('fflate');
       
       const isLegacyFormat = file.name.endsWith('.stego');
-      const { decodeLSB4Bit, decodeLSB1Bit } = await import('../utils/stego');
+      const isDatFormat = file.name.endsWith('.dat');
+      const isPngFormat = file.name.endsWith('.png');
       
       let extractedBinaryData = '';
-      if (isLegacyFormat) {
-         extractedBinaryData = decodeLSB4Bit(arrayBuffer);
+      
+      if (isDatFormat) {
+         // Tier 3: Direct text read
+         const decoder = new TextDecoder();
+         extractedBinaryData = decoder.decode(arrayBuffer);
+      } else if (isPngFormat) {
+         // Tier 2: Image LSB Decode
+         const { decodeImageLSB } = await import('../utils/imageStego');
+         const img = new Image();
+         const blob = new Blob([arrayBuffer]);
+         const url = URL.createObjectURL(blob);
+         await new Promise((resolve, reject) => {
+            img.onload = resolve;
+            img.onerror = reject;
+            img.src = url;
+         });
+         extractedBinaryData = decodeImageLSB(img, password);
+         URL.revokeObjectURL(url);
       } else {
-         extractedBinaryData = decodeLSB1Bit(arrayBuffer, password);
+         // Tier 1: Audio LSB Decode
+         const { decodeLSB4Bit, decodeLSB1Bit } = await import('../utils/stego');
+         if (isLegacyFormat) {
+            extractedBinaryData = decodeLSB4Bit(arrayBuffer);
+         } else {
+            extractedBinaryData = decodeLSB1Bit(arrayBuffer, password);
+         }
       }
       
       const encryptedData = binaryToString(extractedBinaryData);
@@ -450,6 +533,29 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                            </div>
                          )}
                          
+                         {exportEstimate && !isProcessing && (
+                           <div className="bg-[#202c33] p-4 rounded-xl border border-[#2a3942] space-y-2 text-sm text-[#e9edef] animate-fade-in">
+                             <div className="font-bold border-b border-[#2a3942] pb-2 text-[#00a884]">📊 Export Preview</div>
+                             <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
+                               <div className="text-[#8696a0]">Messages:</div><div>{exportEstimate.msgs}</div>
+                               <div className="text-[#8696a0]">Media Files:</div><div>{exportEstimate.media}</div>
+                               <div className="text-[#8696a0]">Est. Size:</div><div>{(exportEstimate.sizeBytes / 1024).toFixed(1)} KB</div>
+                             </div>
+                             <div className="bg-[#111b21] p-3 rounded mt-2 border border-[#2a3942]">
+                               <div className="font-bold flex items-center gap-2 mb-1">
+                                 {exportEstimate.format.includes('Audio') ? '🎵' : exportEstimate.format.includes('Image') ? '🖼️' : '🔒'} {exportEstimate.format}
+                               </div>
+                               <div className="text-xs text-[#8696a0]">{exportEstimate.reason}</div>
+                             </div>
+                           </div>
+                         )}
+
+                         {isProcessing && exportLog.length > 0 && (
+                           <div className="bg-[#111b21] p-4 rounded-xl border border-[#00a884] space-y-1 font-mono text-[10px] sm:text-xs text-[#00a884] max-h-48 overflow-y-auto animate-fade-in">
+                             {exportLog.map((log, idx) => <div key={idx}>{log}</div>)}
+                           </div>
+                         )}
+
                          <div className="bg-[#202c33] p-5 rounded-xl border border-[#2a3942] space-y-2 mt-auto">
                             <div className="flex justify-between items-center">
                               <label className="text-xs text-[#8696a0] block uppercase font-bold">Export Password</label>
@@ -484,12 +590,12 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                          </div>
                       </div>
                    </div>
-                ) : (
+                 ) : (
                    <div className="flex flex-col items-center justify-center h-full max-w-md mx-auto w-full space-y-8 animate-fade-in">
                       <div className="text-center">
                          <Upload className="w-16 h-16 text-[#00a884] mx-auto mb-4 opacity-80" />
                          <h3 className="text-2xl text-white font-bold mb-2">Import Backup</h3>
-                         <p className="text-[#8696a0] text-sm">Select a secure .stego audio file to merge into this chat.</p>
+                         <p className="text-[#8696a0] text-sm">Select a .wav, .png, or .dat file to merge into this chat.</p>
                       </div>
                       
                       <div className="w-full bg-[#202c33] p-6 rounded-xl border border-[#2a3942] space-y-6">
@@ -507,7 +613,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                                 <span className="font-bold">Import the chat</span>
                               </>
                             )}
-                            <input type="file" accept=".stego" className="hidden" onChange={handleImport} disabled={isProcessing || !password} />
+                            <input type="file" accept=".wav,audio/wav,.png,image/png,.dat,.stego" className="hidden" onChange={handleImport} disabled={isProcessing || !password} />
                          </label>
                       </div>
                    </div>
@@ -541,10 +647,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [scanningStatus, setScanningStatus] = useState<{ active: boolean, type: 'link' | 'document' | null, name: string }>({ active: false, type: null, name: '' });
   const [showDropdown, setShowDropdown] = useState(false);
   const [dropdownView, setDropdownView] = useState<'main' | 'export'>('main');
+  const [activeMessageMenu, setActiveMessageMenu] = useState<string | null>(null);
   const [exportType, setExportType] = useState<'full' | 'range'>('full');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [isExporting, setIsExporting] = useState(false);
+  const [exportLog, setExportLog] = useState<string[]>([]);
   const [isImporting, setIsImporting] = useState(false);
   const [showDataModal, setShowDataModal] = useState(false);
 
@@ -839,6 +947,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     socket.on('call_offer', handleCallOffer);
     socket.on('call_answer', handleCallAnswer);
     socket.on('call_ice_candidate', handleIceCandidate);
+    socket.on('message_deleted', (data) => {
+      if (data.msgId) {
+        setMessages(prev => prev.filter(m => m.id !== data.msgId));
+        deleteMessageLocal(data.msgId).catch(e => console.error(e));
+      }
+    });
+
     socket.on('call_end', handleCallEnd);
 
     return () => {
@@ -847,6 +962,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       socket.off('call_offer', handleCallOffer);
       socket.off('call_answer', handleCallAnswer);
       socket.off('call_ice_candidate', handleIceCandidate);
+      socket.off('message_deleted');
       socket.off('call_end', handleCallEnd);
     };
   }, [socket, sessionInfo.pin, sessionInfo.sessionId, pendingCall, clearPendingCall]);
@@ -1081,6 +1197,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setIsVideoOff(!isVideoOff);
     }
   };
+   useEffect(() => {
+    if (activeMessageMenu) {
+      const closeMenu = () => setActiveMessageMenu(null);
+      document.addEventListener('click', closeMenu);
+      return () => document.removeEventListener('click', closeMenu);
+    }
+  }, [activeMessageMenu]);
+
+
+
 
   const togglePiP = async () => {
     if (callState !== 'connected') {
@@ -1369,10 +1495,37 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }));
   };
 
+  const handleDeleteMessage = async (msgId: string, forEveryone: boolean) => {
+    // Delete locally
+    setMessages(prev => prev.filter(m => m.id !== msgId));
+    deleteMessageLocal(msgId).catch(e => console.error(e));
+    
+    // If for everyone, notify other party
+    if (forEveryone) {
+      socket.emit('delete_message', {
+        sessionId: sessionInfo.sessionId,
+        fromId: user.id,
+        toId: targetUser.id,
+        msgId: msgId
+      });
+    }
+  };
+
   const destroyMessage = (msgId: string) => {
     setMessages(prev => prev.filter(m => m.id !== msgId));
     deleteMessageLocal(msgId).catch(e => console.error(e));
   };
+
+  useEffect(() => {
+    socket.on('message_deleted', ({ msgId }: { msgId: string }) => {
+      setMessages(prev => prev.filter(m => m.id !== msgId));
+      deleteMessageLocal(msgId).catch(e => console.error(e));
+    });
+
+    return () => {
+      socket.off('message_deleted');
+    };
+  }, []);
 
   const triggerDownload = async (msgId: string, filename: string, base64data: string) => {
     // 1. Pause countdown
@@ -1715,10 +1868,48 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             key={msg.id} 
             className={`flex ${msg.fromId === user.id ? 'justify-end' : 'justify-start'}`}
           >
-            <div className={`max-w-[65%] rounded-lg px-3 py-2 shadow-sm relative group ${
-              msg.fromId === user.id ? 'bg-[#005c4b] text-[#e9edef]' : 'bg-[#202c33] text-[#e9edef]'
-            }`}>
-              {((msg.isSelfDestruct || msg.isOneTime) && !msg.isRevealed) ? (
+              <div className={`max-w-[65%] rounded-lg px-3 py-2 shadow-sm relative group ${
+                msg.fromId === user.id ? 'bg-[#005c4b] text-[#e9edef]' : 'bg-[#202c33] text-[#e9edef]'
+              }`}>
+                {/* Dropdown Menu Toggle */}
+                <div 
+                  className={`absolute top-1 cursor-pointer p-1 rounded-full bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity z-10 ${
+                    msg.fromId === user.id ? 'left-[-30px]' : 'right-[-30px]'
+                  }`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActiveMessageMenu(activeMessageMenu === msg.id ? null : msg.id);
+                  }}
+                >
+                  <MoreVertical className="w-4 h-4 text-[#8696a0]" />
+                </div>
+                
+                {/* Dropdown Menu */}
+                {activeMessageMenu === msg.id && (
+                  <div 
+                    className={`absolute top-6 w-48 bg-[#233138] rounded-md shadow-xl z-50 overflow-hidden ${
+                      msg.fromId === user.id ? 'left-[-180px]' : 'right-[-180px]'
+                    }`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button 
+                      onClick={() => { handleDeleteMessage(msg.id, false); setActiveMessageMenu(null); }}
+                      className="w-full text-left px-4 py-3 text-sm text-[#e9edef] hover:bg-[#111b21] transition-colors"
+                    >
+                      Delete for me
+                    </button>
+                    {msg.fromId === user.id && (
+                      <button 
+                        onClick={() => { handleDeleteMessage(msg.id, true); setActiveMessageMenu(null); }}
+                        className="w-full text-left px-4 py-3 text-sm text-red-400 hover:bg-[#111b21] transition-colors border-t border-[#111b21]"
+                      >
+                        Delete for everyone
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {((msg.isSelfDestruct || msg.isOneTime) && !msg.isRevealed) ? (
                 <div 
                   className="flex flex-col items-center justify-center p-3 cursor-pointer hover:bg-black/20 rounded-lg group transition-colors min-w-[120px]"
                   onClick={() => handleReveal(msg.id)}

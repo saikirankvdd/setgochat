@@ -427,6 +427,8 @@ io.on('connection', (socket: any) => {
           const payload = JSON.parse(m.payload as string);
           if (payload.type === 'text') {
              io.to(socket.id).emit('receive_message', payload.data);
+          } else if (payload.type === 'delete_msg') {
+             io.to(socket.id).emit('message_deleted', { msgId: payload.msgId });
           } else {
              io.to(socket.id).emit('receive_file', payload.data);
           }
@@ -435,6 +437,30 @@ io.on('connection', (socket: any) => {
       }
     } catch(e) { console.error('Error syncing offline data:', e); }
   });
+
+    // Delete Message
+    socket.on('delete_message', async (data) => {
+      try {
+        const { toId, msgId } = data;
+        
+        // Find recipient's active socket
+        const toSocketId = userSockets.get(toId);
+        
+        if (toSocketId) {
+          io.to(toSocketId).emit('message_deleted', { msgId });
+        } else {
+          // If offline, store an offline command message so their client deletes it upon login
+          const payload = JSON.stringify({ type: 'delete_msg', msgId: msgId });
+          const offlineMsg = new OfflineMessage({
+            to_id: toId,
+            payload: payload
+          });
+          await offlineMsg.save();
+        }
+      } catch (err) {
+        console.error("Error deleting message:", err);
+      }
+    });
 
   socket.on('disconnect', () => {
     let disconnectedUserId: string | null = null;
