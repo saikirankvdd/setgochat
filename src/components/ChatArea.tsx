@@ -563,11 +563,17 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                                 const currentStep = latestStepMatch ? parseInt(latestStepMatch.match(/\[(\d+)\/6\]/)![1]) : 0;
                                 const progressPercent = exportLog[exportLog.length - 1].includes('Download ready! ✅') ? 100 : Math.round((currentStep / 6) * 100);
                                 return (
-                                  <div className="w-full bg-[#202c33] rounded-full h-2 mb-2 overflow-hidden border border-[#2a3942]">
-                                    <div 
-                                      className="bg-[#00a884] h-2 rounded-full transition-all duration-500 ease-out" 
-                                      style={{ width: `${progressPercent}%` }}
-                                    ></div>
+                                  <div className="mb-2">
+                                    <div className="flex justify-between items-center mb-1 text-xs font-bold text-[#00a884]">
+                                      <span>Export Progress</span>
+                                      <span>{progressPercent}%</span>
+                                    </div>
+                                    <div className="w-full bg-[#202c33] rounded-full h-2 overflow-hidden border border-[#2a3942]">
+                                      <div 
+                                        className="bg-[#00a884] h-2 rounded-full transition-all duration-500 ease-out" 
+                                        style={{ width: `${progressPercent}%` }}
+                                      ></div>
+                                    </div>
                                   </div>
                                 );
                               })()}
