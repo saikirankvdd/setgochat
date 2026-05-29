@@ -208,7 +208,12 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        const { strToU8, gzipSync } = await import('fflate');
        const { encryptData, stringToBinary } = await import('../utils/crypto');
        
-       const jsonString = JSON.stringify(filteredMsgs);
+       // Include a unique ID to enforce one-time use
+       const backupPayload = {
+         backupId: Date.now() + "_" + Math.random().toString(36).substring(2, 10),
+         messages: filteredMsgs
+       };
+       const jsonString = JSON.stringify(backupPayload);
        const compressed = gzipSync(strToU8(jsonString), { level: 9 });
        
        // Convert Uint8Array to base64
@@ -277,7 +282,29 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
       
       const decompressed = gunzipSync(uint8);
       const jsonString = strFromU8(decompressed);
-      const msgs = JSON.parse(jsonString);
+      const payload = JSON.parse(jsonString);
+      
+      let msgs;
+      let backupId = null;
+      
+      if (Array.isArray(payload)) {
+         // Legacy backward compatibility for old backups
+         msgs = payload;
+      } else if (payload && payload.messages) {
+         msgs = payload.messages;
+         backupId = payload.backupId;
+      } else {
+         throw new Error("Invalid backup format");
+      }
+      
+      if (backupId) {
+         const usedBackups = JSON.parse(localStorage.getItem('stego_used_backups') || '[]');
+         if (usedBackups.includes(backupId)) {
+            throw new Error("This backup file has already been imported and cannot be used again.");
+         }
+         usedBackups.push(backupId);
+         localStorage.setItem('stego_used_backups', JSON.stringify(usedBackups));
+      }
       
       if (!Array.isArray(msgs)) throw new Error("Invalid backup format");
       
