@@ -131,8 +131,53 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [previewMsgs, setPreviewMsgs] = useState<any[]>([]);
+
+  const validatePassword = (pass: string) => {
+    if (!pass) return '';
+    if (pass.length < 8) return 'Must be at least 8 characters.';
+    if (!/[A-Z]/.test(pass)) return 'Must contain a capital letter.';
+    if (!/[a-z]/.test(pass)) return 'Must contain a lowercase letter.';
+    if (!/[0-9]/.test(pass)) return 'Must contain a number.';
+    if (!/[^A-Za-z0-9]/.test(pass)) return 'Must contain a special character.';
+    return '';
+  };
+
+  const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newPass = e.target.value;
+    setPassword(newPass);
+    if (activeTab === 'export') {
+      setPasswordError(validatePassword(newPass));
+    } else {
+      setPasswordError('');
+    }
+  };
+
+  const generateSecurePassword = () => {
+    const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    const lower = 'abcdefghijklmnopqrstuvwxyz';
+    const num = '0123456789';
+    const special = '!@#$%^&*()_+';
+    const all = upper + lower + num + special;
+    
+    let newPass = '';
+    newPass += upper.charAt(Math.floor(Math.random() * upper.length));
+    newPass += lower.charAt(Math.floor(Math.random() * lower.length));
+    newPass += num.charAt(Math.floor(Math.random() * num.length));
+    newPass += special.charAt(Math.floor(Math.random() * special.length));
+    
+    for (let i = 4; i < 16; i++) {
+      newPass += all.charAt(Math.floor(Math.random() * all.length));
+    }
+    
+    // Shuffle
+    newPass = newPass.split('').sort(() => 0.5 - Math.random()).join('');
+    
+    setPassword(newPass);
+    setPasswordError('');
+  };
 
   useEffect(() => {
     const fetchPreview = async () => {
@@ -228,15 +273,16 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        const binaryEncryptedData = stringToBinary(encryptedData);
        
        // Hide in Audio
-       const carrierBuffer = createDynamicCarrier4Bit(binaryEncryptedData.length);
-       const finalBuffer = encodeLSB4Bit(carrierBuffer, binaryEncryptedData);
+       const { generateMusicCarrier, encodeLSB1Bit } = await import('../utils/stego');
+       const carrier = await generateMusicCarrier(binaryEncryptedData.length);
+       const finalBuffer = encodeLSB1Bit(carrier.buffer, binaryEncryptedData, password);
        
        const blob = new Blob([finalBuffer], { type: 'audio/wav' });
        const url = URL.createObjectURL(blob);
        const a = document.createElement('a');
        a.href = url;
        const dateStr = new Date().toISOString().split('T')[0];
-       a.download = `stegochat_backup_${targetUser.username}_${dateStr}.stego`;
+       a.download = `stegochat_backup_${carrier.type}_${targetUser.username}_${dateStr}.wav`;
        a.click();
        URL.revokeObjectURL(url);
     } catch(e) {
@@ -266,7 +312,16 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
       const { decryptData, binaryToString } = await import('../utils/crypto');
       const { strFromU8, gunzipSync } = await import('fflate');
       
-      const extractedBinaryData = decodeLSB4Bit(arrayBuffer);
+      const isLegacyFormat = file.name.endsWith('.stego');
+      const { decodeLSB4Bit, decodeLSB1Bit } = await import('../utils/stego');
+      
+      let extractedBinaryData = '';
+      if (isLegacyFormat) {
+         extractedBinaryData = decodeLSB4Bit(arrayBuffer);
+      } else {
+         extractedBinaryData = decodeLSB1Bit(arrayBuffer, password);
+      }
+      
       const encryptedData = binaryToString(extractedBinaryData);
       const base64Data = decryptData(encryptedData, password);
       
@@ -387,12 +442,18 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                            </div>
                          )}
                          
-                         <div className="bg-[#202c33] p-5 rounded-xl border border-[#2a3942] space-y-4 mt-auto">
-                            <label className="text-xs text-[#8696a0] mb-1 block uppercase font-bold">Export Password</label>
-                            <input type="password" placeholder="Enter password to encrypt file" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-[#111b21] text-[#e9edef] p-3 text-sm rounded outline-none border border-[#2a3942] focus:border-[#00a884]" />
-                            <button onClick={handleExport} disabled={isProcessing} className="w-full py-3 bg-[#00a884] hover:bg-[#06cf9c] text-[#111b21] font-bold rounded shadow-lg disabled:opacity-50 transition-colors">
-                               {isProcessing ? 'Processing...' : 'Export File'}
-                            </button>
+                         <div className="bg-[#202c33] p-5 rounded-xl border border-[#2a3942] space-y-2 mt-auto">
+                            <div className="flex justify-between items-center">
+                              <label className="text-xs text-[#8696a0] block uppercase font-bold">Export Password</label>
+                              <button onClick={generateSecurePassword} className="text-xs text-[#00a884] hover:text-[#06cf9c] font-bold">Auto-Generate</button>
+                            </div>
+                            <input type="text" placeholder="Enter complex password" value={password} onChange={handlePasswordChange} className={`w-full bg-[#111b21] text-[#e9edef] p-3 text-sm rounded outline-none border ${passwordError && activeTab === 'export' ? 'border-red-500' : 'border-[#2a3942] focus:border-[#00a884]'}`} />
+                            {passwordError && activeTab === 'export' && <p className="text-red-500 text-xs">{passwordError}</p>}
+                            <div className="pt-2">
+                              <button onClick={handleExport} disabled={isProcessing || !!passwordError || !password} className="w-full py-3 bg-[#00a884] hover:bg-[#06cf9c] text-[#111b21] font-bold rounded shadow-lg disabled:opacity-50 transition-colors">
+                                 {isProcessing ? 'Processing...' : 'Export File'}
+                              </button>
+                            </div>
                          </div>
                       </div>
                       
