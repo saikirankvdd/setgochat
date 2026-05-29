@@ -544,7 +544,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                              <div className="grid grid-cols-2 gap-2 pt-1 text-xs">
                                <div className="text-[#8696a0]">Messages:</div><div>{exportEstimate.msgs}</div>
                                <div className="text-[#8696a0]">Media Files:</div><div>{exportEstimate.media}</div>
-                               <div className="text-[#8696a0]">Est. Size:</div><div>{(exportEstimate.sizeBytes / 1024).toFixed(1)} KB</div>
+                                <div className="text-[#8696a0]">Est. Size:</div><div>{exportEstimate.sizeBytes > 1024 * 1024 ? (exportEstimate.sizeBytes / (1024 * 1024)).toFixed(2) + ' MB' : (exportEstimate.sizeBytes / 1024).toFixed(1) + ' KB'}</div>
                              </div>
                              <div className="bg-[#111b21] p-3 rounded mt-2 border border-[#2a3942]">
                                <div className="font-bold flex items-center gap-2 mb-1">
@@ -587,7 +587,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                                 previewMsgs.map((m, i) => (
                                   <div key={i} className={`max-w-[90%] rounded-lg p-2 text-sm ${m.sender_id === sessionInfo.userId ? 'bg-[#005c4b] ml-auto text-[#e9edef]' : 'bg-[#202c33] text-[#e9edef]'}`}>
                                     {m.text && <p>{m.text}</p>}
-                                    {m.file && <span className="text-xs opacity-70 flex items-center"><Download className="w-3 h-3 mr-1"/> Media ({m.file.type.split('/')[0]})</span>}
+                                    {m.file && <span className="text-xs opacity-70 flex items-center"><Download className="w-3 h-3 mr-1"/> Media ({m.file.type ? m.file.type.split('/')[0] : 'file'})</span>}
                                   </div>
                                 ))
                               )}
@@ -1939,7 +1939,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                   )}
                   {msg.file ? (
                     <div className="mb-2 relative">
-                  {msg.file.type.startsWith('image/') ? (
+                  {msg.file.type?.startsWith('image/') ? (
                     <div className="relative inline-block group/media">
                       <img src={msg.file.data} alt="attachment" className="max-w-full rounded-lg max-h-64 object-contain" />
                       {!msg.isOneTime && (
@@ -1948,7 +1948,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                         </button>
                       )}
                     </div>
-                  ) : msg.file.type.startsWith('video/') ? (
+                  ) : msg.file.type?.startsWith('video/') ? (
                     <div className="relative inline-block group/media">
                       <video src={msg.file.data} controls className="max-w-full rounded-lg max-h-64" />
                       {!msg.isOneTime && (
@@ -1957,7 +1957,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                         </button>
                       )}
                     </div>
-                  ) : msg.file.type.startsWith('audio/') ? (
+                  ) : msg.file.type?.startsWith('audio/') ? (
                     <div className="flex items-center space-x-2">
                        <audio src={msg.file.data} controls className="max-w-full flex-1" />
                        {!msg.isOneTime && (
@@ -2154,7 +2154,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             <div className="mt-2 bg-[#111b21] p-6 shadow-sm">
               <h3 className="text-[#00a884] text-sm mb-4">Shared Media</h3>
               <div className="grid grid-cols-3 gap-2">
-                {messages.filter(m => m.file && m.file.type.startsWith('image/')).map(m => (
+                {messages.filter(m => m.file && m.file.type?.startsWith('image/')).map(m => (
                   <img key={m.id} src={m.file!.data} alt="shared" className="w-full h-24 object-cover rounded" />
                 ))}
               </div>
