@@ -65,11 +65,10 @@ function decryptLengthHeader(encBytes: Uint8Array, password: string): number {
 }
 
 /**
- * Generates a 4K abstract wallpaper to an offscreen canvas.
- * Creates organic, flowing shapes with bokeh effects to look like a premium 
- * stock wallpaper (e.g., macOS or Windows abstract backgrounds).
+ * Generates a 4K wallpaper canvas by fetching a random royalty-free image.
+ * Uses Picsum to fetch a 3840x2160 image.
  */
-export function generateWallpaperCanvas(): HTMLCanvasElement {
+export async function generateWallpaperCanvas(): Promise<HTMLCanvasElement> {
   const canvas = document.createElement('canvas');
   const width = 3840;
   const height = 2160;
@@ -78,88 +77,38 @@ export function generateWallpaperCanvas(): HTMLCanvasElement {
   const ctx = canvas.getContext('2d');
   if (!ctx) throw new Error('Canvas 2D context not supported');
 
-  // 1. Pick a cohesive color palette
-  const palettes = [
-    // Dark modern
-    [{r: 15, g: 23, b: 42}, {r: 88, g: 28, b: 135}, {r: 124, g: 58, b: 237}, {r: 219, g: 39, b: 119}],
-    // Ocean deep
-    [{r: 2, g: 6, b: 23}, {r: 14, g: 116, b: 144}, {r: 6, g: 182, b: 212}, {r: 16, g: 185, b: 129}],
-    // Sunset glow
-    [{r: 67, g: 20, b: 7}, {r: 190, g: 18, b: 60}, {r: 225, g: 29, b: 72}, {r: 245, g: 158, b: 11}],
-    // Midnight forest
-    [{r: 6, g: 24, b: 20}, {r: 4, g: 120, b: 87}, {r: 16, g: 185, b: 129}, {r: 101, g: 163, b: 13}],
-  ];
-  const palette = palettes[Math.floor(Math.random() * palettes.length)];
-
-  // 2. Base Background Gradient
-  const bgGradient = ctx.createLinearGradient(0, 0, width, height);
-  bgGradient.addColorStop(0, `rgb(${palette[0].r}, ${palette[0].g}, ${palette[0].b})`);
-  bgGradient.addColorStop(1, `rgb(${palette[1].r}, ${palette[1].g}, ${palette[1].b})`);
-  ctx.fillStyle = bgGradient;
-  ctx.fillRect(0, 0, width, height);
-
-  // 3. Draw flowing, organic abstract shapes (bezier curves/blobs)
-  ctx.globalCompositeOperation = 'screen';
-  for (let i = 0; i < 5; i++) {
-    const p1 = { x: Math.random() * width, y: Math.random() * height };
-    const p2 = { x: Math.random() * width, y: Math.random() * height };
-    const cp1 = { x: Math.random() * width, y: Math.random() * height };
-    const cp2 = { x: Math.random() * width, y: Math.random() * height };
-    const rad = 500 + Math.random() * 1500;
-
-    const color = palette[2 + Math.floor(Math.random() * 2)];
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'Anonymous';
+    // Use a unique random parameter so the browser doesn't serve a cached image that might be too small
+    img.src = `https://picsum.photos/${width}/${height}?random=${Math.random()}`;
     
-    // Radial gradient for smooth glow
-    const glow = ctx.createRadialGradient(p1.x, p1.y, 0, p1.x, p1.y, rad);
-    glow.addColorStop(0, `rgba(${color.r}, ${color.g}, ${color.b}, 0.6)`);
-    glow.addColorStop(1, `rgba(${color.r}, ${color.g}, ${color.b}, 0)`);
+    img.onload = () => {
+      ctx.drawImage(img, 0, 0, width, height);
+      resolve(canvas);
+    };
     
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.moveTo(p1.x - rad, p1.y - rad);
-    ctx.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, p2.x + rad, p2.y + rad);
-    ctx.bezierCurveTo(p2.x + rad, p1.y + rad, p1.x - rad, p2.y - rad, p1.x - rad, p1.y - rad);
-    ctx.fill();
-  }
-
-  // 4. Add bokeh / floating light orbs
-  for (let i = 0; i < 20; i++) {
-    const x = Math.random() * width;
-    const y = Math.random() * height;
-    const radius = 50 + Math.random() * 300;
-    const color = palette[Math.floor(Math.random() * palette.length)];
-    const opacity = 0.1 + Math.random() * 0.4;
-
-    ctx.beginPath();
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-    ctx.fillStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${opacity})`;
-    ctx.fill();
-    
-    // Add subtle ring around bokeh
-    ctx.lineWidth = 2 + Math.random() * 8;
-    ctx.strokeStyle = `rgba(${color.r}, ${color.g}, ${color.b}, ${opacity * 0.5})`;
-    ctx.stroke();
-  }
-  
-  // Reset composite operation
-  ctx.globalCompositeOperation = 'source-over';
-
-  // 5. Add organic film grain (Crucial for LSB steganography to look natural)
-  const imgData = ctx.getImageData(0, 0, width, height);
-  const data = imgData.data;
-  for (let i = 0; i < data.length; i += 4) {
-    // Generate natural-looking noise (box-muller transform approximation for gaussian noise)
-    const u = 1 - Math.random();
-    const v = Math.random();
-    const noise = Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v) * 8;
-    
-    data[i] = Math.min(255, Math.max(0, data[i] + noise));
-    data[i+1] = Math.min(255, Math.max(0, data[i+1] + noise));
-    data[i+2] = Math.min(255, Math.max(0, data[i+2] + noise));
-  }
-  ctx.putImageData(imgData, 0, 0);
-
-  return canvas;
+    img.onerror = () => {
+      console.warn("Failed to fetch image from Picsum. Falling back to simple gradient.");
+      // Fallback if network is down or Picsum fails
+      const bgGradient = ctx.createLinearGradient(0, 0, width, height);
+      bgGradient.addColorStop(0, '#0f172a');
+      bgGradient.addColorStop(1, '#1e293b');
+      ctx.fillStyle = bgGradient;
+      ctx.fillRect(0, 0, width, height);
+      
+      const imgData = ctx.getImageData(0, 0, width, height);
+      const data = imgData.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const noise = (Math.random() - 0.5) * 10;
+        data[i] = Math.min(255, Math.max(0, data[i] + noise));
+        data[i+1] = Math.min(255, Math.max(0, data[i+1] + noise));
+        data[i+2] = Math.min(255, Math.max(0, data[i+2] + noise));
+      }
+      ctx.putImageData(imgData, 0, 0);
+      resolve(canvas);
+    };
+  });
 }
 
 /**

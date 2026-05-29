@@ -334,12 +334,12 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
          filename = `app_data_${dateStr}.dat`;
        } else if (sizeBytes > 1024 * 1024) {
          // Tier 2: .png Image Steganography
-         log("[4/6] Generating 4K Abstract Wallpaper...");
+         log("[4/6] Fetching high-quality stock photo...");
 
-         const canvas = generateWallpaperCanvas();
+         const canvas = await generateWallpaperCanvas();
          log("[5/6] Embedding data into image pixels...");
          finalBlob = await encodeImageLSB(canvas, binaryEncryptedData, password);
-         filename = `wallpaper_${dateStr}.png`;
+         filename = `photo_${dateStr}.png`;
        } else {
          // Tier 1: .wav Audio Steganography
          log("[4/6] Generating procedural audio carrier...");
@@ -559,7 +559,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                          )}
 
                          {isProcessing && exportLog.length > 0 && (
-                            <div className="bg-[#111b21] p-4 rounded-xl border border-[#00a884] space-y-3 font-mono text-[10px] sm:text-xs text-[#00a884] max-h-64 overflow-y-auto animate-fade-in">
+                            <div className="flex-shrink-0 bg-[#111b21] p-4 rounded-xl border border-[#00a884] space-y-3 font-mono text-[10px] sm:text-xs text-[#00a884] max-h-64 overflow-y-auto animate-fade-in">
                               {(() => {
                                 const latestStepMatch = [...exportLog].reverse().find(l => l.match(/\[(\d+)\/6\]/));
                                 const currentStep = latestStepMatch ? parseInt(latestStepMatch.match(/\[(\d+)\/6\]/)![1]) : 0;
