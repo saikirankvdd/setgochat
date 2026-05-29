@@ -216,7 +216,7 @@ const csrfProtect = (req: any, res: any, next: any) => {
     '/api/request-register-otp',
     '/api/change-password'
   ];
-  if (exemptPaths.includes(req.path)) return next();
+  if (exemptPaths.includes(req.originalUrl.split('?')[0]) || exemptPaths.includes(req.path)) return next();
 
   const cookieToken = req.cookies?.csrf_token;
   const headerToken = req.headers['x-csrf-token'] || req.headers['X-CSRF-Token'];
