@@ -81,18 +81,18 @@ export function Dashboard({ user, socket }: DashboardProps) {
   }, [activeChat]);
 
   useEffect(() => {
-    fetch('/api/users', { headers: { 'Authorization': `Bearer ${user.token}` } })
+    fetch('/api/users', { credentials: 'include' })
       .then(res => res.json())
       .then(data => { if (Array.isArray(data)) setUsers(data.filter((u: User) => u.id !== user.id)); });
 
-    fetch('/api/me', { headers: { 'Authorization': `Bearer ${user.token}` } })
+    fetch('/api/me', { credentials: 'include' })
       .then(res => res.json())
       .then(data => { if (data.blockedUsers) setBlockedUsers(data.blockedUsers); });
 
-    fetch('/api/calls', { headers: { 'Authorization': `Bearer ${user.token}` } })
+    fetch('/api/calls', { credentials: 'include' })
       .then(res => res.json())
       .then(data => { if (Array.isArray(data)) setCalls(data); });
-  }, [user.id, user.token]);
+  }, [user.id]);
 
   useEffect(() => {
     if (pinsReady && usersLoaded && !requestedOfflineMsgs.current) {
@@ -175,7 +175,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
 
     socket.on('online_users', (userIds: number[]) => { 
       setOnlineUsers(userIds); 
-      fetch('/api/users', { headers: { 'Authorization': `Bearer ${user.token}` } })
+      fetch('/api/users', { credentials: 'include' })
         .then(res => res.json())
         .then(data => { 
           if (Array.isArray(data)) {
@@ -202,7 +202,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
     });
 
     socket.on('new_call_log', () => {
-      fetch('/api/calls', { headers: { 'Authorization': `Bearer ${user.token}` } })
+      fetch('/api/calls', { credentials: 'include' })
         .then(res => res.json())
         .then(data => { if (Array.isArray(data)) setCalls(data); });
     });
@@ -276,7 +276,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
     socket.on('system_alert', (data) => setSystemAlert(data));
     socket.on('banned', () => {
         alert("Your account has been permanently suspended.");
-        localStorage.removeItem('stego_user');
+        localStorage.removeItem('stego_profile');
         window.location.reload();
     });
 
@@ -293,7 +293,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
       socket.off('call_offer', handleCallOfferGlobal);
       socket.off('call_end', handleCallEndGlobal);
     };
-  }, [socket, user.id, user.privateKey, user.token]);
+  }, [socket, user.id, user.privateKey]);
 
   const handleStartChat = async (targetUser: User) => {
     setActiveChat(targetUser);
@@ -357,8 +357,9 @@ export function Dashboard({ user, socket }: DashboardProps) {
                      try {
                        const res = await fetch('/api/unblock', {
                          method: 'POST',
-                         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user.token}` },
-                         body: JSON.stringify({ targetId: targetUser.id })
+                         headers: { 'Content-Type': 'application/json' },
+                         body: JSON.stringify({ targetId: targetUser.id }),
+                         credentials: 'include'
                        });
                        if (res.ok) {
                          setBlockedUsers(prev => prev.filter(id => id !== targetUser.id));

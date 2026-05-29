@@ -140,7 +140,8 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
       const res = await fetch('/api/request-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emailOrUsername: currentUser.username })
+        body: JSON.stringify({ emailOrUsername: currentUser.username }),
+        credentials: 'include'
       });
       if (res.ok) {
         setOtpSent(true);
@@ -154,7 +155,8 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
       const res = await fetch('/api/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emailOrUsername: currentUser.username, otp, newPassword })
+        body: JSON.stringify({ emailOrUsername: currentUser.username, otp, newPassword }),
+        credentials: 'include'
       });
       if (res.ok) {
         alert('Password changed successfully!');
@@ -164,7 +166,7 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
     } catch (err) { console.error(err); }
   };
 
-const FeedbackModal = ({ onClose, token }: { onClose: () => void, token: string }) => {
+const FeedbackModal = ({ onClose }: { onClose: () => void }) => {
   const [text, setText] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -194,8 +196,9 @@ const FeedbackModal = ({ onClose, token }: { onClose: () => void, token: string 
     try {
       const res = await fetch('/api/feedback', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ text, images })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, images }),
+        credentials: 'include'
       });
       if (res.ok) {
          alert("Thank you! Your feedback has been sent directly to the admin.");
@@ -319,7 +322,16 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
                   )}
                 </div>
               )}
-              <button onClick={() => { localStorage.removeItem('stego_user'); window.location.reload(); }} className="flex items-center text-red-500 hover:text-red-400 mt-8 w-full transition-colors font-medium">
+              <button
+                onClick={async () => {
+                  try {
+                    await fetch('/api/logout', { method: 'POST', credentials: 'include' });
+                  } catch(e) {}
+                  localStorage.removeItem('stego_profile');
+                  window.location.reload();
+                }}
+                className="flex items-center text-red-500 hover:text-red-400 mt-8 w-full transition-colors font-medium"
+              >
                 <LogOut className="w-5 h-5 mr-3" />
                 <span>Log Out</span>
               </button>
@@ -392,7 +404,7 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
       </div>
 
       {showFeedbackModal && (
-          <FeedbackModal onClose={() => setShowFeedbackModal(false)} token={currentUser.token!} />
+          <FeedbackModal onClose={() => setShowFeedbackModal(false)} />
       )}
       
       {showBlockedUsersModal && (

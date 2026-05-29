@@ -45,7 +45,7 @@ interface Message {
   };
 }
 
-const ReportModal = ({ onClose, token, reportedId }: { onClose: () => void, token: string, reportedId: number }) => {
+const ReportModal = ({ onClose, reportedId }: { onClose: () => void, reportedId: number }) => {
   const [reason, setReason] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -75,8 +75,9 @@ const ReportModal = ({ onClose, token, reportedId }: { onClose: () => void, toke
     try {
       const res = await fetch('/api/reports', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        body: JSON.stringify({ reportedId, reason, images })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reportedId, reason, images }),
+        credentials: 'include'
       });
       if (res.ok) {
          alert("Thank you. This user has been reported and details sent securely to the admin.");
@@ -801,8 +802,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     try {
       const res = await fetch('/api/block', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user.token}` },
-        body: JSON.stringify({ targetId: targetUser.id })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetId: targetUser.id }),
+        credentials: 'include'
       });
       if (res.ok) {
          alert("User blocked successfully.");
@@ -2194,7 +2196,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         </div>
       )}
   {showReportModal && (
-    <ReportModal onClose={() => setShowReportModal(false)} token={user.token!} reportedId={targetUser.id} />
+    <ReportModal onClose={() => setShowReportModal(false)} reportedId={targetUser.id} />
   )}
   {showDataModal && (
     <DataManagementModal onClose={() => setShowDataModal(false)} sessionInfo={sessionInfo} targetUser={targetUser} />

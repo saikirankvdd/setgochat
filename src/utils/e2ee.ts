@@ -1,4 +1,3 @@
-import CryptoJS from 'crypto-js';
 
 export async function generateRSAKeyPair(): Promise<{ publicKey: string; privateKey: string }> {
   const keyPair = await window.crypto.subtle.generateKey(
@@ -64,13 +63,43 @@ export async function decryptPINWithPrivateKey(encryptedPinBase64: string, priva
   return new TextDecoder().decode(decBuffer);
 }
 
-// Encrypt Private Key with User's Login Password so Server never sees it in Plaintext
-export function encryptPrivateKeyWithPassword(privateKey: string, password: string): string {
-    return CryptoJS.AES.encrypt(privateKey, password).toString();
+// Encrypt Private Key with User's Login Password using PBKDF2 + AES-GCM (Finding 2)
+export async function encryptPrivateKeyWithPassword(privateKey: string, password: string): Promise<string> {
+  const salt = window.crypto.getRandomValues(new Uint8Array(16));
+  const iv   = window.crypto.getRandomValues(new Uint8Array(12));
+  const km   = await window.crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  const key  = await window.crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: 310000, hash: 'SHA-256' },
+    km,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt']
+  );
+  const ct   = await window.crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(privateKey));
+  const enc  = (a: Uint8Array) => btoa(String.fromCharCode(...a));
+  return JSON.stringify({ v: 2, salt: enc(salt), iv: enc(iv), ct: enc(new Uint8Array(ct)) });
 }
 
-// Decrypt Private Key with User's Login Password when they login
-export function decryptPrivateKeyWithPassword(encryptedPrivateKey: string, password: string): string {
-    const bytes = CryptoJS.AES.decrypt(encryptedPrivateKey, password);
-    return bytes.toString(CryptoJS.enc.Utf8);
+// Decrypt Private Key with User's Login Password when they login, with legacy fallback
+export async function decryptPrivateKeyWithPassword(stored: string, password: string): Promise<{ key: string; upgraded: boolean }> {
+  // Legacy CryptoJS format — does NOT start with '{'
+  if (!stored.startsWith('{')) {
+    const CryptoJS = (await import('crypto-js')).default;
+    const bytes = CryptoJS.AES.decrypt(stored, password);
+    const key = bytes.toString(CryptoJS.enc.Utf8);
+    if (!key) throw new Error('Wrong password');
+    return { key, upgraded: true }; // Signal to re-encrypt/upgrade to PBKDF2 + AES-GCM
+  }
+  const { salt, iv, ct } = JSON.parse(stored);
+  const dec  = (b64: string) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const km   = await window.crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  const key  = await window.crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt: dec(salt), iterations: 310000, hash: 'SHA-256' },
+    km,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt']
+  );
+  const plain = await window.crypto.subtle.decrypt({ name: 'AES-GCM', iv: dec(iv) }, key, dec(ct));
+  return { key: new TextDecoder().decode(plain), upgraded: false };
 }

@@ -45,7 +45,7 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
 
   useEffect(() => {
     fetch('/api/admin/stats', {
-      headers: { 'Authorization': `Bearer ${user.token}` }
+      credentials: 'include'
     })
       .then(res => res.json())
       .then(data => {
@@ -58,7 +58,7 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
       });
 
     fetch('/api/admin/feedback', {
-      headers: { 'Authorization': `Bearer ${user.token}` }
+      credentials: 'include'
     })
       .then(res => res.json())
       .then(data => {
@@ -67,7 +67,7 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
       .catch(console.error);
 
     fetch('/api/admin/reports', {
-      headers: { 'Authorization': `Bearer ${user.token}` }
+      credentials: 'include'
     })
       .then(res => res.json())
       .then(data => {
@@ -86,7 +86,7 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
     try {
        const res = await fetch(`/api/admin/users/${targetId}`, { 
           method: 'DELETE',
-          headers: { 'Authorization': `Bearer ${user.token}` }
+          credentials: 'include'
        });
        if (res.ok) {
           setStats(prev => {
@@ -107,7 +107,7 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
     try {
       const res = await fetch(`/api/admin/feedback/${id}/resolve`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${user.token}` }
+        credentials: 'include'
       });
       if (res.ok) {
          setFeedbacks(prev => prev.filter(f => f.id !== id));
@@ -119,8 +119,9 @@ export function AdminDashboard({ user, onBack }: AdminDashboardProps) {
     try {
       const res = await fetch(`/api/admin/reports/${id}/review`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${user.token}` },
-        body: JSON.stringify({ action })
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+        credentials: 'include'
       });
       if (res.ok) {
          setReports(prev => prev.filter(r => r.id !== id));

@@ -55,6 +55,8 @@ export function Auth({ onLogin }: AuthProps) {
   const [newPassword, setNewPassword] = useState('');
   
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [loadingMsg, setLoadingMsg] = useState('');
 
   const [hasAcceptedTerms, setHasAcceptedTerms] = useState(false);
   const [showTerms, setShowTerms] = useState(false);
@@ -68,6 +70,9 @@ export function Auth({ onLogin }: AuthProps) {
        return;
     }
     
+    setIsLoading(true);
+    setLoadingMsg(isLogin ? 'Authenticating & decrypting secure vault...' : 'Generating secure E2E keys...');
+    
     const endpoint = isLogin ? '/api/login' : '/api/signup';
     const body: any = isLogin ? { username, password } : { username, email, password, otp };
 
@@ -76,10 +81,12 @@ export function Auth({ onLogin }: AuthProps) {
         const { generateRSAKeyPair, encryptPrivateKeyWithPassword } = await import('../utils/e2ee');
         const keys = await generateRSAKeyPair();
         body.publicKey = keys.publicKey;
-        body.encryptedPrivateKey = encryptPrivateKeyWithPassword(keys.privateKey, password);
+        // This is now asynchronous due to PBKDF2 + AES-GCM (Finding 2)
+        body.encryptedPrivateKey = await encryptPrivateKeyWithPassword(keys.privateKey, password);
       } catch (err) {
         console.error('Key generation failed', err);
         setError('Failed to generate secure E2E encryption keys');
+        setIsLoading(false);
         return;
       }
     }
@@ -89,16 +96,30 @@ export function Auth({ onLogin }: AuthProps) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
+        credentials: 'include' // Always pass cookies (Finding 1)
       });
       const data = await res.json();
       
       if (data.success) {
         if (isLogin) {
           try {
-            const { decryptPrivateKeyWithPassword } = await import('../utils/e2ee');
+            const { decryptPrivateKeyWithPassword, encryptPrivateKeyWithPassword } = await import('../utils/e2ee');
             let privateKey = '';
             if (data.user.encryptedPrivateKey && data.user.encryptedPrivateKey !== 'ADMIN') {
-               privateKey = decryptPrivateKeyWithPassword(data.user.encryptedPrivateKey, password);
+               // Decrypt the private key securely (Finding 2)
+               const decrypted = await decryptPrivateKeyWithPassword(data.user.encryptedPrivateKey, password);
+               privateKey = decrypted.key;
+               
+               // Transparent legacy upgrade logic: if CryptoJS was used, migrate to PBKDF2 + AES-GCM silently (Finding 2)
+               if (decrypted.upgraded) {
+                  const newEncrypted = await encryptPrivateKeyWithPassword(privateKey, password);
+                  fetch('/api/me/key', {
+                     method: 'PATCH',
+                     credentials: 'include',
+                     headers: { 'Content-Type': 'application/json' },
+                     body: JSON.stringify({ encryptedPrivateKey: newEncrypted })
+                  }).catch(e => console.error('[Audit] Silent private key vault upgrade update failed:', e));
+               }
             }
             onLogin({ ...data.user, privateKey });
           } catch(err) {
@@ -113,6 +134,8 @@ export function Auth({ onLogin }: AuthProps) {
       }
     } catch (err) {
       setError('Failed to connect to server');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -122,53 +145,65 @@ export function Auth({ onLogin }: AuthProps) {
       return;
     }
     setError('');
+    setIsLoading(true);
+    setLoadingMsg('Requesting OTP securely...');
     try {
       const res = await fetch('/api/request-register-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
+        credentials: 'include'
       });
       const data = await res.json();
       if (data.success) {
         setSignupOtpSent(true);
-        alert('OTP sent! Please check your email (and spam folder).');
+        alert('OTP sent! Please check your email.');
       } else {
         setError(data.error || 'Failed to send OTP');
       }
     } catch (err) {
       setError('Failed to connect to server');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    setIsLoading(true);
     
     if (!otpSent) {
-      if (!username) { setError('Please enter your Username or Email'); return; }
+      if (!username) { setError('Please enter your Username or Email'); setIsLoading(false); return; }
+      setLoadingMsg('Requesting password reset OTP...');
       try {
         const res = await fetch('/api/request-otp', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ emailOrUsername: username }),
+          credentials: 'include'
         });
         const data = await res.json();
         if (data.success) {
           setOtpSent(true);
-          alert('If an account exists, an OTP has been requested. (Check server logs in dev mode for the OTP)');
+          alert('If an account exists, an OTP has been requested.');
         } else {
           setError(data.error || 'Something went wrong');
         }
       } catch (err) {
         setError('Failed to connect to server');
+      } finally {
+        setIsLoading(false);
       }
     } else {
-      if (!otp || !newPassword) { setError('Please enter OTP and New Password'); return; }
+      if (!otp || !newPassword) { setError('Please enter OTP and New Password'); setIsLoading(false); return; }
+      setLoadingMsg('Verifying OTP and resetting password...');
       try {
         const res = await fetch('/api/change-password', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ emailOrUsername: username, otp, newPassword }),
+          credentials: 'include'
         });
         const data = await res.json();
         if (data.success) {
@@ -184,6 +219,8 @@ export function Auth({ onLogin }: AuthProps) {
         }
       } catch (err) {
         setError('Failed to connect to server');
+      } finally {
+        setIsLoading(false);
       }
     }
   };
@@ -254,9 +291,19 @@ export function Auth({ onLogin }: AuthProps) {
 
               <button
                 type="submit"
-                className="w-full bg-[#00a884] hover:bg-[#06cf9c] text-white font-bold py-3 rounded-lg transition-colors shadow-lg"
+                disabled={isLoading}
+                className={`w-full text-white font-bold py-3 rounded-lg transition-all shadow-lg flex items-center justify-center gap-2 ${
+                  isLoading ? 'bg-[#00a884]/50 cursor-not-allowed' : 'bg-[#00a884] hover:bg-[#06cf9c]'
+                }`}
               >
-                {otpSent ? 'Confirm Password Change' : 'Request OTP'}
+                {isLoading ? (
+                  <>
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                    <span>{loadingMsg || 'Processing...'}</span>
+                  </>
+                ) : (
+                  otpSent ? 'Confirm Password Change' : 'Request OTP'
+                )}
               </button>
             </form>
 
@@ -374,9 +421,19 @@ export function Auth({ onLogin }: AuthProps) {
 
             <button
               type="submit"
-              className="w-full bg-[#00a884] hover:bg-[#06cf9c] text-white font-bold py-3 rounded-lg transition-colors shadow-lg"
+              disabled={isLoading}
+              className={`w-full text-white font-bold py-3 rounded-lg transition-all shadow-lg flex items-center justify-center gap-2 ${
+                isLoading ? 'bg-[#00a884]/50 cursor-not-allowed' : 'bg-[#00a884] hover:bg-[#06cf9c]'
+              }`}
             >
-              {isLogin ? 'Login' : 'Sign Up'}
+              {isLoading ? (
+                <>
+                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  <span>{loadingMsg || 'Processing...'}</span>
+                </>
+              ) : (
+                isLogin ? 'Login' : 'Sign Up'
+              )}
             </button>
           </form>
 

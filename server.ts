@@ -18,8 +18,12 @@ import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { body, validationResult } from 'express-validator';
+import cookieParser from 'cookie-parser';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import 'dotenv/config';
+
+// Safe in-memory nonce store for Socket.IO single-use connection bridging
+const nonceMap = new Map<string, string>();
 
 // ----------------------
 // MongoDB Initialization
@@ -73,7 +77,8 @@ const Session = mongoose.model('Session', SessionSchema);
 const OfflineMessageSchema = new mongoose.Schema({
   to_id: { type: String, index: true },
   payload: { type: String },
-  created_at: { type: Date, default: Date.now }
+  created_at: { type: Date, default: Date.now },
+  expiresAt: { type: Date }
 });
 const OfflineMessage = mongoose.model('OfflineMessage', OfflineMessageSchema);
 
@@ -150,10 +155,36 @@ const registerOtps = new Map<string, string>();
 const app = express();
 app.set('trust proxy', 1); // Enable proxy trust for Render load balancer compatibility with express-rate-limit
 
+app.use(cookieParser());
+
 app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false,
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc:         ["'self'"],
+      scriptSrc:          ["'self'"],              // No unsafe-inline, no CDN scripts
+      styleSrc:           ["'self'", "'unsafe-inline'"], // Needed for Tailwind CSS
+      imgSrc:             ["'self'", "data:", "blob:", "https://picsum.photos"],
+      mediaSrc:           ["'self'", "data:", "blob:"],
+      connectSrc:         ["'self'", "wss:", "https://picsum.photos"],
+      fontSrc:            ["'self'"],
+      objectSrc:          ["'none'"],
+      baseUri:            ["'none'"],
+      frameAncestors:     ["'none'"],
+      formAction:         ["'self'"],
+      workerSrc:          ["'self'", "blob:"],     // Needed for fflate WASM workers
+      upgradeInsecureRequests: [],
+    },
+  },
+  crossOriginEmbedderPolicy: false, // Required for WebRTC call integration
 }));
+
+// Permissions-Policy header
+app.use((_req, res, next) => {
+  res.setHeader('Permissions-Policy',
+    'camera=(self), microphone=(self), geolocation=(), payment=(), usb=(), serial=(), clipboard-read=(self), clipboard-write=(self)'
+  );
+  next();
+});
 
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
@@ -196,8 +227,8 @@ const allowedOrigins = process.env.NODE_ENV === 'production'
   : '*';
 
 const io = new Server(httpServer, {
-  cors: { origin: allowedOrigins },
-  maxHttpBufferSize: 1e8 // 100 MB (restored per user request, but be careful of DoS)
+  cors: { origin: allowedOrigins, credentials: true },
+  maxHttpBufferSize: 5e6 // 5 MB (Audit mitigation for DoS)
 });
 
 // Helper to escape regex values to prevent ReDoS
@@ -230,7 +261,7 @@ app.post('/api/request-register-otp', authLimiter, [
 
   if (!process.env.EMAILJS_PRIVATE_KEY) {
       console.log(`[Local fallback] Registration OTP for ${email}: ${otp}`);
-      return res.json({ success: true, message: 'OTP logged to console because EmailJS is not fully configured in Render yet.' });
+      return res.json({ success: true, message: 'OTP sent. Please check your email.' });
   }
 
   try {
@@ -238,8 +269,8 @@ app.post('/api/request-register-otp', authLimiter, [
     console.log(`[Email System] Registration OTP sent via EmailJS securely to ${email}`);
     res.json({ success: true, message: 'OTP sent to email successfully' });
   } catch (error: any) {
-    console.error('Email error:', error.message);
-    res.status(500).json({ error: 'Failed to send OTP email. View Render logs for EmailJS details.' });
+    console.error('[Audit] request-register-otp email failure:', { email, error: error.message });
+    res.status(502).json({ error: 'Unable to send verification email. Please try again later.' });
   }
 });
 
@@ -308,7 +339,29 @@ app.post('/api/login', authLimiter, async (req: any, res: any) => {
     // Generate Secure JWT Token for Protected Routes!
     const token = jwt.sign({ id: user._id.toString(), username: user.username, isAdmin }, process.env.JWT_SECRET || 'fallback_secret_for_jwt', { expiresIn: '7d' });
     
-    res.json({ success: true, user: { id: user._id.toString(), username: user.username, email: user.email, isAdmin, token, publicKey: user.public_key, encryptedPrivateKey: user.encrypted_private_key } });
+    // Set httpOnly cookie access_token
+    res.cookie('access_token', token, {
+      httpOnly: true,
+      secure: true,
+      sameSite: 'Strict',
+      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+    });
+
+    // Generate single-use nonce for socket authentication
+    const nonce = crypto.randomUUID();
+    nonceMap.set(nonce, user._id.toString());
+    // Auto-delete nonce after 10s
+    setTimeout(() => nonceMap.delete(nonce), 10000);
+
+    // Set short-lived socket_nonce cookie
+    res.cookie('socket_nonce', nonce, {
+      httpOnly: false,
+      secure: true,
+      sameSite: 'Strict',
+      maxAge: 10000 // 10 seconds
+    });
+
+    res.json({ success: true, user: { id: user._id.toString(), username: user.username, email: user.email, isAdmin, publicKey: user.public_key, encryptedPrivateKey: user.encrypted_private_key } });
   } else {
     res.status(401).json({ error: 'Invalid credentials' });
   }
@@ -350,8 +403,8 @@ app.post('/api/request-otp', authLimiter, async (req: any, res: any) => {
     console.log(`[Email System] Password Reset OTP sent securely via EmailJS to ${user.email}`);
     res.json({ success: true });
   } catch (error: any) {
-    console.error('Email error:', error.message);
-    res.status(500).json({ error: 'Failed to send EmailJS OTP.' });
+    console.error('[Audit] request-otp email failure:', { emailOrUsername, error: error.message });
+    res.status(502).json({ error: 'Unable to send verification email. Please try again later.' });
   }
 });
 
@@ -387,18 +440,31 @@ function broadcastOnlineUsers() {
   io.emit('online_users', onlineUserIds);
 }
 
+// Session participant verification helper for IDOR mitigation (Finding 4)
+async function assertParticipant(userId: string, sessionId: string): Promise<void> {
+  const session = await Session.findOne({ id: sessionId });
+  if (!session || (session.user1_id !== userId && session.user2_id !== userId)) {
+    throw new Error('IDOR: Not a participant of this session');
+  }
+}
+
+// Socket.io Handshake Nonce-based Authentication Middleware (Finding 1)
 io.use((socket: any, next) => {
-  const token = socket.handshake.auth?.token;
-  if (!token) {
-    return next(new Error('Authentication error: Token missing'));
+  const nonce = socket.handshake.auth?.nonce;
+  if (!nonce) {
+    return next(new Error('Authentication error: Nonce missing'));
   }
-  try {
-    const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_for_jwt');
-    socket.userId = decoded.id; // Trusted ID (now a string from MongoDB _id)
-    next();
-  } catch (err) {
-    next(new Error('Authentication error: Invalid Token'));
+  
+  const userId = nonceMap.get(nonce);
+  if (!userId) {
+    return next(new Error('Authentication error: Invalid or Expired Nonce'));
   }
+  
+  // Nonce is single-use, delete immediately (bridging cookie security to WebSocket)
+  nonceMap.delete(nonce);
+  
+  socket.userId = userId;
+  next();
 });
 
 io.on('connection', (socket: any) => {
@@ -421,6 +487,9 @@ io.on('connection', (socket: any) => {
   socket.on('request_offline_messages', async () => {
     const userId = socket.userId;
     try {
+      // Disappearing message enforcement: delete offline messages that have expired (Finding 7)
+      await OfflineMessage.deleteMany({ to_id: userId, expiresAt: { $lte: new Date() } });
+
       const offlineMsgs = await OfflineMessage.find({ to_id: userId });
       if (offlineMsgs.length > 0) {
         offlineMsgs.forEach(m => {
@@ -438,29 +507,30 @@ io.on('connection', (socket: any) => {
     } catch(e) { console.error('Error syncing offline data:', e); }
   });
 
-    // Delete Message
-    socket.on('delete_message', async (data) => {
-      try {
-        const { toId, msgId } = data;
-        
-        // Find recipient's active socket
-        const toSocketId = userSockets.get(toId);
-        
-        if (toSocketId) {
-          io.to(toSocketId).emit('message_deleted', { msgId });
-        } else {
-          // If offline, store an offline command message so their client deletes it upon login
-          const payload = JSON.stringify({ type: 'delete_msg', msgId: msgId });
-          const offlineMsg = new OfflineMessage({
-            to_id: toId,
-            payload: payload
-          });
-          await offlineMsg.save();
-        }
-      } catch (err) {
-        console.error("Error deleting message:", err);
+  // Delete Message with IDOR mitigation
+  socket.on('delete_message', async (data, ack) => {
+    try {
+      const { toId, msgId } = data;
+      const sessionId = [socket.userId, toId].sort().join('-');
+      await assertParticipant(socket.userId, sessionId);
+      
+      const toSocketId = userSockets.get(toId);
+      if (toSocketId) {
+        io.to(toSocketId).emit('message_deleted', { msgId });
+      } else {
+        const payload = JSON.stringify({ type: 'delete_msg', msgId: msgId });
+        const offlineMsg = new OfflineMessage({
+          to_id: toId,
+          payload: payload
+        });
+        await offlineMsg.save();
       }
-    });
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error("[Security] delete_message rejected:", err.message);
+      ack?.({ ok: false });
+    }
+  });
 
   socket.on('disconnect', () => {
     let disconnectedUserId: string | null = null;
@@ -510,77 +580,204 @@ io.on('connection', (socket: any) => {
     socket.emit('chat_ready', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id });
   });
 
-  socket.on('accept_request', async ({ sessionId }) => {
-     await Session.updateOne({ id: sessionId }, { status: 'accepted' });
-     io.to(sessionId).emit('request_accepted', { sessionId });
-  });
-
-  socket.on('decline_request', async ({ sessionId, toId }) => {
-     await Session.deleteOne({ id: sessionId });
-     io.to(sessionId).emit('request_declined', { sessionId });
-  });
-
-  socket.on('send_message', async (data) => {
-    if (await isUserBlocked(socket.userId, data.toId)) return;
-    const safeData = { ...data, fromId: socket.userId };
-    const toSocketId = userSockets.get(safeData.toId);
-    if (toSocketId) {
-      io.to(toSocketId).emit('receive_message', safeData);
-    } else {
-      const msgCount = await OfflineMessage.countDocuments({ to_id: safeData.toId });
-      if (msgCount < 50) {
-        await OfflineMessage.create({ to_id: safeData.toId, payload: JSON.stringify({ type: 'text', data: safeData }) });
+  socket.on('accept_request', async ({ sessionId }, ack) => {
+    try {
+      const session = await Session.findOne({ id: sessionId });
+      if (!session) throw new Error('Session not found');
+      if (session.user1_id !== socket.userId && session.user2_id !== socket.userId) {
+        throw new Error('Not a participant');
       }
+      if (session.initiator_id === socket.userId) {
+        throw new Error('Initiator cannot accept their own request');
+      }
+
+      await Session.updateOne({ id: sessionId }, { status: 'accepted' });
+      io.to(sessionId).emit('request_accepted', { sessionId });
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] accept_request rejected:', err.message);
+      ack?.({ ok: false });
     }
   });
 
-  socket.on('send_file', async (data) => {
-    if (await isUserBlocked(socket.userId, data.toId)) return;
-    const safeData = { ...data, fromId: socket.userId };
-    const toSocketId = userSockets.get(safeData.toId);
-    if (toSocketId) {
-      io.to(toSocketId).emit('receive_file', safeData);
-    } else {
-      const fileCount = await OfflineMessage.countDocuments({ to_id: safeData.toId });
-      if (fileCount < 20) {
-        await OfflineMessage.create({ to_id: safeData.toId, payload: JSON.stringify({ type: 'file', data: safeData }) });
+  socket.on('decline_request', async ({ sessionId }, ack) => {
+    try {
+      const session = await Session.findOne({ id: sessionId });
+      if (!session) throw new Error('Session not found');
+      if (session.user1_id !== socket.userId && session.user2_id !== socket.userId) {
+        throw new Error('Not a participant');
       }
+
+      await Session.deleteOne({ id: sessionId });
+      io.to(sessionId).emit('request_declined', { sessionId });
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] decline_request rejected:', err.message);
+      ack?.({ ok: false });
     }
   });
 
-  socket.on('call_offer', async (data) => {
-    if (await isUserBlocked(socket.userId, data.toId)) return;
-    socket.to(data.sessionId).emit('call_offer', data);
+  socket.on('send_message', async (data, ack) => {
+    try {
+      const sessionId = [socket.userId, data.toId].sort().join('-');
+      await assertParticipant(socket.userId, sessionId);
+      
+      if (await isUserBlocked(socket.userId, data.toId)) {
+        ack?.({ ok: false, error: 'Blocked' });
+        return;
+      }
+      
+      // Server-side disappearing message expiration calculation (Finding 7)
+      const expiresAt = data.timer ? new Date(Date.now() + data.timer * 1000) : null;
+      const safeData = { ...data, fromId: socket.userId };
+      const toSocketId = userSockets.get(safeData.toId);
+      
+      if (toSocketId) {
+        io.to(toSocketId).emit('receive_message', safeData);
+        
+        // For active sessions, setup the timed server deletion to keep state clean on both sides
+        if (data.timer && data.msgId) {
+          setTimeout(() => {
+            io.to(toSocketId).emit('message_deleted', { msgId: data.msgId });
+            io.to(socket.id).emit('message_deleted', { msgId: data.msgId });
+          }, data.timer * 1000);
+        }
+      } else {
+        const msgCount = await OfflineMessage.countDocuments({ to_id: safeData.toId });
+        if (msgCount < 50) {
+          await OfflineMessage.create({
+            to_id: safeData.toId,
+            payload: JSON.stringify({ type: 'text', data: safeData }),
+            expiresAt
+          });
+        }
+      }
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] send_message rejected:', err.message);
+      ack?.({ ok: false });
+    }
   });
 
-  socket.on('call_answer', (data) => {
-    socket.to(data.sessionId).emit('call_answer', data);
+  socket.on('send_file', async (data, ack) => {
+    try {
+      const sessionId = [socket.userId, data.toId].sort().join('-');
+      await assertParticipant(socket.userId, sessionId);
+      
+      if (await isUserBlocked(socket.userId, data.toId)) {
+        ack?.({ ok: false, error: 'Blocked' });
+        return;
+      }
+      
+      const expiresAt = data.timer ? new Date(Date.now() + data.timer * 1000) : null;
+      const safeData = { ...data, fromId: socket.userId };
+      const toSocketId = userSockets.get(safeData.toId);
+      
+      if (toSocketId) {
+        io.to(toSocketId).emit('receive_file', safeData);
+        
+        if (data.timer && data.msgId) {
+          setTimeout(() => {
+            io.to(toSocketId).emit('message_deleted', { msgId: data.msgId });
+            io.to(socket.id).emit('message_deleted', { msgId: data.msgId });
+          }, data.timer * 1000);
+        }
+      } else {
+        const fileCount = await OfflineMessage.countDocuments({ to_id: safeData.toId });
+        if (fileCount < 20) {
+          await OfflineMessage.create({
+            to_id: safeData.toId,
+            payload: JSON.stringify({ type: 'file', data: safeData }),
+            expiresAt
+          });
+        }
+      }
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] send_file rejected:', err.message);
+      ack?.({ ok: false });
+    }
   });
 
-  socket.on('call_ice_candidate', (data) => {
-    socket.to(data.sessionId).emit('call_ice_candidate', data);
+  socket.on('call_offer', async (data, ack) => {
+    try {
+      await assertParticipant(socket.userId, data.sessionId);
+      if (await isUserBlocked(socket.userId, data.toId)) return;
+      socket.to(data.sessionId).emit('call_offer', data);
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] call_offer rejected:', err.message);
+      ack?.({ ok: false });
+    }
   });
 
-  socket.on('call_end', (data) => {
-    socket.to(data.sessionId).emit('call_end', data);
+  socket.on('call_answer', async (data, ack) => {
+    try {
+      await assertParticipant(socket.userId, data.sessionId);
+      socket.to(data.sessionId).emit('call_answer', data);
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] call_answer rejected:', err.message);
+      ack?.({ ok: false });
+    }
   });
 
-  socket.on('log_call', async (data) => {
-    await CallHistory.create({ from_id: socket.userId, to_id: data.toId, status: data.status });
-    const toSocketId = userSockets.get(data.toId);
-    if (toSocketId) io.to(toSocketId).emit('new_call_log');
-    io.to(socket.id).emit('new_call_log');
+  socket.on('call_ice_candidate', async (data, ack) => {
+    try {
+      await assertParticipant(socket.userId, data.sessionId);
+      socket.to(data.sessionId).emit('call_ice_candidate', data);
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] call_ice_candidate rejected:', err.message);
+      ack?.({ ok: false });
+    }
+  });
+
+  socket.on('call_end', async (data, ack) => {
+    try {
+      await assertParticipant(socket.userId, data.sessionId);
+      socket.to(data.sessionId).emit('call_end', data);
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] call_end rejected:', err.message);
+      ack?.({ ok: false });
+    }
+  });
+
+  socket.on('log_call', async (data, ack) => {
+    try {
+      const sessionId = [socket.userId, data.toId].sort().join('-');
+      await assertParticipant(socket.userId, sessionId);
+      
+      await CallHistory.create({ from_id: socket.userId, to_id: data.toId, status: data.status });
+      const toSocketId = userSockets.get(data.toId);
+      if (toSocketId) io.to(toSocketId).emit('new_call_log');
+      io.to(socket.id).emit('new_call_log');
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] log_call rejected:', err.message);
+      ack?.({ ok: false });
+    }
   });
 });
 
 // --- JWT AUTHENTICATION MIDDLEWARE ---
 const verifyAuth = (req: any, res: any, next: any) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  // Read from cookie first
+  let token = req.cookies?.access_token;
+  
+  // Fallback to Bearer token for dev environments (not production)
+  if (!token && process.env.NODE_ENV !== 'production') {
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.split(' ')[1];
+    }
+  }
+  
+  if (!token) {
     return res.status(401).json({ error: 'Unauthorized: Missing Token' });
   }
   
-  const token = authHeader.split(' ')[1];
   try {
     const decoded: any = jwt.verify(token, process.env.JWT_SECRET || 'fallback_secret_for_jwt');
     req.user = decoded; // Attach validated token info
@@ -589,6 +786,74 @@ const verifyAuth = (req: any, res: any, next: any) => {
     return res.status(401).json({ error: 'Unauthorized: Invalid or Expired Token' });
   }
 };
+
+// --- REST Session & Token Bridging API (Finding 1) ---
+app.get('/api/session', verifyAuth, async (req: any, res: any) => {
+  try {
+    const user = await User.findById(req.user.id);
+    if (!user) {
+      return res.status(401).json({ error: 'Session invalid or user not found' });
+    }
+    const isAdmin = (user.email || '').toLowerCase() === 'saikirankvdd13@gmail.com';
+    res.json({
+      success: true,
+      user: {
+        id: user._id.toString(),
+        username: user.username,
+        email: user.email,
+        isAdmin,
+        publicKey: user.public_key,
+        encryptedPrivateKey: user.encrypted_private_key
+      }
+    });
+  } catch (err: any) {
+    console.error('[Audit] session retrieval error:', { error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
+  }
+});
+
+app.post('/api/logout', (req: any, res: any) => {
+  res.clearCookie('access_token', {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'Strict'
+  });
+  res.clearCookie('socket_nonce', {
+    httpOnly: false,
+    secure: true,
+    sameSite: 'Strict'
+  });
+  res.json({ success: true });
+});
+
+app.patch('/api/me/key', verifyAuth, async (req: any, res: any) => {
+  try {
+    const { encryptedPrivateKey } = req.body;
+    if (!encryptedPrivateKey) {
+      return res.status(400).json({ error: 'Missing encryptedPrivateKey' });
+    }
+    await User.findByIdAndUpdate(req.user.id, { encrypted_private_key: encryptedPrivateKey });
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('[Audit] key upgrade update error:', { userId: req.user?.id, error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
+  }
+});
+
+app.post('/api/socket-nonce', verifyAuth, (req: any, res: any) => {
+  const nonce = crypto.randomUUID();
+  nonceMap.set(nonce, req.user.id);
+  // Auto-delete nonce after 10s
+  setTimeout(() => nonceMap.delete(nonce), 10000);
+  
+  res.cookie('socket_nonce', nonce, {
+    httpOnly: false,
+    secure: true,
+    sameSite: 'Strict',
+    maxAge: 10000
+  });
+  res.json({ success: true, nonce });
+});
 
 const verifyAdmin = (req: any, res: any, next: any) => {
   verifyAuth(req, res, () => {
@@ -615,7 +880,8 @@ app.post('/api/feedback', verifyAuth, async (req: any, res: any) => {
     
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error('[Audit] feedback creation failure:', { userId: req.user?.id, error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
   }
 });
 
@@ -634,7 +900,8 @@ app.get('/api/admin/feedback', verifyAdmin, async (req: any, res: any) => {
     
     res.json(formatted);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error('[Audit] admin feedback retrieval failure:', { error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
   }
 });
 
@@ -654,7 +921,10 @@ app.post('/api/admin/feedback/:id/resolve', verifyAdmin, async (req: any, res: a
     
     await Feedback.findByIdAndDelete(req.params.id);
     res.json({ success: true });
-  } catch(err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) {
+    console.error('[Audit] resolve feedback failure:', { feedbackId: req.params.id, error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
+  }
 });
 
 // Reports from Users
@@ -668,7 +938,10 @@ app.post('/api/reports', verifyAuth, async (req: any, res: any) => {
       images: images || []
     });
     res.json({ success: true });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) {
+    console.error('[Audit] report creation failure:', { reporterId: req.user?.id, error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
+  }
 });
 
 app.post('/api/block', verifyAuth, async (req: any, res: any) => {
@@ -676,7 +949,10 @@ app.post('/api/block', verifyAuth, async (req: any, res: any) => {
      const { targetId } = req.body;
      await User.findByIdAndUpdate(req.user.id, { $addToSet: { blockedUsers: targetId } });
      res.json({ success: true });
-  } catch(e) { res.status(500).json({ error: 'Failed' }); }
+  } catch (err: any) {
+    console.error('[Audit] block failure:', { userId: req.user?.id, error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
+  }
 });
 
 app.post('/api/unblock', verifyAuth, async (req: any, res: any) => {
@@ -684,7 +960,10 @@ app.post('/api/unblock', verifyAuth, async (req: any, res: any) => {
      const { targetId } = req.body;
      await User.findByIdAndUpdate(req.user.id, { $pull: { blockedUsers: targetId } });
      res.json({ success: true });
-  } catch(e) { res.status(500).json({ error: 'Failed' }); }
+  } catch (err: any) {
+    console.error('[Audit] unblock failure:', { userId: req.user?.id, error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
+  }
 });
 
 
@@ -713,7 +992,10 @@ app.get('/api/admin/reports', verifyAdmin, async (req: any, res: any) => {
       };
     });
     res.json(formatted);
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) {
+    console.error('[Audit] admin reports retrieval failure:', { error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
+  }
 });
 
 // Admin Review Report
@@ -756,7 +1038,10 @@ app.post('/api/admin/reports/:id/review', verifyAdmin, async (req: any, res: any
     }
     await report.save();
     res.json({ success: true });
-  } catch(e: any) { res.status(500).json({ error: e.message }); }
+  } catch (err: any) {
+    console.error('[Audit] admin review report failure:', { reportId: req.params.id, error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
+  }
 });
 
 app.get('/api/users', verifyAuth, async (req: any, res: any) => {
@@ -819,7 +1104,8 @@ app.delete('/api/admin/users/:id', verifyAdmin, async (req: any, res: any) => {
     
     res.json({ success: true });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error('[Audit] admin user deletion failure:', { targetId: req.params.id, error: err.message });
+    res.status(500).json({ error: 'An internal error occurred. Please try again.' });
   }
 });
 
@@ -828,7 +1114,10 @@ app.get('/api/me', verifyAuth, async (req: any, res: any) => {
       const u = await User.findById(req.user.id);
       if (!u) return res.status(404).json({ error: 'Not found' });
       res.json({ id: u._id, username: u.username, blockedUsers: (u as any).blockedUsers || [] });
-   } catch(e) { res.status(500).json({ error: 'Failed' }); }
+   } catch (err: any) {
+     console.error('[Audit] me retrieval failure:', { userId: req.user?.id, error: err.message });
+     res.status(500).json({ error: 'An internal error occurred. Please try again.' });
+   }
 });
 
 // Vite Integration & Server Start
