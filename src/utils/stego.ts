@@ -148,7 +148,11 @@ export const encodeLSB1Bit = (audioBuffer: ArrayBuffer, data: string, password: 
     const bit = (encLength[byteIdx] >>> bitIdx) & 1;
     
     let sample = view.getInt16(44 + i * 2, true);
-    sample = (sample & ~1) | bit;
+    if ((sample & 1) !== bit) {
+      if (sample === 32767) sample -= 1;
+      else if (sample === -32768) sample += 1;
+      else sample += (Math.random() < 0.5 ? 1 : -1);
+    }
     view.setInt16(44 + i * 2, sample, true);
   }
   
@@ -160,7 +164,12 @@ export const encodeLSB1Bit = (audioBuffer: ArrayBuffer, data: string, password: 
   for (let i = 0; i < dataBits.length; i++) {
     const targetSampleIdx = 32 + indices[i];
     let sample = view.getInt16(44 + targetSampleIdx * 2, true);
-    sample = (sample & ~1) | parseInt(dataBits[i]);
+    const bitToEmbed = parseInt(dataBits[i]);
+    if ((sample & 1) !== bitToEmbed) {
+      if (sample === 32767) sample -= 1;
+      else if (sample === -32768) sample += 1;
+      else sample += (Math.random() < 0.5 ? 1 : -1);
+    }
     view.setInt16(44 + targetSampleIdx * 2, sample, true);
   }
   
@@ -207,8 +216,9 @@ export const decodeLSB1Bit = (audioBuffer: ArrayBuffer, password: string): strin
 
 export async function generateMusicCarrier(payloadBitLength: number): Promise<{ buffer: ArrayBuffer, type: string }> {
   const sampleRate = 44100;
-  // 1-bit LSB requires 1 sample per bit. Multiply by 4 for extra scatter space + natural audio headroom.
-  const requiredSamples = payloadBitLength * 4 + 32;
+  // 1-bit LSB requires 1 sample per bit. Multiply by 8 for extra scatter space + natural audio headroom.
+  // This lowers the modification density to ~12.5%, easily defeating RS analysis.
+  const requiredSamples = payloadBitLength * 8 + 32;
   let duration = Math.ceil(requiredSamples / sampleRate);
   
   let type = '';
