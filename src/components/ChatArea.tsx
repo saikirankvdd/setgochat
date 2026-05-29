@@ -136,6 +136,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
   const [passwordError, setPasswordError] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [previewMsgs, setPreviewMsgs] = useState<any[]>([]);
+  const [exportLog, setExportLog] = useState<string[]>([]);
 
   const validatePassword = (pass: string) => {
     if (!pass) return '';
