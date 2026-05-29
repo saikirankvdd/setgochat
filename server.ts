@@ -1035,13 +1035,7 @@ app.post('/api/socket-nonce', verifyAuth, (req: any, res: any) => {
   // Auto-delete nonce after 10s
   setTimeout(() => nonceMap.delete(nonce), 10000);
   
-  res.cookie('socket_nonce', nonce, {
-    httpOnly: false,
-    secure: true,
-    sameSite: 'Strict',
-    path: '/',
-    maxAge: 10000
-  });
+
   res.json({ success: true, nonce });
 });
 

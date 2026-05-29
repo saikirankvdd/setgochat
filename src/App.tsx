@@ -62,6 +62,9 @@ export default function App() {
         auth: async (cb) => {
           try {
             let nonce = getCookie('socket_nonce');
+            if (nonce) {
+              document.cookie = "socket_nonce=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+            }
             if (!nonce) {
               // Request a fresh single-use nonce if cookie expired or reconnecting
               const res = await fetch('/api/socket-nonce', { 
