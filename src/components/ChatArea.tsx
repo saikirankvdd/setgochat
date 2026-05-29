@@ -282,7 +282,15 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        const a = document.createElement('a');
        a.href = url;
        const dateStr = new Date().toISOString().split('T')[0];
-       a.download = `stegochat_backup_${carrier.type}_${targetUser.username}_${dateStr}.wav`;
+       const innocentNames: Record<string, string[]> = {
+         ringtone: ['ringtone', 'notification_tone', 'alarm_sound'],
+         ambient: ['voice_memo', 'recording', 'audio_note'],
+         song: ['mixtape', 'playlist_export', 'music_draft'],
+         playlist: ['album_mix', 'compilation', 'audio_collection']
+       };
+       const names = innocentNames[carrier.type] || ['audio'];
+       const pickedName = names[Math.floor(Math.random() * names.length)];
+       a.download = `${pickedName}_${dateStr}.wav`;
        a.click();
        URL.revokeObjectURL(url);
     } catch(e) {
