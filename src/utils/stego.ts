@@ -211,157 +211,464 @@ export const decodeLSB1Bit = (audioBuffer: ArrayBuffer, password: string): strin
 };
 
 // ==========================================
-// MUSIC GENERATION — Richer, more realistic audio
+// MUSIC GENERATION — 6 Genre System (random pick per export)
+// Genres: Lo-fi Chill, Epic Orchestral, Jazz, Synthwave, Nature Ambient, EDM Pulse
+// Pure Web Audio API — no external API needed, works offline
 // ==========================================
+
+const MUSIC_GENRES = ['lofi', 'orchestral', 'jazz', 'synthwave', 'nature', 'edm'] as const;
+type MusicGenre = typeof MUSIC_GENRES[number];
 
 export async function generateMusicCarrier(payloadBitLength: number): Promise<{ buffer: ArrayBuffer, type: string }> {
   const sampleRate = 44100;
-  // 1-bit LSB requires 1 sample per bit. Multiply by 8 for extra scatter space + natural audio headroom.
-  // This lowers the modification density to ~12.5%, easily defeating RS analysis.
   const requiredSamples = payloadBitLength * 8 + 32;
   let duration = Math.ceil(requiredSamples / sampleRate);
-  
-  let type = '';
-  if (duration < 10) { duration = 10; type = 'ringtone'; }
-  else if (duration < 60) { duration = 60; type = 'ambient'; }
-  else if (duration < 300) { duration = 300; type = 'song'; }
-  else { type = 'playlist'; }
-  
+
+  // Enforce minimum durations per tier
+  if (duration < 10) duration = 10;
+  else if (duration < 60) duration = 60;
+  else if (duration < 300) duration = 300;
+
   const AudioContextClass = window.OfflineAudioContext || (window as any).webkitOfflineAudioContext;
-  if (!AudioContextClass) throw new Error("Web Audio API not supported in this browser");
-  
+  if (!AudioContextClass) throw new Error('Web Audio API not supported in this browser');
+
+  // Pick a random genre each time so every export sounds different
+  const genre: MusicGenre = MUSIC_GENRES[Math.floor(Math.random() * MUSIC_GENRES.length)];
   const ctx = new AudioContextClass(1, sampleRate * duration, sampleRate);
-  
-  if (type === 'ringtone') generateRingtone(ctx, duration);
-  else generateAmbientTrack(ctx, duration);
-  
+
+  switch (genre) {
+    case 'lofi':        generateLofi(ctx, duration);        break;
+    case 'orchestral':  generateOrchestral(ctx, duration);  break;
+    case 'jazz':        generateJazz(ctx, duration);        break;
+    case 'synthwave':   generateSynthwave(ctx, duration);   break;
+    case 'nature':      generateNature(ctx, duration);      break;
+    case 'edm':         generateEDM(ctx, duration);         break;
+  }
+
   const renderedBuffer = await ctx.startRendering();
-  return { buffer: audioBufferToWav(renderedBuffer), type };
+  return { buffer: audioBufferToWav(renderedBuffer), type: genre };
 }
 
-function generateRingtone(ctx: OfflineAudioContext, duration: number) {
-  // Melodic ringtone: a repeating 4-bar phrase with harmonic layers
-  const melodyNotes = [
-    523.25, 659.25, 783.99, 659.25, // C5 E5 G5 E5
-    587.33, 698.46, 880.00, 698.46, // D5 F5 A5 F5
-    523.25, 783.99, 1046.50, 783.99, // C5 G5 C6 G5
-    440.00, 523.25, 659.25, 523.25  // A4 C5 E5 C5
-  ];
-  const noteLen = 0.15;
-  
-  // Bass drone for richness
-  const bassOsc = ctx.createOscillator();
-  const bassGain = ctx.createGain();
-  bassOsc.type = 'sine';
-  bassOsc.frequency.value = 130.81; // C3
-  bassGain.gain.value = 0.08;
-  bassOsc.connect(bassGain);
-  bassGain.connect(ctx.destination);
-  bassOsc.start(0);
-  bassOsc.stop(duration);
-  
-  // Main melody loop
-  let t = 0;
-  while (t < duration) {
-    for (let n = 0; n < melodyNotes.length && t < duration; n++) {
-      const freq = melodyNotes[n];
-      
-      // Lead voice (square with slight detuning for richness)
-      const osc1 = ctx.createOscillator();
-      const osc2 = ctx.createOscillator();
+// ------------------------------------------------------------------
+// Genre 1: Lo-fi Chill
+// Warm vinyl-esque pads, laid-back plucks, soft kick, gentle hiss
+// ------------------------------------------------------------------
+function generateLofi(ctx: OfflineAudioContext, duration: number) {
+  const prng = new PRNG('lofi_' + duration);
+
+  // Soft vinyl hiss (filtered white noise)
+  const bufSize = ctx.sampleRate * 2;
+  const noiseBuf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+  const noiseData = noiseBuf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) noiseData[i] = (Math.random() * 2 - 1) * 0.015;
+  const noiseSource = ctx.createBufferSource();
+  noiseSource.buffer = noiseBuf;
+  noiseSource.loop = true;
+  const noiseFilter = ctx.createBiquadFilter();
+  noiseFilter.type = 'highpass';
+  noiseFilter.frequency.value = 3000;
+  noiseSource.connect(noiseFilter);
+  noiseFilter.connect(ctx.destination);
+  noiseSource.start(0);
+  noiseSource.stop(duration);
+
+  // Warm chord pad (Cmaj7: C E G B)
+  const padFreqs = [130.81, 164.81, 196.00, 246.94];
+  padFreqs.forEach(freq => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const lpf = ctx.createBiquadFilter();
+    osc.type = 'triangle';
+    osc.frequency.value = freq;
+    lpf.type = 'lowpass';
+    lpf.frequency.value = 800;
+    gain.gain.setValueAtTime(0, 0);
+    gain.gain.linearRampToValueAtTime(0.09, 2);
+    gain.gain.setValueAtTime(0.09, duration - 2);
+    gain.gain.linearRampToValueAtTime(0, duration);
+    osc.connect(lpf); lpf.connect(gain); gain.connect(ctx.destination);
+    osc.start(0); osc.stop(duration);
+  });
+
+  // Lazy pluck melody (pentatonic: C D E G A)
+  const penta = [261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33];
+  for (let t = 1.5; t < duration - 1; t += 0.5 + prng.next() * 0.8) {
+    if (prng.next() > 0.4) {
+      const freq = penta[Math.floor(prng.next() * penta.length)] * (prng.next() > 0.7 ? 2 : 1);
+      const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      
-      osc1.type = 'square';
-      osc1.frequency.value = freq;
-      osc2.type = 'sawtooth';
-      osc2.frequency.value = freq * 1.003; // slight detune
-      
+      const lpf = ctx.createBiquadFilter();
+      osc.type = 'triangle';
+      osc.frequency.value = freq;
+      lpf.type = 'lowpass'; lpf.frequency.value = 1200;
+      const vol = 0.06 + prng.next() * 0.05;
       gain.gain.setValueAtTime(0, t);
-      gain.gain.linearRampToValueAtTime(0.15, t + 0.02);
-      gain.gain.setValueAtTime(0.15, t + noteLen * 0.6);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + noteLen);
-      
-      osc1.connect(gain);
-      osc2.connect(gain);
-      gain.connect(ctx.destination);
-      osc1.start(t);
-      osc1.stop(t + noteLen);
-      osc2.start(t);
-      osc2.stop(t + noteLen);
-      
-      t += noteLen;
+      gain.gain.linearRampToValueAtTime(vol, t + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+      osc.connect(lpf); lpf.connect(gain); gain.connect(ctx.destination);
+      osc.start(t); osc.stop(t + 0.5);
     }
-    // Small gap between loops
-    t += 0.3;
+  }
+
+  // Soft kick on every 2 beats
+  for (let t = 0; t < duration; t += 0.5) {
+    if (Math.round(t / 0.5) % 4 === 0) {
+      const kick = ctx.createOscillator();
+      const kGain = ctx.createGain();
+      kick.type = 'sine';
+      kick.frequency.setValueAtTime(120, t);
+      kick.frequency.exponentialRampToValueAtTime(40, t + 0.18);
+      kGain.gain.setValueAtTime(0.3, t);
+      kGain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+      kick.connect(kGain); kGain.connect(ctx.destination);
+      kick.start(t); kick.stop(t + 0.3);
+    }
   }
 }
 
-function generateAmbientTrack(ctx: OfflineAudioContext, duration: number) {
-  // Rich ambient with multiple harmonic layers
-  
-  // Layer 1: Deep evolving pad
-  const padFreqs = [130.81, 164.81, 196.00]; // C3, E3, G3 chord
-  padFreqs.forEach((freq, idx) => {
+// ------------------------------------------------------------------
+// Genre 2: Epic Orchestral
+// Swelling strings, brass stabs, rising tension, cinematic feel
+// ------------------------------------------------------------------
+function generateOrchestral(ctx: OfflineAudioContext, duration: number) {
+  const prng = new PRNG('orch_' + duration);
+
+  // String pads (Dm chord: D F A)
+  const stringFreqs = [73.42, 87.31, 110.00, 146.83, 174.61, 220.00]; // D2 F2 A2 D3 F3 A3
+  stringFreqs.forEach((freq, idx) => {
+    const osc1 = ctx.createOscillator();
+    const osc2 = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc1.type = 'sawtooth'; osc1.frequency.value = freq;
+    osc2.type = 'sawtooth'; osc2.frequency.value = freq * 1.005; // detune for ensemble
+    const attack = 2 + idx * 0.3;
+    gain.gain.setValueAtTime(0, 0);
+    gain.gain.linearRampToValueAtTime(0.07, attack);
+    gain.gain.linearRampToValueAtTime(0.11, duration * 0.5);
+    gain.gain.linearRampToValueAtTime(0.07, duration - 2);
+    gain.gain.linearRampToValueAtTime(0, duration);
+    osc1.connect(gain); osc2.connect(gain); gain.connect(ctx.destination);
+    osc1.start(0); osc1.stop(duration);
+    osc2.start(0); osc2.stop(duration);
+  });
+
+  // Brass stabs every 4 beats
+  const brassNotes = [146.83, 174.61, 196.00, 220.00, 246.94];
+  for (let t = 4; t < duration - 1; t += 2) {
+    if (prng.next() > 0.5) {
+      const freq = brassNotes[Math.floor(prng.next() * brassNotes.length)];
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square'; osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.18, t + 0.05);
+      gain.gain.setValueAtTime(0.15, t + 0.3);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t); osc.stop(t + 1);
+    }
+  }
+
+  // Timpani-like low thuds
+  for (let t = 0; t < duration; t += 1) {
+    if (prng.next() > 0.6) {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(80, t);
+      osc.frequency.exponentialRampToValueAtTime(35, t + 0.4);
+      gain.gain.setValueAtTime(0.25, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t); osc.stop(t + 0.7);
+    }
+  }
+}
+
+// ------------------------------------------------------------------
+// Genre 3: Jazz Improvisation
+// Walking bass, syncopated chords, swung melody
+// ------------------------------------------------------------------
+function generateJazz(ctx: OfflineAudioContext, duration: number) {
+  const prng = new PRNG('jazz_' + duration);
+
+  // Walking bass (E Dorian-ish: E F# G A B D)
+  const bassWalk = [82.41, 92.50, 98.00, 110.00, 123.47, 146.83, 164.81];
+  const beatLen = 0.5;
+  for (let t = 0; t < duration - beatLen; t += beatLen) {
+    const freq = bassWalk[Math.floor(prng.next() * bassWalk.length)];
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const lpf = ctx.createBiquadFilter();
+    osc.type = 'triangle'; osc.frequency.value = freq;
+    lpf.type = 'lowpass'; lpf.frequency.value = 500;
+    gain.gain.setValueAtTime(0, t);
+    gain.gain.linearRampToValueAtTime(0.2, t + 0.04);
+    gain.gain.setValueAtTime(0.18, t + beatLen * 0.7);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + beatLen);
+    osc.connect(lpf); lpf.connect(gain); gain.connect(ctx.destination);
+    osc.start(t); osc.stop(t + beatLen);
+  }
+
+  // Swung chord comping (Cmaj9 cluster)
+  const chordFreqs = [261.63, 329.63, 392.00, 493.88, 587.33];
+  for (let t = 0.25; t < duration - 0.5; t += 1 + prng.next() * 0.5) {
+    if (prng.next() > 0.35) {
+      chordFreqs.forEach(freq => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'triangle'; osc.frequency.value = freq * (prng.next() > 0.8 ? 2 : 1);
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.04, t + 0.03);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.3);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(t); osc.stop(t + 0.35);
+      });
+    }
+  }
+
+  // Bebop melody (swung 8th notes)
+  const bebop = [261.63, 277.18, 293.66, 311.13, 329.63, 349.23, 369.99, 392.00, 415.30, 440.00, 466.16, 493.88];
+  for (let t = 0.5; t < duration - 0.5; t += 0.22 + prng.next() * 0.15) {
+    if (prng.next() > 0.45) {
+      const freq = bebop[Math.floor(prng.next() * bebop.length)] * (prng.next() > 0.6 ? 2 : 1);
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'square'; osc.frequency.value = freq;
+      const vol = 0.05 + prng.next() * 0.05;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(vol, t + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.2);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t); osc.stop(t + 0.22);
+    }
+  }
+}
+
+// ------------------------------------------------------------------
+// Genre 4: Synthwave / Retrowave
+// Pulsing arpeggios, thick bass, detuned lead synth, 80s feel
+// ------------------------------------------------------------------
+function generateSynthwave(ctx: OfflineAudioContext, duration: number) {
+  const prng = new PRNG('synth_' + duration);
+
+  // Thick pulsing bass (sawtooth + sub)
+  const bassFreq = 55; // A1
+  const bassOsc = ctx.createOscillator();
+  const bassSub = ctx.createOscillator();
+  const bassGain = ctx.createGain();
+  const bassLpf = ctx.createBiquadFilter();
+  bassOsc.type = 'sawtooth'; bassOsc.frequency.value = bassFreq;
+  bassSub.type = 'sine'; bassSub.frequency.value = bassFreq / 2;
+  bassLpf.type = 'lowpass'; bassLpf.frequency.value = 400;
+  bassLpf.Q.value = 8;
+  bassGain.gain.setValueAtTime(0, 0);
+  bassGain.gain.linearRampToValueAtTime(0.22, 1);
+  bassGain.gain.setValueAtTime(0.22, duration - 1);
+  bassGain.gain.linearRampToValueAtTime(0, duration);
+  bassOsc.connect(bassLpf); bassSub.connect(bassLpf);
+  bassLpf.connect(bassGain); bassGain.connect(ctx.destination);
+  bassOsc.start(0); bassOsc.stop(duration);
+  bassSub.start(0); bassSub.stop(duration);
+
+  // Arpeggio (Am pentatonic: A C D E G)
+  const arpNotes = [220.00, 261.63, 293.66, 329.63, 392.00, 440.00, 523.25, 587.33, 659.25, 783.99];
+  const arpStep = 0.125; // 16th notes at ~120bpm
+  let arpIdx = 0;
+  for (let t = 0; t < duration; t += arpStep) {
+    const freq = arpNotes[arpIdx % arpNotes.length];
+    arpIdx++;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sawtooth'; osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.1, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + arpStep * 0.9);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(t); osc.stop(t + arpStep);
+  }
+
+  // Detuned lead (two oscillators slightly apart)
+  const leadNotes = [440.00, 493.88, 523.25, 587.33, 659.25, 698.46, 783.99, 880.00];
+  for (let t = 2; t < duration - 0.5; t += 0.4 + prng.next() * 0.4) {
+    if (prng.next() > 0.4) {
+      const freq = leadNotes[Math.floor(prng.next() * leadNotes.length)];
+      const o1 = ctx.createOscillator();
+      const o2 = ctx.createOscillator();
+      const gain = ctx.createGain();
+      o1.type = 'sawtooth'; o1.frequency.value = freq;
+      o2.type = 'sawtooth'; o2.frequency.value = freq * 1.008;
+      const vol = 0.08 + prng.next() * 0.05;
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(vol, t + 0.03);
+      gain.gain.setValueAtTime(vol, t + 0.25);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.38);
+      o1.connect(gain); o2.connect(gain); gain.connect(ctx.destination);
+      o1.start(t); o1.stop(t + 0.4);
+      o2.start(t); o2.stop(t + 0.4);
+    }
+  }
+
+  // Kick on the 4-on-the-floor grid
+  for (let t = 0; t < duration; t += 0.5) {
+    const kick = ctx.createOscillator();
+    const kGain = ctx.createGain();
+    kick.type = 'sine';
+    kick.frequency.setValueAtTime(150, t);
+    kick.frequency.exponentialRampToValueAtTime(30, t + 0.2);
+    kGain.gain.setValueAtTime(0.35, t);
+    kGain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+    kick.connect(kGain); kGain.connect(ctx.destination);
+    kick.start(t); kick.stop(t + 0.3);
+  }
+}
+
+// ------------------------------------------------------------------
+// Genre 5: Nature Ambient
+// Wind, water flow, bird-like calls, slow evolving drones
+// ------------------------------------------------------------------
+function generateNature(ctx: OfflineAudioContext, duration: number) {
+  const prng = new PRNG('nature_' + duration);
+
+  // Wind (low-passed white noise)
+  const bufSize = ctx.sampleRate * 3;
+  const windBuf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+  const windData = windBuf.getChannelData(0);
+  for (let i = 0; i < bufSize; i++) windData[i] = (Math.random() * 2 - 1);
+  const windSrc = ctx.createBufferSource();
+  windSrc.buffer = windBuf;
+  windSrc.loop = true;
+  const windLpf = ctx.createBiquadFilter();
+  windLpf.type = 'lowpass'; windLpf.frequency.value = 300;
+  const windGain = ctx.createGain();
+  windGain.gain.setValueAtTime(0, 0);
+  windGain.gain.linearRampToValueAtTime(0.08, 4);
+  windGain.gain.setValueAtTime(0.08, duration - 4);
+  windGain.gain.linearRampToValueAtTime(0, duration);
+  windSrc.connect(windLpf); windLpf.connect(windGain); windGain.connect(ctx.destination);
+  windSrc.start(0); windSrc.stop(duration);
+
+  // Water trickle (band-pass filtered noise bursts)
+  for (let t = 0; t < duration; t += 0.15 + prng.next() * 0.2) {
+    const bufW = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.1), ctx.sampleRate);
+    const wd = bufW.getChannelData(0);
+    for (let i = 0; i < wd.length; i++) wd[i] = (Math.random() * 2 - 1);
+    const ws = ctx.createBufferSource();
+    ws.buffer = bufW;
+    const bpf = ctx.createBiquadFilter();
+    bpf.type = 'bandpass'; bpf.frequency.value = 800 + prng.next() * 2000; bpf.Q.value = 3;
+    const wg = ctx.createGain();
+    const vol = 0.02 + prng.next() * 0.04;
+    wg.gain.setValueAtTime(0, t);
+    wg.gain.linearRampToValueAtTime(vol, t + 0.02);
+    wg.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    ws.connect(bpf); bpf.connect(wg); wg.connect(ctx.destination);
+    ws.start(t); ws.stop(t + 0.12);
+  }
+
+  // Bird-like calls (frequency sweeping sine)
+  for (let t = 1; t < duration - 1; t += 3 + prng.next() * 5) {
+    if (prng.next() > 0.4) {
+      const baseFreq = 1200 + prng.next() * 2000;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(baseFreq, t);
+      osc.frequency.linearRampToValueAtTime(baseFreq * 1.5, t + 0.1);
+      osc.frequency.exponentialRampToValueAtTime(baseFreq * 0.8, t + 0.25);
+      gain.gain.setValueAtTime(0, t);
+      gain.gain.linearRampToValueAtTime(0.07, t + 0.04);
+      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(t); osc.stop(t + 0.3);
+    }
+  }
+
+  // Deep earth drone
+  const droneFreqs = [55, 82.41, 110.00];
+  droneFreqs.forEach((freq, i) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine'; osc.frequency.value = freq;
+    osc.frequency.linearRampToValueAtTime(freq * 1.005, duration / 2);
+    osc.frequency.linearRampToValueAtTime(freq, duration);
+    gain.gain.setValueAtTime(0, 0);
+    gain.gain.linearRampToValueAtTime(0.06 - i * 0.01, 5);
+    gain.gain.setValueAtTime(0.06 - i * 0.01, duration - 5);
+    gain.gain.linearRampToValueAtTime(0, duration);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(0); osc.stop(duration);
+  });
+}
+
+// ------------------------------------------------------------------
+// Genre 6: EDM / Dance
+// Four-on-the-floor kick, driving bass, synth stabs, hi-hats
+// ------------------------------------------------------------------
+function generateEDM(ctx: OfflineAudioContext, duration: number) {
+  const prng = new PRNG('edm_' + duration);
+  const BPM = 128;
+  const beat = 60 / BPM;
+
+  // Kick every beat
+  for (let t = 0; t < duration; t += beat) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.value = freq;
-    // Slow LFO on frequency for warmth
-    osc.frequency.setValueAtTime(freq, 0);
-    osc.frequency.linearRampToValueAtTime(freq * 1.01, duration / 3);
-    osc.frequency.linearRampToValueAtTime(freq * 0.99, (duration * 2) / 3);
-    osc.frequency.linearRampToValueAtTime(freq, duration);
-    
-    gain.gain.setValueAtTime(0, 0);
-    gain.gain.linearRampToValueAtTime(0.12, 3 + idx);
-    gain.gain.setValueAtTime(0.12, duration - 3);
-    gain.gain.linearRampToValueAtTime(0, duration);
-    
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start(0);
-    osc.stop(duration);
-  });
-  
-  // Layer 2: Sparse melodic plucks
-  const scaleNotes = [261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88, 523.25]; // C major scale
-  const pluckPRNG = new PRNG('ambient_melody_seed');
-  for (let t = 1; t < duration - 1; t += 0.4) {
-    if (pluckPRNG.next() > 0.55) {
-      const noteIdx = Math.floor(pluckPRNG.next() * scaleNotes.length);
-      const octave = pluckPRNG.next() > 0.5 ? 2 : 1;
-      const freq = scaleNotes[noteIdx] * octave;
-      
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.value = freq;
-      
-      const vol = 0.04 + pluckPRNG.next() * 0.06;
-      gain.gain.setValueAtTime(0, t);
-      gain.gain.linearRampToValueAtTime(vol, t + 0.03);
-      gain.gain.exponentialRampToValueAtTime(0.001, t + 0.35);
-      
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(t);
-      osc.stop(t + 0.4);
-    }
+    osc.frequency.setValueAtTime(200, t);
+    osc.frequency.exponentialRampToValueAtTime(40, t + beat * 0.45);
+    gain.gain.setValueAtTime(0.5, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + beat * 0.5);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(t); osc.stop(t + beat * 0.6);
   }
-  
-  // Layer 3: Sub-bass heartbeat (adds natural low-end energy)
-  for (let t = 0; t < duration; t += 2) {
-    const subOsc = ctx.createOscillator();
-    const subGain = ctx.createGain();
-    subOsc.type = 'sine';
-    subOsc.frequency.value = 55; // A1
-    subGain.gain.setValueAtTime(0, t);
-    subGain.gain.linearRampToValueAtTime(0.05, t + 0.1);
-    subGain.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
-    subOsc.connect(subGain);
-    subGain.connect(ctx.destination);
-    subOsc.start(t);
-    subOsc.stop(t + 1);
+
+  // Hi-hat (filtered noise) every 8th note
+  for (let t = 0; t < duration; t += beat / 2) {
+    const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * 0.04), ctx.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    const hpf = ctx.createBiquadFilter();
+    hpf.type = 'highpass'; hpf.frequency.value = 8000;
+    const gain = ctx.createGain();
+    const isOpen = prng.next() > 0.75;
+    gain.gain.setValueAtTime(isOpen ? 0.12 : 0.07, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + (isOpen ? 0.12 : 0.03));
+    src.connect(hpf); hpf.connect(gain); gain.connect(ctx.destination);
+    src.start(t); src.stop(t + 0.15);
+  }
+
+  // Driving bass (sawtooth, side-chain ducks on beats)
+  const bassOsc = ctx.createOscillator();
+  const bassGain = ctx.createGain();
+  const bassLpf = ctx.createBiquadFilter();
+  bassOsc.type = 'sawtooth'; bassOsc.frequency.value = 55;
+  bassLpf.type = 'lowpass'; bassLpf.frequency.value = 300; bassLpf.Q.value = 6;
+  // Sidechain simulation: drop gain on each beat, rise between beats
+  for (let t = 0; t < duration; t += beat) {
+    bassGain.gain.setValueAtTime(0.01, t);
+    bassGain.gain.linearRampToValueAtTime(0.28, t + beat * 0.7);
+  }
+  bassOsc.connect(bassLpf); bassLpf.connect(bassGain); bassGain.connect(ctx.destination);
+  bassOsc.start(0); bassOsc.stop(duration);
+
+  // Synth stabs (every 2 beats, random chord voicing)
+  const stabNotes = [220.00, 261.63, 311.13, 349.23, 415.30, 440.00];
+  for (let t = beat * 2; t < duration - beat; t += beat * 2) {
+    if (prng.next() > 0.35) {
+      const freq = stabNotes[Math.floor(prng.next() * stabNotes.length)];
+      [1, 1.26, 1.5].forEach(ratio => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sawtooth'; osc.frequency.value = freq * ratio;
+        gain.gain.setValueAtTime(0.1, t);
+        gain.gain.setValueAtTime(0.08, t + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, t + 0.25);
+        osc.connect(gain); gain.connect(ctx.destination);
+        osc.start(t); osc.stop(t + 0.3);
+      });
+    }
   }
 }
 
