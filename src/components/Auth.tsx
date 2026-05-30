@@ -257,6 +257,8 @@ export function Auth({ onLogin }: AuthProps) {
                 <div className="relative">
                   <UserIcon className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-[#8696a0]" />
                   <input
+                    id="username"
+                    name="username"
                     type="text"
                     placeholder="Username or Email"
                     className="w-full bg-[#2a3942] text-[#e9edef] pl-11 pr-4 py-3 rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00a884] transition-all"
