@@ -22,19 +22,7 @@ export default defineConfig(({mode}) => {
       allowedHosts: true,
     },
     build: {
-      rollupOptions: {
-        output: {
-          manualChunks(id) {
-            if (id.includes('node_modules')) {
-              if (id.includes('react-router-dom')) return 'router-vendor';
-              if (id.includes('react-dom') || id.includes('/react/')) return 'react-vendor';
-              if (id.includes('lucide-react')) return 'lucide-vendor';
-              return 'vendor';
-            }
-          }
-        }
-      },
-      chunkSizeWarningLimit: 1000
+      chunkSizeWarningLimit: 2000
     }
   };
 });
