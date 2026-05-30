@@ -208,7 +208,11 @@ export function Dashboard({ user, socket }: DashboardProps) {
         await Promise.all(sessionsData.map(async (s) => {
           const encPin = user.id === s.user1_id ? s.pin1 : s.pin2;
           try {
-            newPins[s.id] = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+            if (encPin) {
+              newPins[s.id] = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+            } else {
+              newPins[s.id] = 'UNENCRYPTED';
+            }
           } catch(e) {}
         }));
         pinsRef.current = newPins;
