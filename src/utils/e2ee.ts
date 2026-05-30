@@ -38,6 +38,19 @@ export async function encryptPINWithPublicKey(pin: string, publicKeyBase64: stri
 }
 
 export async function decryptPINWithPrivateKey(encryptedPinBase64: string, privateKeyBase64: string): Promise<string> {
+  // --- Legacy PIN detection ---
+  // Old sessions stored a raw plain-text string as the PIN (before RSA E2EE was added).
+  // A proper RSA-OAEP ciphertext, when base64-encoded, will always be valid base64.
+  // If atob fails, the value is a legacy plain-text PIN — return it directly so old
+  // chat messages continue to decrypt correctly after a hard refresh.
+  try {
+    atob(encryptedPinBase64);
+  } catch {
+    // Not valid base64 → this is a legacy plain-text PIN, use it as-is.
+    return encryptedPinBase64;
+  }
+
+  // --- New RSA-OAEP decryption path ---
   try {
     const binaryDerString = atob(privateKeyBase64);
     const binaryDer = new Uint8Array(binaryDerString.length);
@@ -63,7 +76,9 @@ export async function decryptPINWithPrivateKey(encryptedPinBase64: string, priva
     
     return new TextDecoder().decode(decBuffer);
   } catch (err) {
-    console.error('Decryption failed for pin:', err);
+    // RSA decryption failed — the session may have been created with a different key pair.
+    // Log quietly and fall back so the UI doesn't break.
+    console.warn('PIN decryption failed (session may predate E2EE key pair):', (err as Error).message);
     return 'DECRYPTION_FAILED';
   }
 }
