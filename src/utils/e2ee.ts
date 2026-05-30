@@ -38,29 +38,34 @@ export async function encryptPINWithPublicKey(pin: string, publicKeyBase64: stri
 }
 
 export async function decryptPINWithPrivateKey(encryptedPinBase64: string, privateKeyBase64: string): Promise<string> {
-  const binaryDerString = atob(privateKeyBase64);
-  const binaryDer = new Uint8Array(binaryDerString.length);
-  for (let i = 0; i < binaryDerString.length; i++) binaryDer[i] = binaryDerString.charCodeAt(i);
-  
-  const privKey = await window.crypto.subtle.importKey(
-    'pkcs8',
-    binaryDer.buffer,
-    { name: 'RSA-OAEP', hash: 'SHA-256' },
-    true,
-    ['decrypt']
-  );
+  try {
+    const binaryDerString = atob(privateKeyBase64);
+    const binaryDer = new Uint8Array(binaryDerString.length);
+    for (let i = 0; i < binaryDerString.length; i++) binaryDer[i] = binaryDerString.charCodeAt(i);
+    
+    const privKey = await window.crypto.subtle.importKey(
+      'pkcs8',
+      binaryDer.buffer,
+      { name: 'RSA-OAEP', hash: 'SHA-256' },
+      true,
+      ['decrypt']
+    );
 
-  const encBufferString = atob(encryptedPinBase64);
-  const encBuffer = new Uint8Array(encBufferString.length);
-  for (let i = 0; i < encBufferString.length; i++) encBuffer[i] = encBufferString.charCodeAt(i);
+    const encBufferString = atob(encryptedPinBase64);
+    const encBuffer = new Uint8Array(encBufferString.length);
+    for (let i = 0; i < encBufferString.length; i++) encBuffer[i] = encBufferString.charCodeAt(i);
 
-  const decBuffer = await window.crypto.subtle.decrypt(
-    { name: 'RSA-OAEP' },
-    privKey,
-    encBuffer.buffer
-  );
-  
-  return new TextDecoder().decode(decBuffer);
+    const decBuffer = await window.crypto.subtle.decrypt(
+      { name: 'RSA-OAEP' },
+      privKey,
+      encBuffer.buffer
+    );
+    
+    return new TextDecoder().decode(decBuffer);
+  } catch (err) {
+    console.error('Decryption failed for pin:', err);
+    return 'DECRYPTION_FAILED';
+  }
 }
 
 // Encrypt Private Key with User's Login Password using PBKDF2 + AES-GCM (Finding 2)

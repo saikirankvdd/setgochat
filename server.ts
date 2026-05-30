@@ -177,7 +177,7 @@ app.use(helmet({
       defaultSrc:         ["'self'"],
       scriptSrc:          ["'self'"],              // No unsafe-inline, no CDN scripts
       styleSrc:           isProduction ? ["'self'"] : ["'self'", "'unsafe-inline'"], // Tightened style CSP in production
-      imgSrc:             ["'self'", "data:", "blob:", "https://picsum.photos"],
+      imgSrc:             ["'self'", "data:", "blob:", "https://picsum.photos", "https://fastly.picsum.photos"],
       mediaSrc:           ["'self'", "data:", "blob:"],
       connectSrc:         ["'self'", "wss://stegochat-e74t.onrender.com", "wss://localhost:5000", "wss://127.0.0.1:5000", "https://picsum.photos"], // Tight connect-src
       fontSrc:            ["'self'", "data:"],
