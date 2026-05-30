@@ -1300,6 +1300,41 @@ app.delete('/api/admin/users/:id', verifyAdmin, async (req: any, res: any) => {
   }
 });
 
+// Delete Account — permanently removes user data but does NOT ban the email,
+// so the same email address can be used to create a fresh account immediately.
+app.delete('/api/me', verifyAuth, async (req: any, res: any) => {
+  try {
+    const userId = req.user.id;
+
+    // Delete all sessions the user was part of
+    await Session.deleteMany({ $or: [{ user1_id: userId }, { user2_id: userId }] });
+
+    // Delete offline messages to/from the user
+    await OfflineMessage.deleteMany({ $or: [{ sender_id: userId }, { receiver_id: userId }] });
+
+    // Delete call history
+    await CallHistory.deleteMany({ $or: [{ caller_id: userId }, { receiver_id: userId }] });
+
+    // Delete reports filed by or against the user
+    await Report.deleteMany({ $or: [{ reporter_id: userId }, { reported_id: userId }] });
+
+    // Finally delete the user account itself
+    await User.findByIdAndDelete(userId);
+
+    // Clear all session cookies
+    const cookieOpts = { httpOnly: true, secure: true, sameSite: 'Strict' as const, path: '/' };
+    res.clearCookie('access_token', cookieOpts);
+    res.clearCookie('csrf_token', { ...cookieOpts, httpOnly: false });
+    res.clearCookie('socket_nonce', { ...cookieOpts, httpOnly: false });
+
+    console.log(`[Audit] Account deleted: userId=${userId}`);
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error('[Audit] Account deletion error:', err.message);
+    res.status(500).json({ error: 'Failed to delete account. Please try again.' });
+  }
+});
+
 app.get('/api/me', verifyAuth, async (req: any, res: any) => {
    try {
       const u = await User.findById(req.user.id);

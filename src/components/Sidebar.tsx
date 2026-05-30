@@ -132,6 +132,10 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
   const [showBlockedUsersModal, setShowBlockedUsersModal] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const [hasUnreadAlerts, setHasUnreadAlerts] = useState(true);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const handleToggleNotifications = () => {
     setShowNotifications(!showNotifications);
@@ -359,6 +363,90 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
                 <LogOut className="w-5 h-5 mr-3" />
                 <span>Log Out</span>
               </button>
+
+              {/* Danger Zone */}
+              <div className="mt-6 border border-red-900/40 rounded-lg p-4 bg-red-950/20">
+                <p className="text-red-400 text-xs font-semibold uppercase tracking-widest mb-3">Danger Zone</p>
+                <p className="text-[#8696a0] text-xs mb-4">Permanently delete your account and all your data. Your email can be used to create a new account after deletion.</p>
+                <button
+                  onClick={() => { setShowDeleteModal(true); setDeletePassword(''); setDeleteError(''); }}
+                  className="flex items-center gap-2 text-sm text-red-500 hover:text-red-400 border border-red-800 hover:border-red-600 px-4 py-2 rounded-lg transition-all w-full justify-center"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete My Account
+                </button>
+              </div>
+
+              {/* Delete Account Confirmation Modal */}
+              {showDeleteModal && (
+                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4">
+                  <div className="bg-[#202c33] rounded-2xl p-6 w-full max-w-sm shadow-2xl border border-red-900/40">
+                    <h3 className="text-[#e9edef] font-bold text-lg mb-2">Delete Account</h3>
+                    <p className="text-[#8696a0] text-sm mb-4">
+                      This will permanently delete your account, all your chats, and all your data. <span className="text-red-400 font-semibold">This cannot be undone.</span>
+                    </p>
+                    <p className="text-[#e9edef] text-sm mb-2">Enter your password to confirm:</p>
+                    <input
+                      id="delete-confirm-password"
+                      name="delete-confirm-password"
+                      type="password"
+                      placeholder="Your current password"
+                      value={deletePassword}
+                      onChange={e => { setDeletePassword(e.target.value); setDeleteError(''); }}
+                      className="w-full bg-[#111b21] text-[#e9edef] border border-[#2a3942] focus:border-red-500 rounded-lg px-3 py-2 text-sm outline-none mb-2"
+                      autoFocus
+                    />
+                    {deleteError && <p className="text-red-400 text-xs mb-3">{deleteError}</p>}
+                    <div className="flex gap-3 mt-4">
+                      <button
+                        onClick={() => setShowDeleteModal(false)}
+                        className="flex-1 py-2 rounded-lg border border-[#2a3942] text-[#8696a0] hover:text-[#e9edef] transition-colors text-sm"
+                      >Cancel</button>
+                      <button
+                        disabled={isDeleting || !deletePassword.trim()}
+                        onClick={async () => {
+                          setIsDeleting(true);
+                          setDeleteError('');
+                          try {
+                            // Verify password first via login endpoint
+                            const verifyRes = await fetch('/api/login', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json', 'x-csrf-token': getCookie('csrf_token') || '' },
+                              credentials: 'include',
+                              body: JSON.stringify({ email: currentUser.email, password: deletePassword })
+                            });
+                            const verifyData = await verifyRes.json();
+                            if (!verifyData.success) {
+                              setDeleteError('Incorrect password. Please try again.');
+                              setIsDeleting(false);
+                              return;
+                            }
+                            // Now delete
+                            const res = await fetch('/api/me', {
+                              method: 'DELETE',
+                              headers: { 'x-csrf-token': getCookie('csrf_token') || '' },
+                              credentials: 'include'
+                            });
+                            const data = await res.json();
+                            if (data.success) {
+                              localStorage.clear();
+                              window.location.reload();
+                            } else {
+                              setDeleteError(data.error || 'Deletion failed. Please try again.');
+                            }
+                          } catch(e) {
+                            setDeleteError('Network error. Please try again.');
+                          }
+                          setIsDeleting(false);
+                        }}
+                        className="flex-1 py-2 rounded-lg bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors"
+                      >
+                        {isDeleting ? 'Deleting...' : 'Delete Forever'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
