@@ -59,7 +59,8 @@ const UserSchema = new mongoose.Schema({
   warningsCount: { type: Number, default: 0 },
   blockedUsers: [{ type: String }],
   sessionVersion: { type: Number, default: 0 },
-  keyVaultVersion: { type: Number, default: 1 }
+  keyVaultVersion: { type: Number, default: 1 },
+  keyVaultUpgradedAt: { type: Date, default: null } // Tracks when legacy vault was migrated to PBKDF2 (audit Finding 1)
 });
 const User = mongoose.model('User', UserSchema);
 
@@ -171,6 +172,12 @@ app.use(cookieParser());
 
 const isProduction = process.env.NODE_ENV === 'production';
 
+// Build connect-src dynamically: exclude localhost WebSocket origins in production (Finding 3 fix)
+const wsConnectSrc: string[] = ["'self'", "wss://stegochat-e74t.onrender.com", "https://picsum.photos"];
+if (!isProduction) {
+  wsConnectSrc.push("wss://localhost:5000", "wss://127.0.0.1:5000");
+}
+
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -179,7 +186,7 @@ app.use(helmet({
       styleSrc:           isProduction ? ["'self'"] : ["'self'", "'unsafe-inline'"], // Tightened style CSP in production
       imgSrc:             ["'self'", "data:", "blob:", "https://picsum.photos", "https://fastly.picsum.photos"],
       mediaSrc:           ["'self'", "data:", "blob:"],
-      connectSrc:         ["'self'", "wss://stegochat-e74t.onrender.com", "wss://localhost:5000", "wss://127.0.0.1:5000", "https://picsum.photos"], // Tight connect-src
+      connectSrc:         wsConnectSrc, // Production: no localhost WebSocket origins (audit Finding 3)
       fontSrc:            ["'self'", "data:"],
       objectSrc:          ["'none'"],
       baseUri:            ["'none'"],
@@ -262,7 +269,7 @@ const allowedOrigins = process.env.NODE_ENV === 'production'
 
 const io = new Server(httpServer, {
   cors: { origin: allowedOrigins, credentials: true },
-  maxHttpBufferSize: 5e6 // 5 MB (Audit mitigation for DoS)
+  maxHttpBufferSize: 1e6 // 1 MB transport cap (audit Finding 2 — per-event limits enforced by EVENT_SIZE_LIMITS middleware)
 });
 
 // Helper to escape regex values to prevent ReDoS
@@ -1018,9 +1025,11 @@ app.patch('/api/me/key', verifyAuth, async (req: any, res: any) => {
     if (!encryptedPrivateKey) {
       return res.status(400).json({ error: 'Missing encryptedPrivateKey' });
     }
+    // Track vault upgrade timestamp for audit compliance (Finding 1: legacy vault migration tracking)
     await User.findByIdAndUpdate(req.user.id, { 
       encrypted_private_key: encryptedPrivateKey,
-      keyVaultVersion: 2 
+      keyVaultVersion: 2,
+      keyVaultUpgradedAt: new Date()
     });
     res.json({ success: true });
   } catch (err: any) {
