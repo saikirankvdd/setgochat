@@ -144,7 +144,10 @@ export function Dashboard({ user, socket }: DashboardProps) {
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
         const encPin = user.id === data.user1_id ? data.pin1 : data.pin2;
-        const decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+        let decryptedPin = 'UNENCRYPTED';
+        if (encPin) {
+           decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+        }
         setSessionInfo({ sessionId: data.sessionId, pin: decryptedPin });
         pinsRef.current[data.sessionId] = decryptedPin;
 
@@ -161,7 +164,10 @@ export function Dashboard({ user, socket }: DashboardProps) {
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
         const encPin = user.id === data.user1_id ? data.pin1 : data.pin2;
-        const decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+        let decryptedPin = 'UNENCRYPTED';
+        if (encPin) {
+           decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+        }
         setSessionInfo({ sessionId: data.sessionId, pin: decryptedPin });
         pinsRef.current[data.sessionId] = decryptedPin;
 

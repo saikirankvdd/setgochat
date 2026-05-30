@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { User } from '../App';
+import { User, getCookie } from '../App';
 import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut, X, ShieldAlert, Download, Upload, BookOpen, Bell, Shield, Trash2 } from 'lucide-react';
 import { getAllMessagesLocal, importMessagesLocal } from '../utils/db';
 
