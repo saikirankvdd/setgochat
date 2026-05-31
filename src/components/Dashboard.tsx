@@ -252,8 +252,8 @@ export function Dashboard({ user, socket }: DashboardProps) {
            const binaryString = atob(data.audioBase64);
            const bytes = new Uint8Array(binaryString.length);
            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-           // Use scattered 1-bit decoder — matches how messages are encoded (encodeLSB1Bit)
-           const binary = decodeLSB1Bit(bytes.buffer, pin);
+           // Sequential decoder — matches encodeLSB used in handleSendMessage
+           const binary = decodeLSB(bytes.buffer);
            const encryptedText = binaryToString(binary);
            previewText = decryptData(encryptedText, pin);
          } catch(e) {}

@@ -845,8 +845,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
         const audioData = bytes.buffer;
         
-        // 2. Extract Hidden Binary — use scattered 1-bit decoder (matches encodeLSB1Bit)
-        const binary = decodeLSB1Bit(audioData, sessionInfo.pin);
+        // 2. Extract Hidden Binary — uses sequential LSB decoder to match encodeLSB in handleSendMessage
+        const binary = decodeLSB(audioData);
         
         // 3. Convert Binary to Encrypted Text
         const encryptedText = binaryToString(binary);
