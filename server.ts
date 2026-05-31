@@ -747,6 +747,11 @@ io.on('connection', (socket: any) => {
           status: 'pending',
           initiator_id: fromId
       });
+    } else {
+      // Always refresh pin1/pin2 so freshly-encrypted keys replace any stale/mismatched ones
+      session.pin1 = pin1;
+      session.pin2 = pin2;
+      await session.save();
     }
 
     socket.join(sessionId);
@@ -756,6 +761,7 @@ io.on('connection', (socket: any) => {
     }
     socket.emit('chat_ready', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id });
   });
+
 
   socket.on('accept_request', async ({ sessionId }, ack) => {
     try {

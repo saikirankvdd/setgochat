@@ -337,12 +337,17 @@ export function Dashboard({ user, socket }: DashboardProps) {
       const myGeneratedPin = Math.floor(100000 + Math.random() * 900000).toString();
       let pin1, pin2;
 
-      if (user.id < targetUser.id) {
-         pin1 = await encryptPINWithPublicKey(myGeneratedPin, user.publicKey);
-         pin2 = await encryptPINWithPublicKey(myGeneratedPin, targetUser.publicKey);
+      // Use numeric sort to match server-side: [fromId, toId].sort() which is string sort of IDs
+      // Server sorts as strings, so we must match exactly
+      const ids = [String(user.id), String(targetUser.id)].sort();
+      const iAmUser1 = ids[0] === String(user.id);
+
+      if (iAmUser1) {
+         pin1 = await encryptPINWithPublicKey(myGeneratedPin, user.publicKey);         // user1 slot
+         pin2 = await encryptPINWithPublicKey(myGeneratedPin, targetUser.publicKey);   // user2 slot
       } else {
-         pin2 = await encryptPINWithPublicKey(myGeneratedPin, user.publicKey);
-         pin1 = await encryptPINWithPublicKey(myGeneratedPin, targetUser.publicKey);
+         pin1 = await encryptPINWithPublicKey(myGeneratedPin, targetUser.publicKey);   // user1 slot
+         pin2 = await encryptPINWithPublicKey(myGeneratedPin, user.publicKey);         // user2 slot
       }
       socket.emit('start_chat', { toId: targetUser.id, pin1, pin2 });
     } catch (err) { console.error('E2EE Handshake failed', err); }
