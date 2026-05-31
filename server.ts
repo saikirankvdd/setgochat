@@ -639,6 +639,18 @@ io.on('connection', (socket: any) => {
        return;
     }
 
+    // Force disconnect any other active socket session for this user:
+    const existingSocketId = userSockets.get(userId);
+    if (existingSocketId && existingSocketId !== socket.id) {
+       const oldSocket = io.sockets.sockets.get(existingSocketId);
+       if (oldSocket) {
+          oldSocket.emit('force_logout', { message: 'Your account was signed in on another device. You have been logged out for your security.' });
+          oldSocket.disconnect(true);
+       }
+    }
+
+
+
     userSockets.set(userId, socket.id);
     socket.join(`user_${userId}`);
     console.log(`User ${userId} registered with socket ${socket.id}`);
@@ -682,8 +694,9 @@ io.on('connection', (socket: any) => {
       const sessionId = [socket.userId, toId].sort().join('-');
       await assertParticipant(socket.userId, sessionId);
       
-      if (userSockets.has(toId)) {
-        io.to(`user_${toId}`).emit('message_deleted', { msgId });
+      const toSocketId = userSockets.get(toId);
+      if (toSocketId) {
+        io.to(toSocketId).emit('message_deleted', { msgId });
       } else {
         const payload = JSON.stringify({ type: 'delete_msg', msgId: msgId });
         const offlineMsg = new OfflineMessage({
@@ -747,8 +760,9 @@ io.on('connection', (socket: any) => {
     }
 
     socket.join(sessionId);
-    if (userSockets.has(toId)) {
-      io.to(`user_${toId}`).emit('chat_started', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id, fromId });
+    const toSocketId = userSockets.get(toId);
+    if (toSocketId) {
+      io.to(toSocketId).emit('chat_started', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id, fromId });
     }
     socket.emit('chat_ready', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id });
   });
@@ -806,13 +820,15 @@ io.on('connection', (socket: any) => {
         ? new Date(Date.now() + data.timer * 1000)
         : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
       const safeData = { ...data, fromId: socket.userId };
-      if (userSockets.has(safeData.toId)) {
-        io.to(`user_${safeData.toId}`).emit('receive_message', safeData);
+      const toSocketId = userSockets.get(safeData.toId);
+      
+      if (toSocketId) {
+        io.to(toSocketId).emit('receive_message', safeData);
         
         // For active sessions, setup the timed server deletion to keep state clean on both sides
         if (data.timer && data.msgId) {
           setTimeout(() => {
-            io.to(`user_${safeData.toId}`).emit('message_deleted', { msgId: data.msgId });
+            io.to(toSocketId).emit('message_deleted', { msgId: data.msgId });
             io.to(socket.id).emit('message_deleted', { msgId: data.msgId });
           }, data.timer * 1000);
         }
@@ -845,12 +861,14 @@ io.on('connection', (socket: any) => {
       
       const expiresAt = data.timer ? new Date(Date.now() + data.timer * 1000) : null;
       const safeData = { ...data, fromId: socket.userId };
-      if (userSockets.has(safeData.toId)) {
-        io.to(`user_${safeData.toId}`).emit('receive_file', safeData);
+      const toSocketId = userSockets.get(safeData.toId);
+      
+      if (toSocketId) {
+        io.to(toSocketId).emit('receive_file', safeData);
         
         if (data.timer && data.msgId) {
           setTimeout(() => {
-            io.to(`user_${safeData.toId}`).emit('message_deleted', { msgId: data.msgId });
+            io.to(toSocketId).emit('message_deleted', { msgId: data.msgId });
             io.to(socket.id).emit('message_deleted', { msgId: data.msgId });
           }, data.timer * 1000);
         }
@@ -922,7 +940,8 @@ io.on('connection', (socket: any) => {
       await assertParticipant(socket.userId, sessionId);
       
       await CallHistory.create({ from_id: socket.userId, to_id: data.toId, status: data.status });
-      if (userSockets.has(data.toId)) io.to(`user_${data.toId}`).emit('new_call_log');
+      const toSocketId = userSockets.get(data.toId);
+      if (toSocketId) io.to(toSocketId).emit('new_call_log');
       io.to(socket.id).emit('new_call_log');
       ack?.({ ok: true });
     } catch (err: any) {
