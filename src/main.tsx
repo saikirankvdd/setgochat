@@ -1,6 +1,8 @@
 import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
+import { ThemeProvider } from './contexts/ThemeContext.tsx';
+import { ModalProvider } from './contexts/ModalContext.tsx';
 import './index.css';
 
 // Anti-Screenshot and Anti-Copy measures
@@ -22,6 +24,10 @@ window.addEventListener('focus', () => {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ThemeProvider>
+      <ModalProvider>
+        <App />
+      </ModalProvider>
+    </ThemeProvider>
   </StrictMode>,
 );

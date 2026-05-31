@@ -5,6 +5,7 @@ import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { decodeLSB, decodeLSB1Bit } from '../utils/stego';
 import { decryptData, binaryToString } from '../utils/crypto';
+import { useModal } from '../contexts/ModalContext';
 import { saveMessageLocal } from '../utils/db';
 import { AdminDashboard } from './AdminDashboard';
 import { OnboardingModal } from './OnboardingModal';
@@ -32,6 +33,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
   const [pinsReady, setPinsReady] = useState(false);
   const [usersLoaded, setUsersLoaded] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const { showModal } = useModal();
   const [notifications, setNotifications] = useState<any[]>([
     {
       id: 'sec-update',
@@ -340,7 +342,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
        playNotificationSound();
     });
     socket.on('banned', () => {
-        alert("Your account has been permanently suspended.");
+        showModal({ title: 'Account Suspended', message: 'Your account has been permanently suspended.', iconType: 'warning' });
         window.location.reload();
     });
 
@@ -446,7 +448,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
                        if (res.ok) {
                          setBlockedUsers(prev => prev.filter(id => id !== targetUser.id));
                          handleStartChat(targetUser); 
-                         alert("User unblocked successfully.");
+                         showModal({ title: 'Success', message: 'User unblocked successfully.', iconType: 'success' });
                        }
                      } catch(e) { console.error(e); }
                   }}

@@ -7,6 +7,7 @@ import { useState, useEffect } from 'react';
 import { Auth } from './components/Auth';
 import { Dashboard } from './components/Dashboard';
 import { io, Socket } from 'socket.io-client';
+import { getPrivateKeyLocal } from './utils/db';
 
 export type User = {
   id: string | number;
@@ -37,7 +38,8 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           if (data.success) {
-            setUser(data.user);
+            const privateKey = await getPrivateKeyLocal(data.user.id.toString());
+            setUser({ ...data.user, privateKey });
           }
         }
       } catch (err) {

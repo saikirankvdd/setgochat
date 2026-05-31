@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom';
 import { User, getCookie } from '../App';
 import { Search, MoreVertical, MessageSquare, User as UserIcon, Activity, ArrowLeft, Key, Phone, PhoneMissed, PhoneIncoming, PhoneOutgoing, UserPlus, LogOut, X, ShieldAlert, Download, Upload, BookOpen, Bell, Shield, Trash2 } from 'lucide-react';
 import { getAllMessagesLocal, importMessagesLocal } from '../utils/db';
+import { useTheme } from '../contexts/ThemeContext';
+import { useModal } from '../contexts/ModalContext';
 
 interface SidebarProps {
   currentUser: User;
@@ -27,9 +29,10 @@ const BackupModal = ({ onClose, currentUser }: { onClose: () => void, currentUse
   const [endDate, setEndDate] = useState('');
   const [isExporting, setIsExporting] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const { showModal } = useModal();
 
   const handleExport = async () => {
-    if (!startDate || !endDate) return alert("Please select start and end dates.");
+    if (!startDate || !endDate) return showModal({ title: 'Export Error', message: 'Please select start and end dates.', type: 'alert', iconType: 'warning' });
     setIsExporting(true);
     try {
        const msgs = await getAllMessagesLocal();
@@ -38,7 +41,7 @@ const BackupModal = ({ onClose, currentUser }: { onClose: () => void, currentUse
        const filteredMsgs = msgs.filter(m => m.timestamp >= startTs && m.timestamp <= endTs);
        
        if (filteredMsgs.length === 0) {
-          alert("No messages found in that date range.");
+          showModal({ title: 'No Messages', message: 'No messages found in that date range.', type: 'alert' });
           setIsExporting(false);
           return;
        }
@@ -50,10 +53,10 @@ const BackupModal = ({ onClose, currentUser }: { onClose: () => void, currentUse
        a.download = `stegochat_backup_${startDate}_to_${endDate}.stego`;
        a.click();
        URL.revokeObjectURL(url);
-       alert(`Successfully exported ${filteredMsgs.length} messages.`);
+       showModal({ title: 'Export Successful', message: `Successfully exported ${filteredMsgs.length} messages.`, iconType: 'success' });
     } catch(e) {
        console.error(e);
-       alert("Failed to export chats.");
+       showModal({ title: 'Export Failed', message: 'Failed to export chats.', iconType: 'warning' });
     }
     setIsExporting(false);
   };
@@ -68,11 +71,11 @@ const BackupModal = ({ onClose, currentUser }: { onClose: () => void, currentUse
       if (!Array.isArray(msgs)) throw new Error("Invalid backup format");
       
       await importMessagesLocal(msgs);
-      alert(`Successfully imported ${msgs.length} messages!`);
-      window.location.reload(); // reload to reflect new DB state in chat
+      showModal({ title: 'Import Successful', message: `Successfully imported ${msgs.length} messages! Reloading...`, iconType: 'success' });
+      setTimeout(() => window.location.reload(), 1500);
     } catch (e: any) {
       console.error(e);
-      alert("Failed to import chats: " + e.message);
+      showModal({ title: 'Import Failed', message: "Failed to import chats: " + e.message, iconType: 'warning' });
     }
     setIsImporting(false);
   };
@@ -136,6 +139,9 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
   const [deletePassword, setDeletePassword] = useState('');
   const [deleteError, setDeleteError] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
+  const [showBackup, setShowBackup] = useState(false);
+  const { theme, toggleTheme } = useTheme();
+  const { showModal } = useModal();
 
   const handleToggleNotifications = () => {
     setShowNotifications(!showNotifications);
@@ -166,7 +172,7 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
       });
       if (res.ok) {
         setOtpSent(true);
-        alert('OTP sent via email.');
+        showModal({ title: 'OTP Sent', message: 'OTP sent via email.', iconType: 'success' });
       }
     } catch (err) { console.error(err); }
   };
@@ -180,10 +186,10 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
         credentials: 'include'
       });
       if (res.ok) {
-        alert('Password changed successfully!');
         setShowChangePassword(false);
+        showModal({ title: 'Success', message: 'Password changed successfully!', iconType: 'success' });
         setOtpSent(false); setOtp(''); setNewPassword('');
-      } else { alert('Invalid OTP or error changing password'); }
+      } else { showModal({ title: 'Error', message: 'Invalid OTP or error changing password', iconType: 'warning' }); }
     } catch (err) { console.error(err); }
   };
 
@@ -193,10 +199,9 @@ const FeedbackModal = ({ onClose }: { onClose: () => void }) => {
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target.files) return;
-    const files = Array.from(e.target.files) as File[];
+    const files = Array.from(e.target.files || []);
     if (images.length + files.length > 10) {
-       alert("Maximum 10 screenshots allowed.");
+       showModal({ title: 'Upload Limit', message: 'Maximum 10 screenshots allowed.', iconType: 'warning' });
        return;
     }
     files.forEach(file => {
@@ -210,7 +215,7 @@ const FeedbackModal = ({ onClose }: { onClose: () => void }) => {
 
   const handleSubmit = async () => {
     if (!text.trim() && images.length === 0) {
-       alert("Please enter feedback or attach screenshots.");
+       showModal({ title: 'Empty Feedback', message: 'Please enter feedback or attach screenshots.', iconType: 'warning' });
        return;
     }
     setIsSubmitting(true);
@@ -225,14 +230,14 @@ const FeedbackModal = ({ onClose }: { onClose: () => void }) => {
         credentials: 'include'
       });
       if (res.ok) {
-         alert("Thank you! Your feedback has been sent directly to the admin.");
+         showModal({ title: 'Feedback Sent', message: 'Thank you! Your feedback has been sent directly to the admin.', iconType: 'success' });
          onClose();
       } else {
          const data = await res.json();
-         alert("Error: " + data.error);
+         showModal({ title: 'Error', message: "Error: " + data.error, iconType: 'warning' });
       }
     } catch(err) {
-      alert("Error sending feedback.");
+      showModal({ title: 'Error', message: 'Error sending feedback.', iconType: 'warning' });
     } finally {
       setIsSubmitting(false);
     }
@@ -323,6 +328,16 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
             <p className="text-[#e9edef] text-lg mb-6">{currentUser.username}</p>
             <p className="text-[#00a884] text-sm mb-2">Email</p>
             <p className="text-[#e9edef] text-lg mb-6">{currentUser.email}</p>
+            
+            <div className="flex items-center justify-between mt-4 p-3 bg-[#202c33] rounded-lg">
+              <span className="text-[#e9edef] font-medium">Theme Mode</span>
+              <button 
+                onClick={toggleTheme}
+                className="w-12 h-6 rounded-full bg-[#111b21] p-1 flex items-center transition-colors shadow-inner"
+              >
+                <div className={`w-4 h-4 rounded-full transition-transform transform ${theme === 'dark' ? 'bg-[#00a884] translate-x-6' : 'bg-[#e9edef] translate-x-0'}`} />
+              </button>
+            </div>
             
             <div className="mt-8">
               {!showChangePassword ? (

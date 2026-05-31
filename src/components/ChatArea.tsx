@@ -2,7 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { User, getCookie } from '../App';
 import { Socket } from 'socket.io-client';
-import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX, Upload } from 'lucide-react';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX, Upload, Image as ImageIcon } from 'lucide-react';
+import { SharedMediaViewer } from './SharedMediaViewer';
+import { useModal } from '../contexts/ModalContext';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createDynamicCarrier, encodeLSB4Bit, decodeLSB4Bit, createDynamicCarrier4Bit, generateMusicCarrier, encodeLSB1Bit, decodeLSB1Bit } from '../utils/stego';
@@ -49,12 +51,13 @@ const ReportModal = ({ onClose, reportedId }: { onClose: () => void, reportedId:
   const [reason, setReason] = useState('');
   const [images, setImages] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const { showModal } = useModal();
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files) return;
-    const files = Array.from(e.target.files) as File[];
+    const files = Array.from(e.target.files || []);
     if (images.length + files.length > 10) {
-       alert("Maximum 10 screenshots allowed.");
+       showModal({ title: 'Upload Limit', message: 'Maximum 10 screenshots allowed.', iconType: 'warning' });
        return;
     }
     files.forEach(file => {
@@ -68,7 +71,7 @@ const ReportModal = ({ onClose, reportedId }: { onClose: () => void, reportedId:
 
   const handleSubmit = async () => {
     if (!reason.trim()) {
-       alert("Please enter a reason for reporting.");
+       showModal({ title: 'Missing Reason', message: 'Please enter a reason for reporting.', iconType: 'warning' });
        return;
     }
     setIsSubmitting(true);
@@ -83,13 +86,13 @@ const ReportModal = ({ onClose, reportedId }: { onClose: () => void, reportedId:
         credentials: 'include'
       });
       if (res.ok) {
-         alert("Thank you. This user has been reported and details sent securely to the admin.");
+         showModal({ title: 'Report Sent', message: 'Thank you. This user has been reported and details sent securely to the admin.', iconType: 'success' });
          onClose();
       } else {
-         alert("Error submitting report.");
+         showModal({ title: 'Error', message: 'Error submitting report.', iconType: 'warning' });
       }
     } catch(err) {
-      alert("Error submitting report.");
+      showModal({ title: 'Error', message: 'Error submitting report.', iconType: 'warning' });
     } finally {
       setIsSubmitting(false);
     }
@@ -141,6 +144,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
   const [isProcessing, setIsProcessing] = useState(false);
   const [previewMsgs, setPreviewMsgs] = useState<any[]>([]);
   const [exportLog, setExportLog] = useState<string[]>([]);
+  const { showModal } = useModal();
 
   const validatePassword = (pass: string) => {
     if (!pass) return '';
@@ -269,10 +273,12 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
 
   const handleExport = async () => {
     if ((exportOption === 'range_media' || exportOption === 'range_text') && (!startDate || !endDate)) {
-      return alert("Please select start and end dates.");
+      showModal({ title: 'Export Error', message: 'Please select start and end dates.', iconType: 'warning' });
+      return;
     }
     if (!password) {
-      return alert("Please enter an export password to encrypt the backup.");
+      showModal({ title: 'Export Error', message: 'Please enter an export password to encrypt the backup.', iconType: 'warning' });
+      return;
     }
     
     setIsProcessing(true);
@@ -296,7 +302,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
          });
        }
        if (filteredMsgs.length === 0) {
-          alert("No messages found to export.");
+          showModal({ title: 'No Messages', message: 'No messages found to export.', iconType: 'warning' });
           setIsProcessing(false);
           return;
        }
@@ -365,27 +371,23 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        a.download = filename;
        a.click();
        setTimeout(() => URL.revokeObjectURL(url), 1000);
-       
+       showModal({ title: 'Export Successful', message: 'Successfully exported chats.', iconType: 'success' });
     } catch(e) {
        console.error(e);
-       alert("Failed to export chats.");
+       showModal({ title: 'Export Failed', message: 'Failed to export chats.', iconType: 'warning' });
     }
     setIsProcessing(false);
   };
 
   const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!password) {
-      alert("Please enter the import password first.");
+      showModal({ title: 'Import Error', message: 'Please enter the import password first.', iconType: 'warning' });
       e.target.value = '';
       return;
     }
     const file = e.target.files?.[0];
     if (!file) return;
     
-    if (!window.confirm("Do you want to import this chat backup? Messages will be securely merged.")) {
-       e.target.value = '';
-       return;
-    }
     setIsProcessing(true);
     try {
       const arrayBuffer = await file.arrayBuffer();
@@ -467,11 +469,11 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
       if (!Array.isArray(msgs)) throw new Error("Invalid backup format");
       
       await importMessagesLocal(msgs);
-      alert(`Successfully imported ${msgs.length} messages! Reloading...`);
-      window.location.reload(); 
+      showModal({ title: 'Import Successful', message: `Successfully imported ${msgs.length} messages! Reloading...`, iconType: 'success' });
+      setTimeout(() => window.location.reload(), 1500);
     } catch (err: any) {
       console.error(err);
-      alert("Failed to import chats: " + err.message);
+      showModal({ title: 'Import Failed', message: 'Failed to import chats: ' + err.message, iconType: 'warning' });
     }
     setIsProcessing(false);
     e.target.value = '';
@@ -695,6 +697,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [exportLog, setExportLog] = useState<string[]>([]);
   const [isImporting, setIsImporting] = useState(false);
   const [showDataModal, setShowDataModal] = useState(false);
+  const [showSharedMedia, setShowSharedMedia] = useState(false);
+  const { showModal } = useModal();
 
   const [showReportModal, setShowReportModal] = useState(false);
   const [isBlocking, setIsBlocking] = useState(false);
@@ -813,8 +817,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         credentials: 'include'
       });
       if (res.ok) {
-         alert("User blocked successfully.");
-         window.location.reload();
+         showModal({ title: 'User Blocked', message: 'User blocked successfully.', iconType: 'success' });
+         onBack?.();
       }
     } catch(e) { console.error(e); }
     setIsBlocking(false);
@@ -1816,11 +1820,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                       <UserX className="w-4 h-4 mr-2" /> Block User
                    </button>
                    <div className="px-4 py-2 text-xs text-[#8696a0] font-bold uppercase tracking-wider bg-[#111b21]">Chat Duration</div>
-                   <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, 'permanent'); alert('Chat set to Permanent Storage'); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-white text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors">
+                   <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, 'permanent'); showModal({ title: 'Settings Updated', message: 'Chat set to Permanent Storage', iconType: 'success' }); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-white text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors">
                       <ExternalLink className="w-4 h-4 text-[#00a884]" />
                       💾 Keep Permanent
                    </button>
-                   <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, '24h'); alert('Chat set to 24 Hours. Older messages will auto-delete on refresh.'); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-white text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors border-b border-[#202c33]">
+                   <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, '24h'); showModal({ title: 'Settings Updated', message: 'Chat set to 24 Hours. Older messages will auto-delete on refresh.', iconType: 'success' }); setShowDropdown(false); }} className="w-full text-left px-4 py-3 text-white text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors border-b border-[#202c33]">
                       <Clock className="w-4 h-4 text-[#00a884]" />
                       🕒 Keep for 24 Hours
                    </button>
@@ -2143,11 +2147,27 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             </div>
             
             <div className="mt-2 bg-[#111b21] py-2 shadow-sm">
+               <button onClick={() => { setShowSharedMedia(true); setShowUserProfile(false); }} className="w-full text-left px-6 py-4 text-[#00a884] hover:bg-[#202c33] flex items-center gap-4 transition-colors">
+                  <ImageIcon className="w-5 h-5" />
+                  <span className="font-medium">Shared Media</span>
+               </button>
+            </div>
+
+            <div className="mt-2 bg-[#111b21] py-2 shadow-sm">
                <button onClick={() => { setShowReportModal(true); setShowUserProfile(false); }} className="w-full text-left px-6 py-4 text-orange-400 hover:bg-[#202c33] flex items-center gap-4 transition-colors">
                   <Flag className="w-5 h-5" />
                   <span className="font-medium">Report User</span>
                </button>
-               <button onClick={handleBlockUser} className="w-full text-left px-6 py-4 text-red-500 hover:bg-[#202c33] flex items-center gap-4 transition-colors">
+               <button onClick={() => {
+                 showModal({
+                   title: 'Block User',
+                   message: `Are you sure you want to block ${targetUser.username}?`,
+                   type: 'confirm',
+                   iconType: 'warning',
+                   confirmText: 'Block',
+                   onConfirm: handleBlockUser
+                 });
+               }} className="w-full text-left px-6 py-4 text-red-500 hover:bg-[#202c33] flex items-center gap-4 transition-colors">
                   <UserX className="w-5 h-5" />
                   <span className="font-medium">Block User</span>
                </button>
@@ -2155,11 +2175,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
             <div className="mt-2 bg-[#111b21] py-4 shadow-sm">
                <div className="px-6 py-2 text-xs text-[#8696a0] font-bold uppercase tracking-wider">Chat Duration</div>
-               <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, 'permanent'); alert('Chat set to Permanent Storage'); }} className="w-full text-left px-6 py-4 text-white hover:bg-[#202c33] flex items-center gap-4 transition-colors">
+               <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, 'permanent'); showModal({ title: 'Settings Updated', message: 'Chat set to Permanent Storage', iconType: 'success' }); }} className="w-full text-left px-6 py-4 text-white hover:bg-[#202c33] flex items-center gap-4 transition-colors">
                   <ExternalLink className="w-5 h-5 text-[#00a884]" />
                   <span className="font-medium text-sm">Keep Permanent</span>
                </button>
-               <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, '24h'); alert('Chat set to 24 Hours. Older messages will auto-delete on refresh.'); }} className="w-full text-left px-6 py-4 text-white hover:bg-[#202c33] flex items-center gap-4 transition-colors">
+               <button onClick={() => { localStorage.setItem('duration_'+sessionInfo.sessionId, '24h'); showModal({ title: 'Settings Updated', message: 'Chat set to 24 Hours. Older messages will auto-delete on refresh.', iconType: 'success' }); }} className="w-full text-left px-6 py-4 text-white hover:bg-[#202c33] flex items-center gap-4 transition-colors">
                   <Clock className="w-5 h-5 text-[#00a884]" />
                   <span className="font-medium text-sm">Keep for 24 Hours</span>
                </button>
@@ -2197,15 +2217,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                   <span className="font-medium text-sm">Export / Import Chat</span>
                </button>
             </div>
-
-            <div className="mt-2 bg-[#111b21] p-6 shadow-sm">
-              <h3 className="text-[#00a884] text-sm mb-4">Shared Media</h3>
-              <div className="grid grid-cols-3 gap-2">
-                {messages.filter(m => m.file && m.file.type?.startsWith('image/')).map(m => (
-                  <img key={m.id} src={m.file!.data} alt="shared" className="w-full h-24 object-cover rounded" />
-                ))}
-              </div>
-            </div>
           </div>
         </div>
       )}
@@ -2214,6 +2225,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   )}
   {showDataModal && (
     <DataManagementModal onClose={() => setShowDataModal(false)} sessionInfo={sessionInfo} targetUser={targetUser} />
+  )}
+  {showSharedMedia && (
+    <SharedMediaViewer sessionId={sessionInfo.sessionId} pin={sessionInfo.pin} onClose={() => setShowSharedMedia(false)} />
   )}
 
     </div>

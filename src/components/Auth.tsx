@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { User, getCookie } from '../App';
+import { savePrivateKeyLocal } from '../utils/db';
+import { useModal } from '../contexts/ModalContext';
 import { Lock, Mail, User as UserIcon, ShieldCheck, Key, X } from 'lucide-react';
 
 interface AuthProps {
@@ -46,6 +48,7 @@ export function Auth({ onLogin }: AuthProps) {
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [otpSent, setOtpSent] = useState(false);
   const [signupOtpSent, setSignupOtpSent] = useState(false);
+  const { showModal } = useModal();
   
   const [username, setUsername] = useState('');
   const [email, setEmail] = useState('');
@@ -124,13 +127,14 @@ export function Auth({ onLogin }: AuthProps) {
                   }).catch(e => console.error('[Audit] Silent private key vault upgrade update failed:', e));
                }
             }
+            await savePrivateKeyLocal(data.user.id.toString(), privateKey);
             onLogin({ ...data.user, privateKey });
           } catch(err) {
             setError('Vault decryption failed. Please check credentials.');
           }
         } else {
+          showModal({ title: 'Signup Successful', message: 'Signup successful! Please login.', iconType: 'success' });
           setIsLogin(true);
-          alert('Signup successful! Please login.');
         }
       } else {
         setError(data.error || 'Something went wrong');
@@ -160,7 +164,7 @@ export function Auth({ onLogin }: AuthProps) {
       const data = await res.json();
       if (data.success) {
         setSignupOtpSent(true);
-        alert('OTP sent! Please check your email.');
+        showModal({ title: 'OTP Sent', message: 'OTP sent! Please check your email.', iconType: 'success' });
       } else {
         setError(data.error || 'Failed to send OTP');
       }
@@ -189,7 +193,7 @@ export function Auth({ onLogin }: AuthProps) {
         const data = await res.json();
         if (data.success) {
           setOtpSent(true);
-          alert('If an account exists, an OTP has been requested.');
+          showModal({ title: 'OTP Requested', message: 'If an account exists, an OTP has been requested.', iconType: 'info' });
         } else {
           setError(data.error || 'Something went wrong');
         }
@@ -210,7 +214,7 @@ export function Auth({ onLogin }: AuthProps) {
         });
         const data = await res.json();
         if (data.success) {
-          alert('Password changed successfully! You can now login.');
+          showModal({ title: 'Success', message: 'Password changed successfully! You can now login.', iconType: 'success' });
           setIsForgotPassword(false);
           setIsLogin(true);
           setOtpSent(false);

@@ -1,7 +1,7 @@
 // IndexedDB wrapper for local chat storage
 
 const DB_NAME = 'StegoChatDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_NAME = 'messages';
 
 interface DBMessage {
@@ -27,6 +27,9 @@ const openDB = (): Promise<IDBDatabase> => {
         store.createIndex('sessionId', 'sessionId', { unique: false });
         store.createIndex('timestamp', 'timestamp', { unique: false });
       }
+      if (!db.objectStoreNames.contains('keys')) {
+        db.createObjectStore('keys', { keyPath: 'id' });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -41,6 +44,31 @@ export const saveMessageLocal = async (msg: DBMessage): Promise<void> => {
     const store = transaction.objectStore(STORE_NAME);
     const request = store.put(msg);
     request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const savePrivateKeyLocal = async (userId: string, privateKey: string): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('keys', 'readwrite');
+    const store = transaction.objectStore('keys');
+    const request = store.put({ id: userId, privateKey });
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const getPrivateKeyLocal = async (userId: string): Promise<string | null> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('keys', 'readonly');
+    const store = transaction.objectStore('keys');
+    const request = store.get(userId);
+    
+    request.onsuccess = () => {
+      resolve(request.result ? request.result.privateKey : null);
+    };
     request.onerror = () => reject(request.error);
   });
 };
