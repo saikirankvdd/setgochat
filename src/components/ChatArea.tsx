@@ -741,8 +741,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           }
           decryptedMsgs.push({
             id: msg.id,
-            fromId: msg.fromId,
-            toId: msg.toId,
+            fromId: Number(msg.fromId),
+            toId: Number(msg.toId),
             text,
             timestamp: msg.timestamp,
             isSelfDestruct: msg.isSelfDestruct,
@@ -2093,8 +2093,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           </div>
           <div className="flex-1 relative order-last md:order-none w-full md:w-auto mt-2 md:mt-0">
             <input
-              id="chat-message-input"
-              name="chat-message-input"
+              id={`chat-message-input-${targetUser.id}`}
+              name={`chat-message-input-${targetUser.id}`}
               type="text"
               placeholder="Type a secure message..."
               className="w-full bg-[#2a3942] text-[#e9edef] rounded-lg py-3 pl-4 pr-10 focus:outline-none text-[15px] shadow-inner"
