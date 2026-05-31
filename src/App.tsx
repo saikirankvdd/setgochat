@@ -105,8 +105,7 @@ export default function App() {
          showModal({
             title: 'Security Alert',
             message: data.message || 'Your account was signed in on another device. You have been logged out for security.',
-            iconType: 'warning',
-            onConfirm: () => window.location.reload()
+            iconType: 'warning'
          });
       });
 

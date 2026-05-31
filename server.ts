@@ -639,6 +639,16 @@ io.on('connection', (socket: any) => {
        return;
     }
 
+    // Force disconnect any other active socket session for this user:
+    const existingSocketId = userSockets.get(userId);
+    if (existingSocketId && existingSocketId !== socket.id) {
+       const oldSocket = io.sockets.sockets.get(existingSocketId);
+       if (oldSocket) {
+          oldSocket.emit('force_logout', { message: 'Your account was signed in on another device. You have been logged out for your security.' });
+          oldSocket.disconnect(true);
+       }
+    }
+
 
 
     userSockets.set(userId, socket.id);
