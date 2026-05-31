@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { X, Calendar, Download } from 'lucide-react';
+import { X, Calendar, Download, FileText, FileAudio, FileVideo, FileArchive, File as FileIcon } from 'lucide-react';
 import { getMessagesLocal } from '../utils/db';
 import { decryptData } from '../utils/crypto';
 
@@ -14,6 +14,7 @@ interface MediaItem {
   id: string;
   url: string;
   type: string;
+  name: string;
   timestamp: number;
 }
 
@@ -32,11 +33,12 @@ export const SharedMediaViewer: React.FC<SharedMediaViewerProps> = ({ sessionId,
             try {
               const fileDataStr = await decryptData(msg.encryptedFile, pin);
               const fileData = JSON.parse(fileDataStr);
-              if (fileData.base64 && fileData.type.startsWith('image/')) {
+              if (fileData.data) {
                 items.push({
                   id: msg.id,
-                  url: fileData.base64,
-                  type: fileData.type,
+                  url: fileData.data,
+                  type: fileData.type || 'unknown',
+                  name: fileData.name || 'Shared File',
                   timestamp: msg.timestamp
                 });
               }
@@ -92,29 +94,47 @@ export const SharedMediaViewer: React.FC<SharedMediaViewerProps> = ({ sessionId,
             <div key={date} className="mb-8">
               <h3 className="text-[#e9edef] font-medium text-lg mb-4">{date}</h3>
               <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-                {items.map((item) => (
-                  <div key={item.id} className="aspect-square relative group overflow-hidden rounded cursor-pointer bg-[#202c33]">
-                    <img 
-                      src={item.url} 
-                      alt="Shared media" 
-                      className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                      onClick={() => {
-                         const w = window.open();
-                         if (w) w.document.write(`<img src="${item.url}" style="max-width: 100%; margin: auto; display: block;" />`);
-                      }}
-                    />
-                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                {items.map((item) => {
+                  const isImage = item.type.startsWith('image/');
+                  const isVideo = item.type.startsWith('video/');
+                  const isAudio = item.type.startsWith('audio/');
+                  
+                  return (
+                  <div key={item.id} className="aspect-square relative group overflow-hidden rounded cursor-pointer bg-[#202c33] border border-[#2a3942] flex flex-col items-center justify-center">
+                    {isImage ? (
+                      <img 
+                        src={item.url} 
+                        alt={item.name} 
+                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
+                        onClick={() => {
+                           const w = window.open();
+                           if (w) w.document.write(`<img src="${item.url}" style="max-width: 100%; margin: auto; display: block;" />`);
+                        }}
+                      />
+                    ) : (
+                      <div className="flex flex-col items-center justify-center p-2 text-center w-full h-full">
+                         {isVideo ? <FileVideo className="w-10 h-10 text-blue-400 mb-2" /> :
+                          isAudio ? <FileAudio className="w-10 h-10 text-orange-400 mb-2" /> :
+                          item.name.endsWith('.pdf') ? <FileText className="w-10 h-10 text-red-400 mb-2" /> :
+                          item.name.endsWith('.zip') || item.name.endsWith('.rar') ? <FileArchive className="w-10 h-10 text-yellow-400 mb-2" /> :
+                          <FileIcon className="w-10 h-10 text-[#8696a0] mb-2" />}
+                         <span className="text-xs text-[#e9edef] truncate w-full px-2 font-medium" title={item.name}>{item.name}</span>
+                      </div>
+                    )}
+                    <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center backdrop-blur-[2px]">
                       <a 
                         href={item.url} 
-                        download={`media_${item.timestamp}`}
+                        download={item.name}
                         onClick={(e) => e.stopPropagation()}
-                        className="p-2 bg-[#00a884] rounded-full hover:bg-[#06cf9c] transition-colors"
+                        className="p-3 bg-[#00a884] rounded-full hover:bg-[#06cf9c] transition-colors shadow-lg transform translate-y-2 group-hover:translate-y-0 duration-200"
+                        title="Download"
                       >
                         <Download className="w-5 h-5 text-white" />
                       </a>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           ))

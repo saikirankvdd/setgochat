@@ -19,7 +19,7 @@
   --accent-hover: #06cf9c;
   --msg-sent: #d9fdd3;
   --msg-received: #ffffff;
-  --chat-bg: radial-gradient(at 0% 0%, hsla(180, 20%, 95%, 1) 0, transparent 50%), radial-gradient(at 50% 0%, hsla(200, 30%, 90%, 1) 0, transparent 50%), radial-gradient(at 100% 0%, hsla(220, 20%, 95%, 1) 0, transparent 50%);
+  --chat-bg: #efeae2;
 }
 
 .dark {

@@ -1866,15 +1866,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       {/* Messages Area */}
       <div 
         ref={chatContainerRef}
-        className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#0b141a] relative"
+        className="flex-1 overflow-y-auto p-6 space-y-4 relative bg-[var(--chat-bg)]"
         style={{
-          backgroundImage: `
-            radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
-            radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), 
-            radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%)
-          `,
-          backgroundColor: '#0b141a',
-          backgroundSize: '100% 100%'
+          background: 'var(--chat-bg)',
+          backgroundSize: 'cover',
+          backgroundPosition: 'center'
         }}
       >
         {dbSession?.status === 'pending' && dbSession?.initiator_id !== user.id && (
