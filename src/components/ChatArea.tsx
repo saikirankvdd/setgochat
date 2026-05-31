@@ -535,11 +535,11 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                               <div className="flex gap-4">
                                 <div className="flex-1">
                                    <label className="text-xs text-[#8696a0] mb-1 block uppercase font-bold">From Date</label>
-                                   <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-[#111b21] text-[#e9edef] p-2 text-sm rounded outline-none border border-[#2a3942] focus:border-[#00a884]" />
+                                   <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-[#2a3942] text-[#e9edef] p-2 text-sm rounded outline-none border border-[#3a4a54] focus:border-[#00a884]" />
                                 </div>
                                 <div className="flex-1">
                                    <label className="text-xs text-[#8696a0] mb-1 block uppercase font-bold">To Date</label>
-                                   <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-[#111b21] text-[#e9edef] p-2 text-sm rounded outline-none border border-[#2a3942] focus:border-[#00a884]" />
+                                   <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-[#2a3942] text-[#e9edef] p-2 text-sm rounded outline-none border border-[#3a4a54] focus:border-[#00a884]" />
                                 </div>
                               </div>
                            </div>
@@ -1865,12 +1865,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#0b141a] relative"
         style={{
           backgroundImage: `
-            radial-gradient(at 0% 0%, hsla(168, 100%, 8%, 0.4) 0px, transparent 50%),
-            radial-gradient(at 100% 100%, hsla(168, 100%, 6%, 0.5) 0px, transparent 50%),
-            linear-gradient(rgba(32, 44, 51, 0.15) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(32, 44, 51, 0.15) 1px, transparent 1px)
+            radial-gradient(circle at 10% 20%, hsla(168, 60%, 15%, 0.5) 0%, transparent 60%),
+            radial-gradient(circle at 90% 80%, hsla(200, 60%, 15%, 0.5) 0%, transparent 60%),
+            radial-gradient(circle at 50% 50%, hsla(280, 40%, 10%, 0.4) 0%, transparent 60%)
           `,
-          backgroundSize: '100% 100%, 100% 100%, 32px 32px, 32px 32px'
+          backgroundSize: '100% 100%'
         }}
       >
         {dbSession?.status === 'pending' && dbSession?.initiator_id !== user.id && (
@@ -1937,21 +1936,21 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 {/* Dropdown Menu */}
                 {activeMessageMenu === msg.id && (
                   <div 
-                    className={`absolute top-6 w-48 bg-[#233138] rounded-md shadow-xl z-50 overflow-hidden ${
+                    className={`absolute top-6 w-48 bg-[#2a3942] rounded-md shadow-xl z-50 overflow-hidden ${
                       msg.fromId === user.id ? 'left-[-180px]' : 'right-[-180px]'
                     }`}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button 
                       onClick={() => { handleDeleteMessage(msg.id, false); setActiveMessageMenu(null); }}
-                      className="w-full text-left px-4 py-3 text-sm text-[#e9edef] hover:bg-[#111b21] transition-colors"
+                      className="w-full text-left px-4 py-3 text-sm text-[#e9edef] hover:bg-[#3a4a54] transition-colors"
                     >
                       Delete for me
                     </button>
                     {msg.fromId === user.id && (
                       <button 
                         onClick={() => { handleDeleteMessage(msg.id, true); setActiveMessageMenu(null); }}
-                        className="w-full text-left px-4 py-3 text-sm text-red-400 hover:bg-[#111b21] transition-colors border-t border-[#111b21]"
+                        className="w-full text-left px-4 py-3 text-sm text-red-400 hover:bg-[#3a4a54] transition-colors border-t border-[#3a4a54]"
                       >
                         Delete for everyone
                       </button>

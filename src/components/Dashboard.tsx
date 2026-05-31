@@ -144,6 +144,16 @@ export function Dashboard({ user, socket }: DashboardProps) {
   useEffect(() => {
     if (!socket) return;
 
+    socket.on('connect', () => {
+      // Re-register the user on the server after a reconnection
+      socket.emit('register', user.id);
+      
+      // Request any offline messages that arrived while disconnected
+      setTimeout(() => {
+        socket.emit('request_offline_messages');
+      }, 1000);
+    });
+
     socket.on('chat_started', async (data) => {
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
@@ -339,6 +349,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
       socket.off('chat_ready');
       socket.off('request_accepted');
       socket.off('request_declined');
+      socket.off('connect');
       socket.off('new_call_log');
       socket.off('online_users');
       socket.off('session_pins');
