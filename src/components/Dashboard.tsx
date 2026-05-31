@@ -5,6 +5,7 @@ import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { decodeLSB, decodeLSB1Bit } from '../utils/stego';
 import { decryptData, binaryToString } from '../utils/crypto';
+import { saveMessageLocal } from '../utils/db';
 import { AdminDashboard } from './AdminDashboard';
 import { OnboardingModal } from './OnboardingModal';
 import { Shield, Lock, Phone, Video, X } from 'lucide-react';
@@ -114,6 +115,9 @@ export function Dashboard({ user, socket }: DashboardProps) {
 
   const playNotificationSound = () => {
     try {
+      // Browsers require a user gesture before playing audio
+      if (!navigator.userActivation?.hasBeenActive) return;
+      
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
       if (audioCtx.state === 'suspended') {
          audioCtx.resume();
@@ -264,6 +268,23 @@ export function Dashboard({ user, socket }: DashboardProps) {
           if (activeUserIdRef.current !== data.fromId || document.hidden) {
              setUnreadCounts(prev => ({ ...prev, [data.fromId]: (prev[data.fromId] || 0) + 1 }));
              playNotificationSound();
+             
+             // Save message to local DB since ChatArea is not open to handle it
+             if (!data.isSelfDestruct) { // Don't save disappearing messages
+               const expiresAt = undefined; // Dashboard doesn't know duration, ChatArea syncs it later
+               saveMessageLocal({
+                 id: data.msgId || Math.random().toString(36).substr(2, 9),
+                 sessionId: data.sessionId,
+                 fromId: data.fromId.toString(),
+                 toId: user.id.toString(),
+                 encryptedText: isFile ? '' : encryptedText,
+                 encryptedFile: isFile ? data.encryptedFile : undefined,
+                 timestamp: data.timestamp || Date.now(),
+                 isSelfDestruct: !!data.isSelfDestruct,
+                 expiresAt: expiresAt
+               }).catch(e => console.error("Failed to save offline message in Dashboard", e));
+             }
+
              if ('Notification' in window && Notification.permission === 'granted') {
                const sender = usersRef.current.find(u => u.id === data.fromId);
                const senderName = sender ? sender.username : `User ${data.fromId}`;
