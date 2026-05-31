@@ -77,8 +77,8 @@ export async function decryptPINWithPrivateKey(encryptedPinBase64: string, priva
     return new TextDecoder().decode(decBuffer);
   } catch (err) {
     // RSA decryption failed — the session may have been created with a different key pair.
-    // Log quietly and fall back so the UI doesn't break.
-    console.warn('PIN decryption failed (session may predate E2EE key pair):', (err as Error).message);
+    // Handled silently; the user will re-establish fresh keys on next start_chat.
+    console.debug('[E2EE] PIN handshake pending re-establishment for session.');
     return 'DECRYPTION_FAILED';
   }
 }
