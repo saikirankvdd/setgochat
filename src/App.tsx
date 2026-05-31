@@ -8,6 +8,7 @@ import { Auth } from './components/Auth';
 import { Dashboard } from './components/Dashboard';
 import { io, Socket } from 'socket.io-client';
 import { getPrivateKeyLocal } from './utils/db';
+import { useModal } from './contexts/ModalContext';
 
 export type User = {
   id: string | number;
@@ -29,6 +30,7 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const { showModal } = useModal();
 
   // Bootstrap user session from HttpOnly cookie on mount (Finding 1)
   useEffect(() => {
@@ -87,15 +89,26 @@ export default function App() {
 
       newSocket.emit('register');
       
-      newSocket.on('banned', () => {
+      newSocket.on('banned', async () => {
          setUser(null);
-         alert('Your account has been permanently terminated by the Administrator.');
+         try { await fetch('/api/logout', { method: 'POST' }); } catch(e) {}
+         showModal({ 
+            title: 'Account Terminated', 
+            message: 'Your account has been permanently terminated by the Administrator.', 
+            iconType: 'warning',
+            onConfirm: () => window.location.reload()
+         });
       });
 
-      newSocket.on('force_logout', (data) => {
+      newSocket.on('force_logout', async (data) => {
          setUser(null);
-         alert(data.message || 'Your account was signed in on another device. You have been logged out for security.');
-         window.location.reload();
+         try { await fetch('/api/logout', { method: 'POST' }); } catch(e) {}
+         showModal({
+            title: 'Security Alert',
+            message: data.message || 'Your account was signed in on another device. You have been logged out for security.',
+            iconType: 'warning',
+            onConfirm: () => window.location.reload()
+         });
       });
 
       setSocket(newSocket);
