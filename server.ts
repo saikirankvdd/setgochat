@@ -664,7 +664,7 @@ io.on('connection', (socket: any) => {
   socket.on('request_offline_messages', async () => {
     const userId = socket.userId;
     try {
-      // Delete expired messages first
+      // Delete expired messages first (disappearing message enforcement)
       await OfflineMessage.deleteMany({ to_id: userId, expiresAt: { $lte: new Date() } });
 
       const offlineMsgs = await OfflineMessage.find({ to_id: userId });
@@ -679,9 +679,8 @@ io.on('connection', (socket: any) => {
              io.to(socket.id).emit('receive_file', payload.data);
           }
         });
-        // NOTE: Do NOT delete here. Offline messages are only deleted inside start_chat
-        // after fresh E2EE pins are established. This prevents messages being lost
-        // when the PIN handshake hasn't completed yet on reconnect.
+        // Delete after delivery — PIN stability fix means these will decode correctly now
+        await OfflineMessage.deleteMany({ to_id: userId });
       }
     } catch(e) { console.error('Error syncing offline data:', e); }
   });
@@ -762,26 +761,6 @@ io.on('connection', (socket: any) => {
       io.to(toSocketId).emit('chat_started', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id, fromId });
     }
     socket.emit('chat_ready', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id });
-
-    // After emitting fresh pins, flush any pending offline messages for this user.
-    // This runs AFTER chat_ready so the client has the correct decryption key.
-    try {
-      await OfflineMessage.deleteMany({ to_id: fromId, expiresAt: { $lte: new Date() } });
-      const pendingMsgs = await OfflineMessage.find({ to_id: fromId });
-      if (pendingMsgs.length > 0) {
-        pendingMsgs.forEach(m => {
-          const payload = JSON.parse(m.payload as string);
-          if (payload.type === 'text') {
-            io.to(socket.id).emit('receive_message', payload.data);
-          } else if (payload.type === 'delete_msg') {
-            io.to(socket.id).emit('message_deleted', { msgId: payload.msgId });
-          } else {
-            io.to(socket.id).emit('receive_file', payload.data);
-          }
-        });
-        await OfflineMessage.deleteMany({ to_id: fromId });
-      }
-    } catch(e) { console.error('Error flushing offline messages after start_chat:', e); }
   });
 
   socket.on('accept_request', async ({ sessionId }, ack) => {

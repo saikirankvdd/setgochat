@@ -335,20 +335,24 @@ export function Dashboard({ user, socket }: DashboardProps) {
     try {
       if (!user.publicKey || !targetUser.publicKey) return;
       const { encryptPINWithPublicKey } = await import('../utils/e2ee');
-      const myGeneratedPin = Math.floor(100000 + Math.random() * 900000).toString();
-      let pin1, pin2;
 
-      // Use numeric sort to match server-side: [fromId, toId].sort() which is string sort of IDs
-      // Server sorts as strings, so we must match exactly
+      const sId = [String(user.id), String(targetUser.id)].sort().join('-');
+      const existingPin = pinsRef.current[sId];
+      // Reuse the existing PIN if it is valid — this keeps offline messages decodable.
+      // Only mint a fresh PIN for brand-new sessions or when the old one was broken.
+      const isValidPin = existingPin && existingPin !== 'DECRYPTION_FAILED' && existingPin !== 'UNENCRYPTED' && existingPin.length >= 6;
+      const pinToUse = isValidPin ? existingPin : Math.floor(100000 + Math.random() * 900000).toString();
+
       const ids = [String(user.id), String(targetUser.id)].sort();
       const iAmUser1 = ids[0] === String(user.id);
+      let pin1, pin2;
 
       if (iAmUser1) {
-         pin1 = await encryptPINWithPublicKey(myGeneratedPin, user.publicKey);         // user1 slot
-         pin2 = await encryptPINWithPublicKey(myGeneratedPin, targetUser.publicKey);   // user2 slot
+         pin1 = await encryptPINWithPublicKey(pinToUse, user.publicKey);         // user1 slot
+         pin2 = await encryptPINWithPublicKey(pinToUse, targetUser.publicKey);   // user2 slot
       } else {
-         pin1 = await encryptPINWithPublicKey(myGeneratedPin, targetUser.publicKey);   // user1 slot
-         pin2 = await encryptPINWithPublicKey(myGeneratedPin, user.publicKey);         // user2 slot
+         pin1 = await encryptPINWithPublicKey(pinToUse, targetUser.publicKey);   // user1 slot
+         pin2 = await encryptPINWithPublicKey(pinToUse, user.publicKey);         // user2 slot
       }
       socket.emit('start_chat', { toId: targetUser.id, pin1, pin2 });
     } catch (err) { console.error('E2EE Handshake failed', err); }

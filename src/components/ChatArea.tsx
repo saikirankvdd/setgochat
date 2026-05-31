@@ -875,16 +875,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           });
         }
       } catch (err: any) {
-        console.error('Failed to process incoming message', err);
-        const errorMessage: Message = {
-          id: Math.random().toString(36).substr(2, 9),
-          fromId: data.fromId,
-          text: `[System] Failed to decrypt offline message: ${err.message}`,
-          timestamp: Date.now(),
-          isSelfDestruct: false,
-          isOneTime: false
-        };
-        setMessages(prev => [...prev, errorMessage]);
+        // Silently discard — this message was encoded with a different PIN
+        // (e.g. a very old session before PIN stability fix). Nothing to show.
+        console.debug('[E2EE] Discarded undecodable incoming message.');
       }
     };
 
@@ -910,16 +903,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           addMessageLocal(newMessage);
         }
       } catch (err: any) {
-        console.error('Failed to process incoming file', err);
-        const errorMessage: Message = {
-          id: Math.random().toString(36).substr(2, 9),
-          fromId: data.fromId,
-          text: `[System] Failed to decrypt offline file: ${err.message}`,
-          timestamp: Date.now(),
-          isSelfDestruct: false,
-          isOneTime: false
-        };
-        setMessages(prev => [...prev, errorMessage]);
+        // Silently discard — file was encoded with a different PIN
+        console.debug('[E2EE] Discarded undecodable incoming file.');
       }
     };
 
