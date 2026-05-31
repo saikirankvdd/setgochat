@@ -741,8 +741,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           }
           decryptedMsgs.push({
             id: msg.id,
-            fromId: Number(msg.fromId),
-            toId: Number(msg.toId),
+            fromId: msg.fromId,
+            toId: msg.toId,
             text,
             timestamp: msg.timestamp,
             isSelfDestruct: msg.isSelfDestruct,
@@ -1865,10 +1865,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         className="flex-1 overflow-y-auto p-6 space-y-4 bg-[#0b141a] relative"
         style={{
           backgroundImage: `
-            radial-gradient(circle at 10% 20%, hsla(168, 60%, 15%, 0.5) 0%, transparent 60%),
-            radial-gradient(circle at 90% 80%, hsla(200, 60%, 15%, 0.5) 0%, transparent 60%),
-            radial-gradient(circle at 50% 50%, hsla(280, 40%, 10%, 0.4) 0%, transparent 60%)
+            radial-gradient(at 0% 0%, hsla(253,16%,7%,1) 0, transparent 50%), 
+            radial-gradient(at 50% 0%, hsla(225,39%,30%,1) 0, transparent 50%), 
+            radial-gradient(at 100% 0%, hsla(339,49%,30%,1) 0, transparent 50%)
           `,
+          backgroundColor: '#0b141a',
           backgroundSize: '100% 100%'
         }}
       >
