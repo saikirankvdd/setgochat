@@ -829,6 +829,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const handleReceive = async (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
+      // Deduplicate: if this msgId was already processed (e.g. offline re-delivery), skip
+      if (data.msgId) {
+        setMessages(prev => {
+          if (prev.some(m => m.id === data.msgId)) return prev;
+          return prev; // defer actual add to below
+        });
+      }
       try {
         // 1. Receive Audio Carrier (base64)
         const binaryString = atob(data.audioBase64);
@@ -838,8 +845,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
         const audioData = bytes.buffer;
         
-        // 2. Extract Hidden Binary
-        const binary = decodeLSB(audioData);
+        // 2. Extract Hidden Binary — use scattered 1-bit decoder (matches encodeLSB1Bit)
+        const binary = decodeLSB1Bit(audioData, sessionInfo.pin);
         
         // 3. Convert Binary to Encrypted Text
         const encryptedText = binaryToString(binary);
@@ -848,19 +855,24 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         const decrypted = decryptData(encryptedText, sessionInfo.pin);
         
         if (decrypted) {
-          const newMessage: Message = {
-            id: Math.random().toString(36).substr(2, 9),
-            fromId: data.fromId,
-            text: decrypted,
-            timestamp: Date.now(),
-            isSelfDestruct: data.isSelfDestruct,
-            isOneTime: false, // Text is never one-time view
-            timerSeconds: data.timer,
-            isRevealed: true, // Snapchat style: always revealed instantly
-            expiresAt: data.isSelfDestruct ? Date.now() + (data.timer * 1000) : undefined // Start countdown immediately
-          };
-          setMessages(prev => [...prev, newMessage]);
-          addMessageLocal(newMessage);
+          const msgId = data.msgId || Math.random().toString(36).substr(2, 9);
+          // Skip if already in messages (dedup for offline re-delivery)
+          setMessages(prev => {
+            if (prev.some(m => m.id === msgId)) return prev;
+            const newMessage: Message = {
+              id: msgId,
+              fromId: data.fromId,
+              text: decrypted,
+              timestamp: data.timestamp || Date.now(),
+              isSelfDestruct: data.isSelfDestruct,
+              isOneTime: false,
+              timerSeconds: data.timer,
+              isRevealed: true,
+              expiresAt: data.isSelfDestruct ? Date.now() + (data.timer * 1000) : undefined
+            };
+            addMessageLocal(newMessage);
+            return [...prev, newMessage];
+          });
         }
       } catch (err: any) {
         console.error('Failed to process incoming message', err);

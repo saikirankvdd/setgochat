@@ -3,7 +3,7 @@ import { User, getCookie } from '../App';
 import { Socket } from 'socket.io-client';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
-import { decodeLSB } from '../utils/stego';
+import { decodeLSB, decodeLSB1Bit } from '../utils/stego';
 import { decryptData, binaryToString } from '../utils/crypto';
 import { AdminDashboard } from './AdminDashboard';
 import { OnboardingModal } from './OnboardingModal';
@@ -252,7 +252,8 @@ export function Dashboard({ user, socket }: DashboardProps) {
            const binaryString = atob(data.audioBase64);
            const bytes = new Uint8Array(binaryString.length);
            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-           const binary = decodeLSB(bytes.buffer);
+           // Use scattered 1-bit decoder — matches how messages are encoded (encodeLSB1Bit)
+           const binary = decodeLSB1Bit(bytes.buffer, pin);
            const encryptedText = binaryToString(binary);
            previewText = decryptData(encryptedText, pin);
          } catch(e) {}
