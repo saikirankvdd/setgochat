@@ -102,7 +102,6 @@ export default function App() {
 
       newSocket.on('force_logout', async (data) => {
          setUser(null);
-         try { await fetch('/api/logout', { method: 'POST' }); } catch(e) {}
          showModal({
             title: 'Security Alert',
             message: data.message || 'Your account was signed in on another device. You have been logged out for security.',
