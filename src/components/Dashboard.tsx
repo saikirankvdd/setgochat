@@ -250,6 +250,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
        }
 
        let previewText = '';
+       let extractedEncryptedText = '';
        if (isFile) previewText = '📷 Photo or File';
        else {
          try {
@@ -258,8 +259,8 @@ export function Dashboard({ user, socket }: DashboardProps) {
            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
            // Sequential decoder — matches encodeLSB used in handleSendMessage
            const binary = decodeLSB(bytes.buffer);
-           const encryptedText = binaryToString(binary);
-           previewText = decryptData(encryptedText, pin);
+           extractedEncryptedText = binaryToString(binary);
+           previewText = decryptData(extractedEncryptedText, pin);
          } catch(e) {}
        }
 
@@ -277,7 +278,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
                  sessionId: data.sessionId,
                  fromId: data.fromId.toString(),
                  toId: user.id.toString(),
-                 encryptedText: isFile ? '' : encryptedText,
+                 encryptedText: isFile ? '' : extractedEncryptedText,
                  encryptedFile: isFile ? data.encryptedFile : undefined,
                  timestamp: data.timestamp || Date.now(),
                  isSelfDestruct: !!data.isSelfDestruct,

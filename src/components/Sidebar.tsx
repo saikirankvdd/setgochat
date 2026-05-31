@@ -581,6 +581,8 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
         <div className="relative bg-[#202c33] rounded-xl flex items-center px-4 py-2 mt-1">
           <Search className="w-4 h-4 text-[#8696a0] mr-3" />
           <input
+            id="search-users"
+            name="search-users"
             type="text"
             placeholder="Search all users..."
             className="bg-transparent text-[#d1d7db] text-sm w-full focus:outline-none"
