@@ -140,7 +140,7 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
   const [deleteError, setDeleteError] = useState('');
   const [isDeleting, setIsDeleting] = useState(false);
   const [showBackup, setShowBackup] = useState(false);
-  const { theme, toggleTheme } = useTheme();
+  const { theme } = useTheme();
   const { showModal } = useModal();
 
   const handleToggleNotifications = () => {
@@ -328,16 +328,6 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
             <p className="text-[#e9edef] text-lg mb-6">{currentUser.username}</p>
             <p className="text-[#00a884] text-sm mb-2">Email</p>
             <p className="text-[#e9edef] text-lg mb-6">{currentUser.email}</p>
-            
-            <div className="flex items-center justify-between mt-4 p-3 bg-[#202c33] rounded-lg">
-              <span className="text-[#e9edef] font-medium">Theme Mode</span>
-              <button 
-                onClick={toggleTheme}
-                className="w-12 h-6 rounded-full bg-[#111b21] p-1 flex items-center transition-colors shadow-inner"
-              >
-                <div className={`w-4 h-4 rounded-full transition-transform transform ${theme === 'dark' ? 'bg-[#00a884] translate-x-6' : 'bg-[#e9edef] translate-x-0'}`} />
-              </button>
-            </div>
             
             <div className="mt-8">
               {!showChangePassword ? (
