@@ -735,6 +735,8 @@ io.on('connection', (socket: any) => {
     const fromId = socket.userId; // Trusted ID
     const sessionId = [fromId, toId].sort().join('-');
     const [sorted1, sorted2] = [fromId, toId].sort();
+    const sortedPin1 = (fromId.toString() === sorted1.toString()) ? pin1 : pin2;
+    const sortedPin2 = (fromId.toString() === sorted1.toString()) ? pin2 : pin1;
     let session = await Session.findOne({ id: sessionId });
     
     if (!session) {
@@ -743,15 +745,15 @@ io.on('connection', (socket: any) => {
           user1_id: sorted1,
           user2_id: sorted2,
           pin: 'HIDDEN',
-          pin1,
-          pin2,
+          pin1: sortedPin1,
+          pin2: sortedPin2,
           status: 'pending',
           initiator_id: fromId
       });
     } else {
       // Always refresh pin1/pin2 so freshly-encrypted keys replace any stale/mismatched ones
-      session.pin1 = pin1;
-      session.pin2 = pin2;
+      session.pin1 = sortedPin1;
+      session.pin2 = sortedPin2;
       await session.save();
     }
 

@@ -147,7 +147,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
     socket.on('chat_started', async (data) => {
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
-        const encPin = user.id === data.user1_id ? data.pin1 : data.pin2;
+        const encPin = user.id.toString() === data.user1_id ? data.pin1 : data.pin2;
         let decryptedPin = 'UNENCRYPTED';
         if (encPin) {
            decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
@@ -167,7 +167,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
     socket.on('chat_ready', async (data) => {
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
-        const encPin = user.id === data.user1_id ? data.pin1 : data.pin2;
+        const encPin = user.id.toString() === data.user1_id ? data.pin1 : data.pin2;
         let decryptedPin = 'UNENCRYPTED';
         if (encPin) {
            decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
@@ -210,7 +210,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
         await Promise.all(sessionsData.map(async (s) => {
-          const encPin = user.id === s.user1_id ? s.pin1 : s.pin2;
+          const encPin = user.id.toString() === s.user1_id ? s.pin1 : s.pin2;
           try {
             if (encPin) {
               newPins[s.id] = await decryptPINWithPrivateKey(encPin, user.privateKey!);
