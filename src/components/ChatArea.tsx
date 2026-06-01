@@ -859,6 +859,32 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         const decrypted = decryptData(encryptedText, sessionInfo.pin);
         
         if (decrypted) {
+          // --- STEGANOGRAPHIC SIGNALING INTERCEPTION ---
+          try {
+            if (decrypted.includes('"type":"stego_call_offer"')) {
+              const parsed = JSON.parse(decrypted);
+              if (parsed.type === 'stego_call_offer') {
+                handleCallOffer({ ...parsed, fromId: data.fromId, sessionId: sessionInfo.sessionId });
+                return; // Do not show in UI
+              }
+            } else if (decrypted.includes('"type":"stego_call_answer"')) {
+              const parsed = JSON.parse(decrypted);
+              if (parsed.type === 'stego_call_answer') {
+                handleCallAnswer({ ...parsed, fromId: data.fromId, sessionId: sessionInfo.sessionId });
+                return; // Do not show in UI
+              }
+            } else if (decrypted.includes('"type":"stego_call_ice_candidate"')) {
+              const parsed = JSON.parse(decrypted);
+              if (parsed.type === 'stego_call_ice_candidate') {
+                handleIceCandidate({ ...parsed, fromId: data.fromId, sessionId: sessionInfo.sessionId });
+                return; // Do not show in UI
+              }
+            }
+          } catch (e) {
+             // Not JSON signaling, continue as normal text message
+          }
+          // ---------------------------------------------
+          
           const msgId = data.msgId || Math.random().toString(36).substr(2, 9);
           // Skip if already in messages (dedup for offline re-delivery)
           setMessages(prev => {
@@ -1060,6 +1086,36 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     return `${m}:${s}`;
   };
 
+  const sendStegoSignaling = (payloadObj: any, toId: string) => {
+    try {
+      const jsonStr = JSON.stringify(payloadObj);
+      const encrypted = encryptData(jsonStr, sessionInfo.pin);
+      const binary = stringToBinary(encrypted);
+      const carrier = createDynamicCarrier(binary.length);
+      const stegoAudio = encodeLSB(carrier, binary);
+      
+      const bytes = new Uint8Array(stegoAudio);
+      let binaryStr = '';
+      for (let i = 0; i < bytes.byteLength; i++) {
+        binaryStr += String.fromCharCode(bytes[i]);
+      }
+      const base64 = btoa(binaryStr);
+
+      socket.emit('send_message', {
+        sessionId: sessionInfo.sessionId,
+        fromId: user.id,
+        toId: toId,
+        audioBase64: base64,
+        isSelfDestruct: false,
+        isOneTime: false,
+        timer: 0
+      });
+      console.log(`[Stego-Signaling] Sent covert ${payloadObj.type} via audio LSB`);
+    } catch (e) {
+      console.error("[Stego-Signaling] Failed to send", e);
+    }
+  };
+
   const startCall = async (withVideo: boolean = false) => {
     try {
       pendingCandidates.current = [];
@@ -1107,11 +1163,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
       peerConnectionRef.current.onicecandidate = (event) => {
         if (event.candidate) {
-          socket.emit('call_ice_candidate', {
-            sessionId: sessionInfo.sessionId,
-            candidate: event.candidate,
-            toId: targetUser.id
-          });
+          sendStegoSignaling({
+            type: 'stego_call_ice_candidate',
+            candidate: event.candidate
+          }, targetUser.id);
         }
       };
 
@@ -1122,14 +1177,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       const offer = await peerConnectionRef.current.createOffer();
       await peerConnectionRef.current.setLocalDescription(offer);
 
-      socket.emit('call_offer', {
-        sessionId: sessionInfo.sessionId,
+      sendStegoSignaling({
+        type: 'stego_call_offer',
         offer: offer,
-        fromId: user.id,
-        fromName: user.username,
-        toId: targetUser.id,
         withVideo
-      });
+      }, targetUser.id);
     } catch (err) {
       console.error('Error starting call:', err);
       if (!navigator.mediaDevices) {
@@ -1156,11 +1208,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       const answer = await peerConnectionRef.current!.createAnswer();
       await peerConnectionRef.current!.setLocalDescription(answer);
 
-      socket.emit('call_answer', {
-        sessionId: sessionInfo.sessionId,
-        answer: answer,
-        toId: callerId || targetUser.id
-      });
+      sendStegoSignaling({
+        type: 'stego_call_answer',
+        answer: answer
+      }, callerId || targetUser.id);
 
       setCallState('connected');
       
