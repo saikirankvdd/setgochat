@@ -641,10 +641,10 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                       </div>
                       
                       <div className="w-full bg-[#202c33] p-6 rounded-xl border border-[#2a3942] space-y-6">
-                         <div>
-                            <label className="text-xs text-[#8696a0] mb-2 block uppercase font-bold">Import Password</label>
-                            <input type="password" placeholder="Enter file password" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-[#111b21] text-[#e9edef] p-3 text-sm rounded outline-none border border-[#2a3942] focus:border-[#00a884]" />
-                         </div>
+                          <div>
+                             <label htmlFor="import-password" className="text-xs text-[#8696a0] mb-2 block uppercase font-bold">Import Password</label>
+                             <input id="import-password" name="importPassword" type="password" placeholder="Enter file password" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-[#111b21] text-[#e9edef] p-3 text-sm rounded outline-none border border-[#2a3942] focus:border-[#00a884]" />
+                          </div>
                          
                          <label className={`w-full py-4 ${!password ? 'bg-[#111b21] opacity-50 cursor-not-allowed border-[#2a3942]' : 'bg-[#2a3942] hover:bg-[#3a4952] cursor-pointer border-[#00a884] shadow-lg'} text-[#e9edef] border border-dashed rounded-xl flex flex-col items-center justify-center transition-all`}>
                             {isProcessing ? 'Importing...' : (
@@ -1349,29 +1349,35 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             isSelfDestruct: snapchatMode,
             isOneTime: oneTimeView,
             timer: timer
-          });
-
-          const newMsg: Message = {
-            id: Math.random().toString(36).substr(2, 9),
-            fromId: user.id,
-            text: '',
-            timestamp: Date.now(),
-            isSelfDestruct: snapchatMode,
-            isOneTime: oneTimeView,
-            timerSeconds: timer,
-            isRevealed: !(snapchatMode || oneTimeView),
-            expiresAt: undefined,
-            file: {
-              name: file.name,
-              type: file.type,
-              data: base64Data
+          }, (response: any) => {
+            setIsProcessing(false);
+            if (fileInputRef.current) fileInputRef.current.value = '';
+            
+            if (response?.ok) {
+              const newMsg: Message = {
+                id: Math.random().toString(36).substr(2, 9),
+                fromId: user.id,
+                text: '',
+                timestamp: Date.now(),
+                isSelfDestruct: snapchatMode,
+                isOneTime: oneTimeView,
+                timerSeconds: timer,
+                isRevealed: !(snapchatMode || oneTimeView),
+                expiresAt: undefined,
+                file: {
+                  name: file.name,
+                  type: file.type,
+                  data: base64Data
+                }
+              };
+              setMessages(prev => [...prev, newMsg]);
+              addMessageLocal(newMsg);
+            } else {
+              alert('Failed to send file: ' + (response?.error || 'Unknown error'));
             }
-          };
-          setMessages(prev => [...prev, newMsg]);
-          addMessageLocal(newMsg);
+          });
         } catch (err) {
           console.error(err);
-        } finally {
           setIsProcessing(false);
           if (fileInputRef.current) fileInputRef.current.value = '';
         }
@@ -1427,29 +1433,33 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 isSelfDestruct: snapchatMode,
                 isOneTime: oneTimeView,
                 timer: timer
-              });
-
-              const newMsg: Message = {
-                id: Math.random().toString(36).substr(2, 9),
-                fromId: user.id,
-                text: '',
-                timestamp: Date.now(),
-                isSelfDestruct: snapchatMode,
-                isOneTime: oneTimeView,
-                timerSeconds: timer,
-                isRevealed: !(snapchatMode || oneTimeView),
-                expiresAt: undefined,
-                file: {
-                  name: 'Voice Message.webm',
-                  type: 'audio/webm',
-                  data: base64Data
+              }, (response: any) => {
+                setIsProcessing(false);
+                if (response?.ok) {
+                  const newMsg: Message = {
+                    id: Math.random().toString(36).substr(2, 9),
+                    fromId: user.id,
+                    text: '',
+                    timestamp: Date.now(),
+                    isSelfDestruct: snapchatMode,
+                    isOneTime: oneTimeView,
+                    timerSeconds: timer,
+                    isRevealed: !(snapchatMode || oneTimeView),
+                    expiresAt: undefined,
+                    file: {
+                      name: 'Voice Message.webm',
+                      type: 'audio/webm',
+                      data: base64Data
+                    }
+                  };
+                  setMessages(prev => [...prev, newMsg]);
+                  addMessageLocal(newMsg);
+                } else {
+                  alert('Failed to send voice message: ' + (response?.error || 'Unknown error'));
                 }
-              };
-              setMessages(prev => [...prev, newMsg]);
-              addMessageLocal(newMsg);
+              });
             } catch (err) {
               console.error(err);
-            } finally {
               setIsProcessing(false);
             }
           }, 50);
