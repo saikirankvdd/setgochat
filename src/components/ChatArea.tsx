@@ -536,12 +536,12 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
                               <h3 className="text-white font-medium mb-2 border-b border-[#2a3942] pb-2">Date Range</h3>
                               <div className="flex gap-4">
                                 <div className="flex-1">
-                                   <label className="text-xs text-[#8696a0] mb-1 block uppercase font-bold">From Date</label>
-                                   <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-[#2a3942] text-[#e9edef] p-2 text-sm rounded outline-none border border-[#3a4a54] focus:border-[#00a884]" />
+                                   <label htmlFor="export-start-date" className="text-xs text-[#8696a0] mb-1 block uppercase font-bold">From Date</label>
+                                   <input id="export-start-date" name="startDate" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="w-full bg-[#2a3942] text-[#e9edef] p-2 text-sm rounded outline-none border border-[#3a4a54] focus:border-[#00a884]" />
                                 </div>
                                 <div className="flex-1">
-                                   <label className="text-xs text-[#8696a0] mb-1 block uppercase font-bold">To Date</label>
-                                   <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-[#2a3942] text-[#e9edef] p-2 text-sm rounded outline-none border border-[#3a4a54] focus:border-[#00a884]" />
+                                   <label htmlFor="export-end-date" className="text-xs text-[#8696a0] mb-1 block uppercase font-bold">To Date</label>
+                                   <input id="export-end-date" name="endDate" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="w-full bg-[#2a3942] text-[#e9edef] p-2 text-sm rounded outline-none border border-[#3a4a54] focus:border-[#00a884]" />
                                 </div>
                               </div>
                            </div>
@@ -1835,6 +1835,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                      </div>
                      <div className="flex items-center gap-2">
                        <select 
+                         id="chat-timer-select"
+                         name="chatTimer"
                          className="bg-[#111b21] text-xs font-bold text-orange-400 border border-[#3b4a54] rounded-md px-1 py-1 outline-none cursor-pointer"
                          value={timer}
                          onChange={(e) => setTimer(Number(e.target.value))}

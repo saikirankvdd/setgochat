@@ -270,7 +270,7 @@ const allowedOrigins = process.env.NODE_ENV === 'production'
 
 const io = new Server(httpServer, {
   cors: { origin: allowedOrigins, credentials: true },
-  maxHttpBufferSize: 1e6 // 1 MB transport cap (audit Finding 2 — per-event limits enforced by EVENT_SIZE_LIMITS middleware)
+  maxHttpBufferSize: 2e8 // 200 MB transport cap
 });
 
 // Helper to escape regex values to prevent ReDoS
@@ -617,7 +617,7 @@ io.use((socket: any, next) => {
 // Event Size Limits config (Finding 2)
 const EVENT_SIZE_LIMITS: Record<string, number> = {
   send_message:      50000,   // 50 KB
-  send_file:         900000,  // 900 KB (generous audio file stego size)
+  send_file:         200000000,  // 200 MB
   call_offer:        25000,
   call_answer:       25000,
   call_ice_candidate: 10000,
