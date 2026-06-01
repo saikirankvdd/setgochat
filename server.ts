@@ -357,8 +357,7 @@ app.post('/api/signup', authLimiter, async (req: any, res: any, next: any) => {
       return res.status(400).json({ error: 'Invalid or incorrect OTP. Please request a new one.' });
   }
 
-  try {
-    const hashedPassword = bcrypt.hashSync(password, 10);
+  const hashedPassword = bcrypt.hashSync(password, 10);
     const newUser = await User.create({
         username, email, password: hashedPassword,
         public_key: publicKey || 'ADMIN', 
