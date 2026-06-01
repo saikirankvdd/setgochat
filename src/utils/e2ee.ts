@@ -38,18 +38,6 @@ export async function encryptPINWithPublicKey(pin: string, publicKeyBase64: stri
 }
 
 export async function decryptPINWithPrivateKey(encryptedPinBase64: string, privateKeyBase64: string): Promise<string> {
-  // --- Legacy PIN detection ---
-  // Old sessions stored a raw plain-text string as the PIN (before RSA E2EE was added).
-  // A proper RSA-OAEP ciphertext, when base64-encoded, will always be valid base64.
-  // If atob fails, the value is a legacy plain-text PIN — return it directly so old
-  // chat messages continue to decrypt correctly after a hard refresh.
-  try {
-    atob(encryptedPinBase64);
-  } catch {
-    // Not valid base64 → this is a legacy plain-text PIN, use it as-is.
-    return encryptedPinBase64;
-  }
-
   // --- New RSA-OAEP decryption path ---
   try {
     const binaryDerString = atob(privateKeyBase64);
@@ -102,13 +90,8 @@ export async function encryptPrivateKeyWithPassword(privateKey: string, password
 
 // Decrypt Private Key with User's Login Password when they login, with legacy fallback
 export async function decryptPrivateKeyWithPassword(stored: string, password: string): Promise<{ key: string; upgraded: boolean }> {
-  // Legacy CryptoJS format — does NOT start with '{'
   if (!stored.startsWith('{')) {
-    const CryptoJS = (await import('crypto-js')).default;
-    const bytes = CryptoJS.AES.decrypt(stored, password);
-    const key = bytes.toString(CryptoJS.enc.Utf8);
-    if (!key) throw new Error('Wrong password');
-    return { key, upgraded: true }; // Signal to re-encrypt/upgrade to PBKDF2 + AES-GCM
+    throw new Error('KEY_VAULT_UPGRADE_REQUIRED');
   }
   const { salt, iv, ct } = JSON.parse(stored);
   const dec  = (b64: string) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));

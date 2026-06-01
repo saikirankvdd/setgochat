@@ -19,6 +19,7 @@ import rateLimit from 'express-rate-limit';
 import jwt from 'jsonwebtoken';
 import { body, validationResult } from 'express-validator';
 import cookieParser from 'cookie-parser';
+import { z } from 'zod';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import 'dotenv/config';
 
@@ -280,55 +281,64 @@ app.use(express.json({ limit: '2mb' })); // Reduced from 100MB to prevent DoS
 const upload = multer({ dest: 'uploads/' });
 
 // Auth Routes
-app.post('/api/request-register-otp', authLimiter, [
-  body('email').isEmail().trim().toLowerCase().withMessage('Invalid email provided.')
-], async (req: any, res: any) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ errors: errors.array() });
-  const { email } = req.body;
-  if (!email) return res.status(400).json({ error: 'Email required' });
-  
-  if (email.toLowerCase() === 'saikirankvdd13@gmail.com') {
-     return res.status(400).json({ error: 'Cannot register using admin email.' });
-  }
+const registerOtpSchema = z.object({
+  email: z.string().trim().email().toLowerCase(),
+});
 
-  const existing = await User.findOne({ email: new RegExp(`^${escapeRegex(email)}$`, 'i') });
-  if (existing) {
-     return res.status(400).json({ error: 'Email already registered.' });
-  }
-
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  registerOtps.set(email, otp);
-
-  if (!process.env.EMAILJS_PRIVATE_KEY) {
-      console.log(`[Local fallback] Registration OTP for ${email}: ${otp}`);
-      return res.json({ success: true, message: 'OTP sent. Please check your email.' });
-  }
-
+app.post('/api/request-register-otp', authLimiter, async (req: any, res: any, next: any) => {
   try {
+    const parsed = registerOtpSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid email provided.' });
+    const { email } = parsed.data;
+    
+    if (email === 'saikirankvdd13@gmail.com') {
+       return res.status(400).json({ error: 'Cannot register using admin email.' });
+    }
+
+    const existing = await User.findOne({ email: new RegExp(`^${escapeRegex(email)}$`, 'i') });
+    if (existing) {
+       return res.status(400).json({ error: 'Email already registered.' });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    registerOtps.set(email, otp);
+
+    if (!process.env.EMAILJS_PRIVATE_KEY) {
+        console.log(`[Local fallback] Registration OTP for ${email}: ${otp}`);
+        return res.json({ success: true, message: 'OTP sent. Please check your email.' });
+    }
+
     await sendEmailJS(email, otp, false);
     console.log(`[Email System] Registration OTP sent via EmailJS securely to ${email}`);
     res.json({ success: true, message: 'OTP sent to email successfully' });
   } catch (error: any) {
-    console.error('[Audit] request-register-otp email failure:', { email, error: error.message });
-    res.status(502).json({ error: 'Unable to send verification email. Please try again later.' });
+    console.error('[Audit] request-register-otp email failure:', { email: req.body.email, error: error.message });
+    next(error);
   }
 });
 
-app.post('/api/signup', authLimiter, [
-  body('email').isEmail().trim().toLowerCase(),
-  body('username').trim().isLength({ min: 3, max: 30 }).escape() // Prevent XSS!
-], async (req: any, res: any) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) return res.status(400).json({ error: 'Invalid input data detected.' });
+const signupSchema = z.object({
+  username: z.string().trim().min(3).max(30),
+  email: z.string().trim().email().toLowerCase(),
+  password: z.string().min(6),
+  otp: z.string().min(6).max(6),
+  publicKey: z.string().optional(),
+  encryptedPrivateKey: z.string().optional()
+});
 
-  const exactUsername = await User.findOne({ username: new RegExp(`^${escapeRegex(req.body.username)}$`, 'i') });
+app.post('/api/signup', authLimiter, async (req: any, res: any, next: any) => {
+  try {
+    const parsed = signupSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid input data detected.' });
+    
+    const { username, email, password, otp, publicKey, encryptedPrivateKey } = parsed.data;
+
+    const exactUsername = await User.findOne({ username: new RegExp(`^${escapeRegex(username)}$`, 'i') });
   if (exactUsername) return res.status(400).json({ error: 'Username already taken.' });
 
-  const isBanned = await BannedEmail.findOne({ email: new RegExp(`^${escapeRegex(req.body.email)}$`, 'i') });
+  const isBanned = await BannedEmail.findOne({ email: new RegExp(`^${escapeRegex(email)}$`, 'i') });
   if (isBanned) return res.status(403).json({ error: 'System Policy Block: This email has been permanently banned from StegoChat.' });
 
-  const { username, email, password, otp, publicKey, encryptedPrivateKey } = req.body;
   if (!publicKey || !encryptedPrivateKey) {
      if (email !== 'saikirankvdd13@gmail.com') return res.status(400).json({ error: 'E2EE Keys are required.' });
   }
@@ -359,20 +369,29 @@ app.post('/api/signup', authLimiter, [
     if (error.code === 11000) {
         return res.status(400).json({ error: 'Username or Email already exists.' });
     }
-    res.status(400).json({ error: error.message });
+    next(error);
   }
 });
 
-app.post('/api/login', authLimiter, async (req: any, res: any) => {
-  const { username, password } = req.body;
-  const safeUsername = (username || '').trim();
-  
-  const user = await User.findOne({ 
-      $or: [
-          { username: new RegExp(`^${escapeRegex(safeUsername)}$`, 'i') }, 
-          { email: new RegExp(`^${escapeRegex(safeUsername)}$`, 'i') }
-      ] 
-  });
+const loginSchema = z.object({
+  username: z.string().trim().min(1).max(254),
+  password: z.string().min(1).max(1024),
+});
+
+app.post('/api/login', authLimiter, async (req: any, res: any, next: any) => {
+  try {
+    const parsed = loginSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ error: 'Invalid request format.' });
+    }
+    const { username, password } = parsed.data;
+    
+    const user = await User.findOne({ 
+        $or: [
+            { username: new RegExp(`^${escapeRegex(username)}$`, 'i') }, 
+            { email: new RegExp(`^${escapeRegex(username)}$`, 'i') }
+        ] 
+    });
   
   if (user && user.password && bcrypt.compareSync(password, user.password)) {
     const isAdmin = (user.email || '').toLowerCase() === 'saikirankvdd13@gmail.com';
@@ -462,64 +481,77 @@ app.post('/api/login', authLimiter, async (req: any, res: any) => {
     }
     res.status(401).json({ error: 'Invalid credentials' });
   }
+  } catch (err: any) {
+    next(err);
+  }
 });
 
 
 // Socket.io Logic
 const userSockets = new Map<string, string>();
 const otps = new Map<string, string>();
+const requestOtpSchema = z.object({
+  emailOrUsername: z.string().trim().min(1).max(254),
+});
 
-app.post('/api/request-otp', authLimiter, async (req: any, res: any) => {
-  const { emailOrUsername } = req.body;
-  if (!emailOrUsername) return res.status(400).json({ error: 'Username or email required' });
-  
-  const user = await User.findOne({
-      $or: [
-          { username: new RegExp(`^${escapeRegex(emailOrUsername)}$`, 'i') }, 
-          { email: new RegExp(`^${escapeRegex(emailOrUsername)}$`, 'i') }
-      ] 
-  });
-  
-  if (!user) {
-    // Return success anyway to prevent user enumeration
-    return res.json({ success: true, message: 'If an account exists, an OTP has been sent.' });
-  }
-
-  // Alert active socket if someone requests a reset OTP
-  const activeSocketId = userSockets.get(user._id.toString());
-  if (activeSocketId) {
-    io.to(activeSocketId).emit('security_alert', {
-      type: 'otp_attempt',
-      title: 'Security Alert',
-      message: 'Someone requested a password reset OTP for your account.'
-    });
-  }
-
-  const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  otps.set(user._id.toString(), otp);
-  
-  if (!process.env.EMAILJS_PRIVATE_KEY) {
-      console.log(`\n========================================`);
-      console.log(`[ADMIN ALERT] Password Reset Requested for ${user.username} (ID: ${user._id}). OTP: ${otp}`);
-      console.log(`========================================\n`);
-      return res.json({ success: true });
-  }
-
+app.post('/api/request-otp', authLimiter, async (req: any, res: any, next: any) => {
   try {
+    const parsed = requestOtpSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Username or email required' });
+    const { emailOrUsername } = parsed.data;
+    
+    const user = await User.findOne({
+        $or: [
+            { username: new RegExp(`^${escapeRegex(emailOrUsername)}$`, 'i') }, 
+            { email: new RegExp(`^${escapeRegex(emailOrUsername)}$`, 'i') }
+        ] 
+    });
+    
+    if (!user) {
+      // Return success anyway to prevent user enumeration
+      return res.json({ success: true, message: 'If an account exists, an OTP has been sent.' });
+    }
+
+    // Alert active socket if someone requests a reset OTP
+    const activeSocketId = userSockets.get(user._id.toString());
+    if (activeSocketId) {
+      io.to(activeSocketId).emit('security_alert', {
+        type: 'otp_attempt',
+        title: 'Security Alert',
+        message: 'Someone requested a password reset OTP for your account.'
+      });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    otps.set(user._id.toString(), otp);
+    
+    if (!process.env.EMAILJS_PRIVATE_KEY) {
+        console.log(`[Local fallback] Password reset OTP for ${user.email}: ${otp}`);
+        return res.json({ success: true, message: 'OTP sent successfully.' });
+    }
+
     await sendEmailJS(user.email as string, otp, true);
     console.log(`[Email System] Password Reset OTP sent securely via EmailJS to ${user.email}`);
-    res.json({ success: true });
+    res.json({ success: true, message: 'OTP sent successfully' });
   } catch (error: any) {
-    console.error('[Audit] request-otp email failure:', { emailOrUsername, error: error.message });
-    res.status(502).json({ error: 'Unable to send verification email. Please try again later.' });
+    console.error('[Audit] request-otp email failure:', { error: error.message });
+    next(error);
   }
 });
 
-app.post('/api/change-password', authLimiter, async (req: any, res: any) => {
-  const { emailOrUsername, otp, newPassword } = req.body;
-  if (!emailOrUsername || !otp || !newPassword) return res.status(400).json({ error: 'Missing fields' });
+const changePasswordSchema = z.object({
+  emailOrUsername: z.string().trim().min(1).max(254),
+  otp: z.string().min(6).max(6),
+  newPassword: z.string().min(6)
+});
 
-  const user = await User.findOne({
+app.post('/api/change-password', authLimiter, async (req: any, res: any, next: any) => {
+  try {
+    const parsed = changePasswordSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Missing fields' });
+    const { emailOrUsername, otp, newPassword } = parsed.data;
+
+    const user = await User.findOne({
       $or: [
           { username: new RegExp(`^${escapeRegex(emailOrUsername)}$`, 'i') }, 
           { email: new RegExp(`^${escapeRegex(emailOrUsername)}$`, 'i') }
@@ -539,6 +571,9 @@ app.post('/api/change-password', authLimiter, async (req: any, res: any) => {
     res.json({ success: true });
   } else {
     res.status(400).json({ error: 'Invalid or incorrect OTP. Please request a new one.' });
+  }
+  } catch (error: any) {
+    next(error);
   }
 });
 
@@ -1368,6 +1403,17 @@ app.get('/api/me', verifyAuth, async (req: any, res: any) => {
    }
 });
 
+app.get('/robots.txt', (req, res) => {
+  res.type('text/plain').send('User-agent: *\nDisallow:\n');
+});
+
+app.get('/.well-known/security.txt', (req, res) => {
+  res.type('text/plain').send([
+    'Contact: mailto:saikirankvdd13@gmail.com',
+    'Preferred-Languages: en',
+  ].join('\n'));
+});
+
 // Vite Integration & Server Start
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -1384,11 +1430,21 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
+    app.use('/assets', express.static(path.join(distPath, 'assets'), { fallthrough: false }));
     app.use(express.static(distPath));
     app.get('*', (req, res) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  // Global Error Handler
+  app.use((err: any, req: any, res: any, next: any) => {
+    console.error(`[Global Error] ${req.path}`, err);
+    if (err instanceof z.ZodError) {
+      return res.status(400).json({ error: 'Invalid input data', details: err.errors });
+    }
+    res.status(err.status || 500).json({ error: 'Internal server error' });
+  });
 
   const PORT = process.env.PORT ? Number(process.env.PORT) : 5000;
   httpServer.listen(PORT, '0.0.0.0', () => {
