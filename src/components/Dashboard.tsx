@@ -346,6 +346,74 @@ export function Dashboard({ user, socket }: DashboardProps) {
         window.location.reload();
     });
 
+    socket.on('device_sync_request', async (data: { fromSocketId: string, publicKey: string }) => {
+        showModal({
+            title: 'New Device Login Detected',
+            message: 'A new device is requesting your secure session and chat history. Do you want to transfer it?',
+            type: 'confirm',
+            iconType: 'warning',
+            confirmText: 'Approve Sync',
+            cancelText: 'Deny',
+            onConfirm: async () => {
+                try {
+                    const { getAllMessagesLocal, getPrivateKeyLocal } = await import('../utils/db');
+                    const { encryptDataWithPublicKey } = await import('../utils/e2ee');
+                    
+                    const privateKey = await getPrivateKeyLocal(user.id.toString());
+                    const messages = await getAllMessagesLocal();
+                    const pins = pinsRef.current;
+
+                    const payloadString = JSON.stringify({ privateKey, messages, pins });
+                    const encryptedPayload = await encryptDataWithPublicKey(payloadString, data.publicKey);
+
+                    socket.emit('device_sync_payload', {
+                        toSocketId: data.fromSocketId,
+                        payload: encryptedPayload
+                    });
+                    
+                    setSystemAlert('Secure session successfully transferred to new device.');
+                    setTimeout(() => setSystemAlert(null), 3000);
+                } catch (e) {
+                    console.error('Failed to sync device:', e);
+                }
+            }
+        });
+    });
+
+    socket.on('device_sync_payload', async (data: { payload: string }) => {
+        try {
+            // Decrypt the payload with our temporary private key
+            const { decryptDataWithPrivateKey } = await import('../utils/e2ee');
+            const tempPrivateKey = sessionStorage.getItem('temp_sync_private_key');
+            if (!tempPrivateKey) return;
+
+            const decryptedString = await decryptDataWithPrivateKey(data.payload, tempPrivateKey);
+            const { privateKey, messages, pins } = JSON.parse(decryptedString);
+
+            const { savePrivateKeyLocal, importMessagesLocal } = await import('../utils/db');
+            if (privateKey) await savePrivateKeyLocal(user.id.toString(), privateKey);
+            if (messages) await importMessagesLocal(messages);
+            
+            // Clean up temporary keys
+            sessionStorage.removeItem('temp_sync_private_key');
+            sessionStorage.removeItem('temp_sync_public_key');
+
+            showModal({
+                title: 'Sync Complete',
+                message: 'Your chat history and keys have been successfully restored! Reloading...',
+                iconType: 'success'
+            });
+            setTimeout(() => window.location.reload(), 2000);
+        } catch (e) {
+            console.error('Failed to process sync payload:', e);
+            showModal({
+                title: 'Sync Failed',
+                message: 'Failed to restore chat history. The payload may be corrupted.',
+                iconType: 'warning'
+            });
+        }
+    });
+
     return () => {
       socket.off('chat_started');
       socket.off('chat_ready');
@@ -362,6 +430,8 @@ export function Dashboard({ user, socket }: DashboardProps) {
       socket.off('system_alert');
       socket.off('security_alert');
       socket.off('banned');
+      socket.off('device_sync_request');
+      socket.off('device_sync_payload');
     };
   }, [socket, user.id, user.privateKey]);
 
@@ -413,6 +483,18 @@ export function Dashboard({ user, socket }: DashboardProps) {
           onShowOnboarding={() => setShowOnboarding(true)}
           notifications={notifications}
           onClearNotifications={() => setNotifications([])}
+          onSyncRequest={async () => {
+             const { generateRSAKeyPair } = await import('../utils/e2ee');
+             const tempKeys = await generateRSAKeyPair();
+             sessionStorage.setItem('temp_sync_private_key', tempKeys.privateKey);
+             sessionStorage.setItem('temp_sync_public_key', tempKeys.publicKey);
+             socket.emit('device_sync_request', { publicKey: tempKeys.publicKey });
+             showModal({
+                title: 'Sync Requested',
+                message: 'A sync request has been sent to your other active devices. Please approve it on the other device to transfer your secure session and chat history.',
+                iconType: 'info'
+             });
+          }}
         />
       </div>
 

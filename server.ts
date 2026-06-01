@@ -979,6 +979,33 @@ io.on('connection', (socket: any) => {
     }
   });
 
+  socket.on('device_sync_request', async (data, ack) => {
+    try {
+      // Broadcast to all other sockets owned by the SAME user
+      socket.broadcast.to(`user_${socket.userId}`).emit('device_sync_request', {
+        fromSocketId: socket.id,
+        publicKey: data.publicKey
+      });
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] device_sync_request rejected:', err.message);
+      ack?.({ ok: false });
+    }
+  });
+
+  socket.on('device_sync_payload', async (data, ack) => {
+    try {
+      // Send the encrypted payload strictly to the requesting socket
+      io.to(data.toSocketId).emit('device_sync_payload', {
+        payload: data.payload
+      });
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] device_sync_payload rejected:', err.message);
+      ack?.({ ok: false });
+    }
+  });
+
   socket.on('log_call', async (data, ack) => {
     try {
       const sessionId = [socket.userId, data.toId].sort().join('-');

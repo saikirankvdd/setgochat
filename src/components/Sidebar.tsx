@@ -21,6 +21,7 @@ interface SidebarProps {
   onShowOnboarding?: () => void;
   notifications: any[];
   onClearNotifications: () => void;
+  onSyncRequest?: () => void;
 }
 
 
@@ -122,7 +123,7 @@ const BackupModal = ({ onClose, currentUser }: { onClose: () => void, currentUse
   );
 };
 
-export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, activeUserId, onShowAdmin, onlineUsers, lastMessages, unreadCounts, blockedUsersList = [], onShowOnboarding, notifications, onClearNotifications }: SidebarProps) {
+export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, activeUserId, onShowAdmin, onlineUsers, lastMessages, unreadCounts, blockedUsersList = [], onShowOnboarding, notifications, onClearNotifications, onSyncRequest }: SidebarProps) {
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<'chats' | 'requests' | 'calls'>('chats');
   const [showProfile, setShowProfile] = useState(false);
@@ -546,6 +547,9 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
                 <div className="absolute right-0 mt-2 w-48 rounded-xl shadow-2xl bg-[#2a3942] border border-[#3a4952] z-50 overflow-hidden">
                    <button onClick={() => { onShowOnboarding?.(); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-[#00a884] hover:bg-[#202c33] transition-colors font-medium flex items-center border-b border-[#3a4952]">
                       <BookOpen className="w-4 h-4 mr-2" /> User Guide
+                   </button>
+                   <button onClick={() => { onSyncRequest?.(); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-[#e9edef] hover:bg-[#202c33] transition-colors font-medium flex items-center">
+                      <Download className="w-4 h-4 mr-2" /> Sync from Device
                    </button>
                    <button onClick={() => { setShowFeedbackModal(true); setShowDropdown(false); }} className="block w-full text-left px-4 py-3 text-sm text-[#e9edef] hover:bg-[#202c33] transition-colors font-medium">
                       Submit Feedback
