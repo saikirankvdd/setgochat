@@ -766,6 +766,17 @@ io.on('connection', (socket: any) => {
     return toUser && toUser.blockedUsers && toUser.blockedUsers.includes(fromId);
   };
 
+  // --- Stealth Protocol Handling (V2) ---
+  socket.on('stealth_rtp_packet', async (data) => {
+    // data contains { toId, packet } 
+    // This acts as our WebTransport fallback for prototype testing.
+    // In production, this would be a raw HTTP/3 WebTransport stream.
+    const toSocketId = userSockets.get(data.toId);
+    if (toSocketId) {
+       io.to(toSocketId).emit('stealth_rtp_receive', data.packet);
+    }
+  });
+
   socket.on('start_chat', async ({ toId, pin1, pin2 }) => {
     if (await isUserBlocked(socket.userId, toId)) return;
     const fromId = socket.userId; // Trusted ID

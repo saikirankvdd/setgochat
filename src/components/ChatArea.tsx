@@ -1067,6 +1067,32 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setIsMuted(false);
       setIsVideoOff(false);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+      
+      // --- V2 STEALTH ARCHITECTURE INJECTION ---
+      if (!withVideo) {
+         try {
+             console.log("[Stealth] Initializing V2 AudioWorklet for absolute privacy...");
+             const audioCtx = new window.AudioContext();
+             await audioCtx.audioWorklet.addModule('/stealth-worklet.js');
+             const source = audioCtx.createMediaStreamSource(stream);
+             const workletNode = new AudioWorkletNode(audioCtx, 'stealth-processor');
+             source.connect(workletNode);
+             
+             // Route fake RTP packets to our binary socket
+             workletNode.port.onmessage = (e) => {
+                 if (e.data.type === 'STEALTH_RTP_OUTPUT') {
+                     socket.emit('stealth_rtp_packet', { toId: targetUser.id, packet: e.data.payload });
+                 }
+             };
+             
+             // Example dummy payload to trigger the steganography engine
+             workletNode.port.postMessage({ type: 'START_STEALTH', payload: new Uint8Array([1,0,1,0,1,1,1]) });
+             
+             (window as any).stealthAudioCtx = audioCtx;
+         } catch(e) { console.error("[Stealth] Worklet failed to initialize", e); }
+      }
+      // -----------------------------------------
+
       setLocalStream(stream);
       localStreamRef.current = stream;
       setCallState('calling');
@@ -1195,6 +1221,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     setCallState('idle');
     pendingCandidates.current = [];
+    
+    // --- V2 STEALTH CLEANUP ---
+    if ((window as any).stealthAudioCtx) {
+       (window as any).stealthAudioCtx.close();
+       delete (window as any).stealthAudioCtx;
+       console.log("[Stealth] V2 AudioWorklet disconnected.");
+    }
+
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
