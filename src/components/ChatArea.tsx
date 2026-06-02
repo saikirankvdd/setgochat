@@ -61,7 +61,7 @@ const ReportModal = ({ onClose, reportedId }: { onClose: () => void, reportedId:
        showModal({ title: 'Upload Limit', message: 'Maximum 10 screenshots allowed.', iconType: 'warning' });
        return;
     }
-    files.forEach(file => {
+    files.forEach((file: any) => {
       const reader = new FileReader();
       reader.onload = () => {
          setImages(prev => [...prev].slice(0, 9).concat(reader.result as string));
@@ -1267,7 +1267,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           sendStegoSignaling({
             type: 'stego_call_ice_candidate',
             candidate: event.candidate
-          }, targetUser.id);
+          }, targetUser.id.toString());
         }
       };
 
@@ -1282,7 +1282,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         type: 'stego_call_offer',
         offer: offer,
         withVideo
-      }, targetUser.id);
+      }, targetUser.id.toString());
     } catch (err) {
       console.error('Error starting call:', err);
       if (!navigator.mediaDevices) {
@@ -2433,7 +2433,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         </div>
       )}
   {showReportModal && (
-    <ReportModal onClose={() => setShowReportModal(false)} reportedId={targetUser.id} />
+    <ReportModal onClose={() => setShowReportModal(false)} reportedId={Number(targetUser.id)} />
   )}
   {showDataModal && (
     <DataManagementModal onClose={() => setShowDataModal(false)} sessionInfo={sessionInfo} targetUser={targetUser} />

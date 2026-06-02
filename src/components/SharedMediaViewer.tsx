@@ -94,7 +94,7 @@ export const SharedMediaViewer: React.FC<SharedMediaViewerProps> = ({ sessionId,
             <div key={date} className="mb-8">
               <h3 className="text-[#e9edef] font-medium text-lg mb-4">{date}</h3>
               <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
-                {items.map((item) => {
+                {(items as MediaItem[]).map((item) => {
                   const isImage = item.type.startsWith('image/');
                   const isVideo = item.type.startsWith('video/');
                   const isAudio = item.type.startsWith('audio/');

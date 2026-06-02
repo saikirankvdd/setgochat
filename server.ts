@@ -1512,7 +1512,7 @@ async function startServer() {
   app.use((err: any, req: any, res: any, next: any) => {
     console.error(`[Global Error] ${req.path}`, err);
     if (err instanceof z.ZodError) {
-      return res.status(400).json({ error: 'Invalid input data', details: err.errors });
+      return res.status(400).json({ error: 'Invalid input data', details: (err as any).errors });
     }
     res.status(err.status || 500).json({ error: 'Internal server error' });
   });

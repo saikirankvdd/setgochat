@@ -5,7 +5,7 @@ import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { decodeLSB, decodeLSB1Bit } from '../utils/stego';
 import { gunzipSync, strFromU8 } from 'fflate';
-import { decryptData, binaryToString } from '../utils/crypto';
+import { decryptData, binaryToString, encryptData } from '../utils/crypto';
 import { useModal } from '../contexts/ModalContext';
 import { saveMessageLocal } from '../utils/db';
 import { AdminDashboard } from './AdminDashboard';
