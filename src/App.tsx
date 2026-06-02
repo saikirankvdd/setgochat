@@ -42,7 +42,10 @@ export default function App() {
         if (res.ok) {
           const data = await res.json();
           if (data.success) {
-            const privateKey = await getPrivateKeyLocal(data.user.id.toString());
+            let privateKey = await getPrivateKeyLocal(data.user.id.toString());
+            if (!privateKey) {
+              privateKey = sessionStorage.getItem('stego_priv_key_' + data.user.id.toString()) || undefined;
+            }
             setUser({ ...data.user, privateKey });
           }
         }

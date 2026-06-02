@@ -164,6 +164,38 @@ export function Dashboard({ user, socket }: DashboardProps) {
       socket.emit('register', { version: APP_VERSION });
     }
 
+    const reEncryptMessagesForPinChange = async (sessionId: string, oldPin: string, newPin: string) => {
+       if (!oldPin || oldPin === 'DECRYPTION_FAILED' || oldPin === 'UNENCRYPTED') return;
+       if (!newPin || newPin === 'DECRYPTION_FAILED' || newPin === 'UNENCRYPTED' || oldPin === newPin) return;
+
+       console.log(`[E2EE] Session PIN changed from ${oldPin} to ${newPin}. Re-encrypting local database messages...`);
+       try {
+         const { getMessagesLocal, saveMessageLocal } = await import('../utils/db');
+         const localMsgs = await getMessagesLocal(sessionId);
+         for (const msg of localMsgs) {
+            try {
+              let decryptedText = '';
+              if (msg.encryptedText) decryptedText = decryptData(msg.encryptedText, oldPin) || '';
+              let decryptedFile = '';
+              if (msg.encryptedFile) decryptedFile = decryptData(msg.encryptedFile, oldPin) || '';
+              
+              const newEncryptedText = decryptedText ? encryptData(decryptedText, newPin) : '';
+              const newEncryptedFile = decryptedFile ? encryptData(decryptedFile, newPin) : undefined;
+              
+              await saveMessageLocal({
+                ...msg,
+                encryptedText: newEncryptedText,
+                encryptedFile: newEncryptedFile
+              });
+            } catch (err) {
+              console.error("Failed to re-encrypt message during PIN transition", err);
+            }
+         }
+       } catch (err) {
+         console.error("Failed to re-encrypt messages database", err);
+       }
+    };
+
     socket.on('chat_started', async (data) => {
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
@@ -172,6 +204,12 @@ export function Dashboard({ user, socket }: DashboardProps) {
         if (encPin) {
            decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
         }
+
+        const oldPin = pinsRef.current[data.sessionId];
+        if (oldPin && oldPin !== decryptedPin) {
+           await reEncryptMessagesForPinChange(data.sessionId, oldPin, decryptedPin);
+        }
+
         setSessionInfo({ sessionId: data.sessionId, pin: decryptedPin });
         pinsRef.current[data.sessionId] = decryptedPin;
 
@@ -192,6 +230,12 @@ export function Dashboard({ user, socket }: DashboardProps) {
         if (encPin) {
            decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
         }
+
+        const oldPin = pinsRef.current[data.sessionId];
+        if (oldPin && oldPin !== decryptedPin) {
+           await reEncryptMessagesForPinChange(data.sessionId, oldPin, decryptedPin);
+        }
+
         setSessionInfo({ sessionId: data.sessionId, pin: decryptedPin });
         pinsRef.current[data.sessionId] = decryptedPin;
 
@@ -453,7 +497,12 @@ export function Dashboard({ user, socket }: DashboardProps) {
             const { privateKey, messages, pins } = JSON.parse(decryptedString);
 
             const { savePrivateKeyLocal, importMessagesLocal, savePinLocal } = await import('../utils/db');
-            if (privateKey) await savePrivateKeyLocal(user.id.toString(), privateKey);
+            if (privateKey) {
+                await savePrivateKeyLocal(user.id.toString(), privateKey);
+                try {
+                  sessionStorage.setItem('stego_priv_key_' + user.id.toString(), privateKey);
+                } catch (e) {}
+            }
             
             // Encrypt all recovered PINs using our RSA Public Key and save them to the Secure Vault
             if (pins && user.publicKey) {

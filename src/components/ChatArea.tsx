@@ -2012,8 +2012,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 <span className={`mr-2 ${isOnline ? 'text-[#00a884]' : 'text-[#8696a0]'}`}>
                   {isOnline ? 'Online' : 'Offline'}
                 </span>
-                <Shield className="w-3 h-3 mr-1 text-[#00a884]" />
-                <span className="text-[#00a884]">SECURE SESSION ACTIVE</span>
+                <Shield className="w-3 h-3 mr-1 text-[#00a884] flex-shrink-0" />
+                <span className="text-[#00a884] hidden sm:inline">SECURE SESSION ACTIVE</span>
               </div>
             </div>
           </div>

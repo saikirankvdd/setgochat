@@ -128,6 +128,11 @@ export function Auth({ onLogin }: AuthProps) {
                }
             }
             await savePrivateKeyLocal(data.user.id.toString(), privateKey);
+            try {
+              sessionStorage.setItem('stego_priv_key_' + data.user.id.toString(), privateKey);
+            } catch (e) {
+              console.warn('[SessionStorage] Failed to backup private key in sessionStorage:', e);
+            }
             onLogin({ ...data.user, privateKey });
           } catch(err) {
             setError('Vault decryption failed. Please check credentials.');
