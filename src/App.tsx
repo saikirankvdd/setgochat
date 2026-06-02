@@ -89,7 +89,7 @@ export default function App() {
         }
       });
 
-      newSocket.emit('register');
+      newSocket.emit('register', { version: APP_VERSION });
 
       newSocket.on('system_info', ({ version }) => {
         if (version !== APP_VERSION) {
