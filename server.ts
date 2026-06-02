@@ -23,6 +23,9 @@ import { z } from 'zod';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import 'dotenv/config';
 
+// Application version matching client bundle
+const APP_VERSION = '2.1.0';
+
 // Safe in-memory nonce store for Socket.IO single-use connection bridging
 const nonceMap = new Map<string, string>();
 
@@ -662,9 +665,21 @@ io.use((socket: any, next) => {
 io.on('connection', (socket: any) => {
   console.log('User connected:', socket.id, 'Authenticated as:', socket.userId);
 
-  socket.on('register', async () => {
+  socket.on('register', async (clientData?: { version?: string }) => {
     const userId = socket.userId; // Use trusted ID instead of client payload
     
+    // Check client version to detect old cached code running in browser memory/cache
+    if (!clientData || clientData.version !== APP_VERSION) {
+       console.log(`[Version Check] Disconnecting client ${socket.id} due to outdated version (expected: ${APP_VERSION})`);
+       socket.emit('force_logout', { 
+         message: 'StegoChat has been updated with critical security and compatibility fixes. Please reload your browser page to apply the update.' 
+       });
+       setTimeout(() => {
+         socket.disconnect(true);
+       }, 500);
+       return;
+    }
+
     // Single-device login version check
     const dbUser = await User.findById(userId);
     if (!dbUser || dbUser.sessionVersion !== socket.sessionVersion) {
@@ -688,6 +703,7 @@ io.on('connection', (socket: any) => {
     userSockets.set(userId, socket.id);
     socket.join(`user_${userId}`);
     console.log(`User ${userId} registered with socket ${socket.id}`);
+    socket.emit('system_info', { version: APP_VERSION });
     broadcastOnlineUsers();
 
     // Send all pins for this user
@@ -1467,9 +1483,27 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use('/assets', express.static(path.join(distPath, 'assets'), { fallthrough: false }));
-    app.use(express.static(distPath));
+    // Serve hashed assets under /assets with long-term immutable caching
+    app.use('/assets', express.static(path.join(distPath, 'assets'), { 
+      fallthrough: false,
+      maxAge: '1y',
+      immutable: true
+    }));
+    // Serve other static files and disable caching specifically for HTML files
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+          res.setHeader('Pragma', 'no-cache');
+          res.setHeader('Expires', '0');
+        }
+      }
+    }));
+    // All SPA client routes fallback to index.html which should never be cached
     app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.setHeader('Pragma', 'no-cache');
+      res.setHeader('Expires', '0');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

@@ -16,6 +16,8 @@ interface DashboardProps {
   socket: Socket;
 }
 
+const APP_VERSION = '2.1.0';
+
 export function Dashboard({ user, socket }: DashboardProps) {
   const [activeChat, setActiveChat] = useState<User | null>(null);
   const [sessionInfo, setSessionInfo] = useState<{ sessionId: string; pin: string } | null>(null);
@@ -148,7 +150,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
 
     socket.on('connect', () => {
       // Re-register the user on the server after a reconnection
-      socket.emit('register', user.id);
+      socket.emit('register', { version: APP_VERSION });
       
       // Request any offline messages that arrived while disconnected
       setTimeout(() => {
@@ -158,7 +160,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
 
     // If socket is already connected on mount, trigger registration immediately to synchronize session PINs
     if (socket.connected) {
-      socket.emit('register', user.id);
+      socket.emit('register', { version: APP_VERSION });
     }
 
     socket.on('chat_started', async (data) => {
@@ -521,7 +523,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
 
   return (
     <div className="flex h-screen bg-[#111b21] overflow-hidden w-full max-w-full relative">
-      <div className={`w-full md:w-[420px] border-r border-[#2a3942] flex flex-col z-10 transition-all shadow-xl ${activeChat ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`w-full md:w-[420px] border-r border-[#2a3942] flex-col z-10 transition-all shadow-xl ${activeChat ? 'hidden md:flex' : 'flex'}`}>
         <Sidebar 
           currentUser={user} 
           users={visibleUsers}
@@ -552,7 +554,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
         />
       </div>
 
-      <div className={`flex-1 flex flex-col bg-[#0b141a] relative w-full h-full ${!activeChat ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`flex-1 flex-col bg-[#0b141a] relative w-full h-full ${!activeChat ? 'hidden md:flex' : 'flex'}`}>
         {users.filter(u => pinsRef.current[[user.id, u.id].sort().join('-')]).map(targetUser => {
            const sId = [user.id, targetUser.id].sort().join('-');
            const pin = pinsRef.current[sId];

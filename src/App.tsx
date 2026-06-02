@@ -26,6 +26,8 @@ export function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[2]) : null;
 }
 
+const APP_VERSION = '2.1.0';
+
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
@@ -88,6 +90,19 @@ export default function App() {
       });
 
       newSocket.emit('register');
+
+      newSocket.on('system_info', ({ version }) => {
+        if (version !== APP_VERSION) {
+          showModal({
+            title: 'Security Update Required',
+            message: 'A secure version update is available. Reloading application to ensure encryption compatibility...',
+            iconType: 'info'
+          });
+          setTimeout(() => {
+            window.location.reload();
+          }, 3000);
+        }
+      });
       
       newSocket.on('banned', async () => {
          setUser(null);
