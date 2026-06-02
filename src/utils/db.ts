@@ -41,18 +41,21 @@ const openDB = (): Promise<IDBDatabase> => {
   });
 };
 
-export const saveMessageLocal = async (msg: DBMessage): Promise<void> => {
+export const saveMessageLocal = async (msg: DBMessage, bypassHashing = false): Promise<void> => {
   const db = await openDB();
-  const hashedSessionId = await hashString(msg.sessionId);
-  const hashedFromId = msg.fromId === 'system' ? 'system' : await hashString(msg.fromId.toString());
-  const hashedToId = await hashString(msg.toId.toString());
-  
-  const msgToSave = {
-      ...msg,
-      sessionId: hashedSessionId,
-      fromId: hashedFromId,
-      toId: hashedToId
-  };
+  let msgToSave = msg;
+  if (!bypassHashing) {
+    const hashedSessionId = await hashString(msg.sessionId);
+    const hashedFromId = msg.fromId === 'system' ? 'system' : await hashString(msg.fromId.toString());
+    const hashedToId = await hashString(msg.toId.toString());
+    
+    msgToSave = {
+        ...msg,
+        sessionId: hashedSessionId,
+        fromId: hashedFromId,
+        toId: hashedToId
+    };
+  }
 
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite');

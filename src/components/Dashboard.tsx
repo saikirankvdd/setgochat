@@ -17,13 +17,13 @@ interface DashboardProps {
   socket: Socket;
 }
 
-const APP_VERSION = '2.1.0';
+const APP_VERSION = '2.2.0';
 
 export function Dashboard({ user, socket }: DashboardProps) {
   const [activeChat, setActiveChat] = useState<User | null>(null);
   const [sessionInfo, setSessionInfo] = useState<{ sessionId: string; pin: string } | null>(null);
   const [showAdmin, setShowAdmin] = useState(false);
-  const [onlineUsers, setOnlineUsers] = useState<number[]>([]);
+  const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [unreadCounts, setUnreadCounts] = useState<Record<number, number>>({});
   const [lastMessages, setLastMessages] = useState<Record<number, string>>({});
@@ -186,7 +186,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
                 ...msg,
                 encryptedText: newEncryptedText,
                 encryptedFile: newEncryptedFile
-              });
+              }, true);
             } catch (err) {
               console.error("Failed to re-encrypt message during PIN transition", err);
             }
@@ -256,8 +256,8 @@ export function Dashboard({ user, socket }: DashboardProps) {
        setSessions(prev => prev.filter(s => s.id !== sessionId));
     });
 
-    socket.on('online_users', (userIds: number[]) => { 
-      setOnlineUsers(userIds); 
+    socket.on('online_users', (userIds: string[]) => { 
+      setOnlineUsers(userIds.map(String)); 
       fetch('/api/users', { credentials: 'include' })
         .then(res => res.json())
         .then(data => { 
@@ -277,25 +277,38 @@ export function Dashboard({ user, socket }: DashboardProps) {
         
         await Promise.all(sessionsData.map(async (s) => {
           try {
-            // First check the local Secure Vault
+            const { encryptPINWithPublicKey } = await import('../utils/e2ee');
+            
+            // Decrypt the Server PIN first
+            const encPin = user.id.toString() === s.user1_id ? s.pin1 : s.pin2;
+            let serverPin = 'UNENCRYPTED';
+            if (encPin) {
+              serverPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+            }
+
+            // Check the local Secure Vault
             const localEncryptedPin = await getPinLocal(s.id);
             if (localEncryptedPin) {
-                newPins[s.id] = await decryptPINWithPrivateKey(localEncryptedPin, user.privateKey!);
+                const localPin = await decryptPINWithPrivateKey(localEncryptedPin, user.privateKey!);
+                
+                // If local pin and server pin are different and both valid, reconcile/re-encrypt
+                if (localPin && serverPin && localPin !== 'DECRYPTION_FAILED' && serverPin !== 'DECRYPTION_FAILED' && localPin !== 'UNENCRYPTED' && serverPin !== 'UNENCRYPTED' && localPin !== serverPin) {
+                    await reEncryptMessagesForPinChange(s.id, localPin, serverPin);
+                    // Update local vault backup
+                    if (user.publicKey) {
+                        const reEncryptedLocalPin = await encryptPINWithPublicKey(serverPin, user.publicKey);
+                        await savePinLocal(s.id, reEncryptedLocalPin);
+                    }
+                }
+                newPins[s.id] = (serverPin !== 'DECRYPTION_FAILED') ? serverPin : localPin;
                 return;
             }
 
-            // Fallback to Server PIN
-            const encPin = user.id.toString() === s.user1_id ? s.pin1 : s.pin2;
-            if (encPin) {
-              newPins[s.id] = await decryptPINWithPrivateKey(encPin, user.privateKey!);
-              // Auto-backup server PIN to local vault if successful
-              if (newPins[s.id] !== 'DECRYPTION_FAILED' && user.publicKey) {
-                  const { encryptPINWithPublicKey } = await import('../utils/e2ee');
-                  const reEncryptedLocalPin = await encryptPINWithPublicKey(newPins[s.id], user.publicKey);
-                  await savePinLocal(s.id, reEncryptedLocalPin);
-              }
-            } else {
-              newPins[s.id] = 'UNENCRYPTED';
+            // Fallback to Server PIN if no local PIN backup exists
+            newPins[s.id] = serverPin;
+            if (serverPin !== 'DECRYPTION_FAILED' && user.publicKey) {
+                const reEncryptedLocalPin = await encryptPINWithPublicKey(serverPin, user.publicKey);
+                await savePinLocal(s.id, reEncryptedLocalPin);
             }
           } catch (e) {
             newPins[s.id] = 'DECRYPTION_FAILED';
@@ -313,6 +326,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
     });
 
     const processPreview = (data: any, isFile: boolean, msgType: string) => {
+       if (data.isStegoSignaling) return; // Discard call signaling immediately
        if (data.fromId === user.id) return;
        const pin = pinsRef.current[data.sessionId];
        if (!pin) return; 
@@ -365,38 +379,44 @@ export function Dashboard({ user, socket }: DashboardProps) {
          } catch(e) {}
        }
 
-       if (previewText) {
-          setLastMessages(prev => ({ ...prev, [data.fromId]: previewText }));
-          if (activeUserIdRef.current !== data.fromId || document.hidden) {
-             setUnreadCounts(prev => ({ ...prev, [data.fromId]: (prev[data.fromId] || 0) + 1 }));
-             playNotificationSound();
-             
-             // Save message to local DB since ChatArea is not open to handle it
-             if (!data.isSelfDestruct) { // Don't save disappearing messages
-               const expiresAt = undefined; // Dashboard doesn't know duration, ChatArea syncs it later
-               saveMessageLocal({
-                 id: data.msgId || Math.random().toString(36).substr(2, 9),
-                 sessionId: data.sessionId,
-                 fromId: data.fromId.toString(),
-                 toId: user.id.toString(),
-                 encryptedText: isFile ? '' : extractedEncryptedText,
-                 encryptedFile: isFile ? data.encryptedFile : undefined,
-                 timestamp: data.timestamp || Date.now(),
-                 isSelfDestruct: !!data.isSelfDestruct,
-                 expiresAt: expiresAt
-               }).catch(e => console.error("Failed to save offline message in Dashboard", e));
-             }
+       // Unconditionally save message to local DB if ChatArea is not open to handle it
+       if (activeUserIdRef.current !== data.fromId || document.hidden) {
+          if (!data.isSelfDestruct) { // Don't save disappearing messages
+            const expiresAt = undefined;
+            saveMessageLocal({
+              id: data.msgId || Math.random().toString(36).substr(2, 9),
+              sessionId: data.sessionId,
+              fromId: data.fromId.toString(),
+              toId: user.id.toString(),
+              encryptedText: isFile ? '' : extractedEncryptedText,
+              encryptedFile: isFile ? data.encryptedFile : undefined,
+              timestamp: data.timestamp || Date.now(),
+              isSelfDestruct: !!data.isSelfDestruct,
+              expiresAt: expiresAt
+            }).catch(e => console.error("Failed to save offline message in Dashboard", e));
+          }
 
-             if ('Notification' in window && Notification.permission === 'granted') {
-               const sender = usersRef.current.find(u => u.id === data.fromId);
-               const senderName = sender ? sender.username : `User ${data.fromId}`;
-               
-               if (msgType === 'missed_call') {
-                 new Notification('StegoChat', { body: `Missed call from ${senderName}` });
-               } else {
-                 new Notification('StegoChat', { body: `From StegoChat: ${senderName} sent a message` });
-               }
-             }
+          setUnreadCounts(prev => ({ ...prev, [data.fromId]: (prev[data.fromId] || 0) + 1 }));
+          playNotificationSound();
+
+          if (previewText) {
+             setLastMessages(prev => ({ ...prev, [data.fromId]: previewText }));
+          } else {
+             setLastMessages(prev => ({ ...prev, [data.fromId]: '🔒 Encrypted Message' }));
+          }
+
+          if ('Notification' in window && Notification.permission === 'granted') {
+             const sender = usersRef.current.find(u => u.id === data.fromId);
+             const senderName = sender ? sender.username : `User ${data.fromId}`;
+             const notificationBody = previewText ? `From StegoChat: ${senderName} sent a message` : `From StegoChat: ${senderName} sent an encrypted message`;
+             new Notification('StegoChat', { body: notificationBody });
+          }
+       } else {
+          // Message received while active - just update last preview text
+          if (previewText) {
+             setLastMessages(prev => ({ ...prev, [data.fromId]: previewText }));
+          } else {
+             setLastMessages(prev => ({ ...prev, [data.fromId]: '🔒 Encrypted Message' }));
           }
        }
     };

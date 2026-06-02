@@ -895,6 +895,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     if (!isActive && callState === 'idle') return;
 
     const handleReceive = async (data: any) => {
+      if (data.isStegoSignaling) return; // Discard WebRTC call signaling immediately
       if (data.sessionId !== sessionInfo.sessionId) return;
       // Deduplicate: if this msgId was already processed (e.g. offline re-delivery), skip
       if (data.msgId) {
@@ -1144,6 +1145,18 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
   }, [messages]);
 
+  // Force scroll to bottom when the chat becomes active (opened/unhidden)
+  useEffect(() => {
+    if (isActive && messages.length > 0) {
+      const timer = setTimeout(() => {
+        if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+        }
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [isActive, messages.length]);
+
   // Handle self-destructing messages
   useEffect(() => {
     const interval = setInterval(() => {
@@ -1209,7 +1222,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         audioBase64: base64,
         isSelfDestruct: false,
         isOneTime: false,
-        timer: 0
+        timer: 0,
+        isStegoSignaling: true
       });
       console.log(`[Stego-Signaling] Sent covert compressed ${payloadObj.type} via audio LSB`);
     } catch (e) {

@@ -36,6 +36,13 @@
   --chat-bg: linear-gradient(135deg, #0b141a 0%, #11202c 50%, #0b141a 100%);
 }
 
+html, body, #root {
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
 body {
   background-color: var(--bg-secondary);
   color: var(--text-primary);

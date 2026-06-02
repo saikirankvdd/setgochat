@@ -14,7 +14,7 @@ interface SidebarProps {
   onSelectUser: (user: User) => void;
   activeUserId?: number;
   onShowAdmin: () => void;
-  onlineUsers: number[];
+  onlineUsers: string[];
   lastMessages?: Record<number, string>;
   unreadCounts?: Record<number, number>;
   blockedUsersList?: User[];
@@ -653,8 +653,8 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-baseline mb-1">
                       <h3 className="text-[#e9edef] font-medium text-lg truncate">{user.username}</h3>
-                      <span className={`text-xs ml-2 flex-shrink-0 ${onlineUsers.includes(Number(user.id)) ? 'text-[#00a884]' : 'text-[#8696a0]'}`}>
-                        {onlineUsers.includes(Number(user.id)) ? 'Online' : 'Offline'}
+                      <span className={`text-xs ml-2 flex-shrink-0 ${onlineUsers.includes(user.id.toString()) ? 'text-[#00a884]' : 'text-[#8696a0]'}`}>
+                        {onlineUsers.includes(user.id.toString()) ? 'Online' : 'Offline'}
                       </span>
                     </div>
                     {isSearch ? (
