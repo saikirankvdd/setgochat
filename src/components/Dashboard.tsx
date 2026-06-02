@@ -4,6 +4,7 @@ import { Socket } from 'socket.io-client';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { decodeLSB, decodeLSB1Bit } from '../utils/stego';
+import { gunzipSync, strFromU8 } from 'fflate';
 import { decryptData, binaryToString } from '../utils/crypto';
 import { useModal } from '../contexts/ModalContext';
 import { saveMessageLocal } from '../utils/db';
@@ -300,8 +301,22 @@ export function Dashboard({ user, socket }: DashboardProps) {
            previewText = decryptData(extractedEncryptedText, pin);
            
            // Covert Stego signaling messages must be ignored by Dashboard preview
-           if (previewText && previewText.includes('"type":"stego_call_')) {
+           if (previewText && (previewText.includes('"type":"stego_call_') || previewText.startsWith('{"type":"stego_'))) {
               return;
+           }
+           if (previewText && previewText.startsWith('H4sI')) {
+              try {
+                const compressedStr = atob(previewText);
+                const compressedBytes = new Uint8Array(compressedStr.length);
+                for (let i = 0; i < compressedStr.length; i++) {
+                  compressedBytes[i] = compressedStr.charCodeAt(i);
+                }
+                const decompressedBytes = gunzipSync(compressedBytes);
+                const decompressed = strFromU8(decompressedBytes);
+                if (decompressed.includes('"type":"stego_call_') || decompressed.startsWith('{"type":"stego_')) {
+                   return; // Ignore signaling message in dashboard preview
+                }
+              } catch (e) {}
            }
          } catch(e) {}
        }
@@ -523,7 +538,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
 
   return (
     <div className="flex h-screen bg-[#111b21] overflow-hidden w-full max-w-full relative">
-      <div className={`w-full md:w-[420px] border-r border-[#2a3942] flex-col z-10 transition-all shadow-xl ${activeChat ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`w-full md:w-[420px] border-r border-[#2a3942] z-10 transition-all shadow-xl ${activeChat ? 'hidden md:flex md:flex-col' : 'flex flex-col'}`}>
         <Sidebar 
           currentUser={user} 
           users={visibleUsers}
@@ -554,7 +569,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
         />
       </div>
 
-      <div className={`flex-1 flex-col bg-[#0b141a] relative w-full h-full ${!activeChat ? 'hidden md:flex' : 'flex'}`}>
+      <div className={`flex-1 bg-[#0b141a] relative w-full h-full ${!activeChat ? 'hidden md:flex md:flex-col' : 'flex flex-col'}`}>
         {users.filter(u => pinsRef.current[[user.id, u.id].sort().join('-')]).map(targetUser => {
            const sId = [user.id, targetUser.id].sort().join('-');
            const pin = pinsRef.current[sId];
