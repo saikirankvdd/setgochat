@@ -128,6 +128,22 @@ export const deleteMessageLocal = async (id: string): Promise<void> => {
   });
 };
 
+export const deleteMessagesLocal = async (ids: string[]): Promise<void> => {
+  if (ids.length === 0) return;
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction(STORE_NAME, 'readwrite');
+    const store = transaction.objectStore(STORE_NAME);
+    
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    
+    ids.forEach(id => {
+      store.delete(id);
+    });
+  });
+};
+
 export const savePinLocal = async (sessionId: string, encryptedPin: string): Promise<void> => {
   const db = await openDB();
   return new Promise((resolve, reject) => {

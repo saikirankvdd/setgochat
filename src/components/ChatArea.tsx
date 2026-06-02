@@ -736,14 +736,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       try {
         const localMsgs = await getMessagesLocal(sessionInfo.sessionId);
         const decryptedMsgs: Message[] = [];
+        const toDeleteIds: string[] = [];
         const now = Date.now();
         for (const msg of localMsgs) {
           if (msg.expiresAt && msg.expiresAt < now) {
-            await deleteMessageLocal(msg.id);
+            toDeleteIds.push(msg.id);
             continue;
           }
           if (msg.isSelfDestruct) {
-            await deleteMessageLocal(msg.id);
+            toDeleteIds.push(msg.id);
             continue;
           }
           let text = '';
@@ -752,6 +753,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           if (msg.encryptedFile) {
             const decFile = decryptData(msg.encryptedFile, sessionInfo.pin);
             if (decFile) file = JSON.parse(decFile);
+          }
+
+          // Drop and clean up if it is a covert signaling message (e.g. legacy signaling residues in DB)
+          if (text && (text.includes('"type":"stego_call_') || text.startsWith('{"type":"stego_'))) {
+            toDeleteIds.push(msg.id);
+            continue;
           }
 
           // Drop if both text and file are empty/undefined (indicates failed decryption or empty signaling message)
@@ -771,6 +778,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           });
         }
         setMessages(decryptedMsgs);
+
+        // Perform batch deletes asynchronously in the background to avoid UI block
+        if (toDeleteIds.length > 0) {
+          import('../utils/db').then(m => {
+            m.deleteMessagesLocal(toDeleteIds).catch(err => {
+              console.error("Failed background DB cleanup", err);
+            });
+          });
+        }
       } catch (err) {
         console.error("Failed to load local messages", err);
       }
