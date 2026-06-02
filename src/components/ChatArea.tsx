@@ -679,6 +679,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isProcessing, setIsProcessing] = useState(false);
   const [showUserProfile, setShowUserProfile] = useState(false);
   const [callState, setCallState] = useState<'idle' | 'calling' | 'receiving' | 'connected'>('idle');
+  const [isHovering, setIsHovering] = useState<number | null>(null);
+  const [hashedMyId, setHashedMyId] = useState<string>('');
+
+  useEffect(() => {
+     import('../utils/crypto').then(m => m.hashString(user.id.toString()).then(setHashedMyId));
+  }, [user.id]);
+
+  const isMine = (msg: any) => msg.fromId === user.id || msg.fromId === user.id.toString() || msg.fromId === hashedMyId;
+
   const [callerId, setCallerId] = useState<string | null>(null);
   const [callDuration, setCallDuration] = useState(0);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
@@ -690,6 +699,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [showDropdown, setShowDropdown] = useState(false);
   const [dropdownView, setDropdownView] = useState<'main' | 'export'>('main');
   const [activeMessageMenu, setActiveMessageMenu] = useState<string | null>(null);
+  const [actionMenuMsgId, setActionMenuMsgId] = useState<string | null>(null);
   const [exportType, setExportType] = useState<'full' | 'range'>('full');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -778,8 +788,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         id: msg.id,
         sessionId: sessionInfo.sessionId,
         fromId: msg.fromId.toString(),
-        toId: (msg.fromId === user.id ? targetUser.id : user.id).toString(),
-        encryptedText,
+        toId: (isMine(msg) ? targetUser.id : user.id).toString(),
+        encryptedText: encryptedText,
         encryptedFile,
         timestamp: msg.timestamp,
         isSelfDestruct: !!msg.isSelfDestruct,
@@ -2010,44 +2020,44 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             </div>
           </div>
         ) : (
-          messages.map(msg => (
+          messages.map((msg, index) => (
           <div 
-            key={msg.id} 
-            className={`flex ${msg.fromId === user.id ? 'justify-end' : 'justify-start'}`}
+            key={index} 
+            className={`flex ${isMine(msg) ? 'justify-end' : 'justify-start'}`}
+            onMouseEnter={() => setIsHovering(index)}
+            onMouseLeave={() => setIsHovering(null)}
           >
               <div className={`max-w-[65%] rounded-lg px-3 py-2 shadow-sm relative group ${
-                msg.fromId === user.id ? 'bg-[#005c4b] text-[#e9edef]' : 'bg-[#202c33] text-[#e9edef]'
+                isMine(msg) ? 'bg-[#005c4b] text-[#e9edef]' : 'bg-[#202c33] text-[#e9edef]'
               }`}>
-                {/* Dropdown Menu Toggle */}
-                <div 
-                  className={`absolute top-1 cursor-pointer p-1 rounded-full bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity z-10 ${
-                    msg.fromId === user.id ? 'left-[-30px]' : 'right-[-30px]'
-                  }`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setActiveMessageMenu(activeMessageMenu === msg.id ? null : msg.id);
-                  }}
-                >
-                  <MoreVertical className="w-4 h-4 text-[#8696a0]" />
-                </div>
-                
-                {/* Dropdown Menu */}
-                {activeMessageMenu === msg.id && (
+                {/* Action Menu Trigger */}
+                {isHovering === index && (
+                  <button 
+                    onClick={() => setActionMenuMsgId(actionMenuMsgId === msg.id ? null : msg.id)}
+                    className={`absolute top-2 text-[#8696a0] hover:text-[#d1d7db] p-1 bg-[#202c33] rounded-full shadow-md z-10 
+                    ${isMine(msg) ? 'left-[-30px]' : 'right-[-30px]'}`}
+                  >
+                    <MoreVertical className="w-4 h-4" />
+                  </button>
+                )}
+
+                {/* Action Menu */}
+                {actionMenuMsgId === msg.id && (
                   <div 
-                    className={`absolute top-6 w-48 bg-[#2a3942] rounded-md shadow-xl z-50 overflow-hidden ${
-                      msg.fromId === user.id ? 'left-[-180px]' : 'right-[-180px]'
+                    className={`absolute top-8 w-48 bg-[#2a3942] rounded-md shadow-xl z-50 overflow-hidden ${
+                      isMine(msg) ? 'left-[-180px]' : 'right-[-180px]'
                     }`}
                     onClick={(e) => e.stopPropagation()}
                   >
                     <button 
-                      onClick={() => { handleDeleteMessage(msg.id, false); setActiveMessageMenu(null); }}
+                      onClick={() => { handleDeleteMessage(msg.id, false); setActionMenuMsgId(null); }}
                       className="w-full text-left px-4 py-3 text-sm text-[#e9edef] hover:bg-[#3a4a54] transition-colors"
                     >
                       Delete for me
                     </button>
-                    {msg.fromId === user.id && (
+                    {isMine(msg) && (
                       <button 
-                        onClick={() => { handleDeleteMessage(msg.id, true); setActiveMessageMenu(null); }}
+                        onClick={() => { handleDeleteMessage(msg.id, true); setActionMenuMsgId(null); }}
                         className="w-full text-left px-4 py-3 text-sm text-red-400 hover:bg-[#3a4a54] transition-colors border-t border-[#3a4a54]"
                       >
                         Delete for everyone
@@ -2074,7 +2084,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 </div>
               ) : (
                 <>
-                  {msg.isOneTime && msg.isRevealed && msg.fromId !== user.id && (
+                  {msg.isOneTime && msg.isRevealed && !isMine(msg) && (
                      <div className="absolute -top-3 -right-3 bg-red-500 rounded-full h-6 px-2 shadow-lg text-white z-50 flex items-center text-[10px] font-bold animate-pulse">
                        BURNING...
                      </div>

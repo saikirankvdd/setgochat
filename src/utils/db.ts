@@ -1,4 +1,5 @@
 // IndexedDB wrapper for local chat storage
+import { hashString } from './crypto';
 
 const DB_NAME = 'StegoChatDB';
 const DB_VERSION = 2;
@@ -30,6 +31,9 @@ const openDB = (): Promise<IDBDatabase> => {
       if (!db.objectStoreNames.contains('keys')) {
         db.createObjectStore('keys', { keyPath: 'id' });
       }
+      if (!db.objectStoreNames.contains('pins')) {
+        db.createObjectStore('pins', { keyPath: 'sessionId' });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);
@@ -39,10 +43,21 @@ const openDB = (): Promise<IDBDatabase> => {
 
 export const saveMessageLocal = async (msg: DBMessage): Promise<void> => {
   const db = await openDB();
+  const hashedSessionId = await hashString(msg.sessionId);
+  const hashedFromId = msg.fromId === 'system' ? 'system' : await hashString(msg.fromId.toString());
+  const hashedToId = await hashString(msg.toId.toString());
+  
+  const msgToSave = {
+      ...msg,
+      sessionId: hashedSessionId,
+      fromId: hashedFromId,
+      toId: hashedToId
+  };
+
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
-    const request = store.put(msg);
+    const request = store.put(msgToSave);
     request.onsuccess = () => resolve();
     request.onerror = () => reject(request.error);
   });
@@ -75,11 +90,12 @@ export const getPrivateKeyLocal = async (userId: string): Promise<string | null>
 
 export const getMessagesLocal = async (sessionId: string): Promise<DBMessage[]> => {
   const db = await openDB();
+  const hashedSessionId = await hashString(sessionId);
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readonly');
     const store = transaction.objectStore(STORE_NAME);
     const index = store.index('sessionId');
-    const request = index.getAll(sessionId);
+    const request = index.getAll(hashedSessionId);
     
     request.onsuccess = () => {
       resolve(request.result.sort((a, b) => a.timestamp - b.timestamp));
@@ -99,13 +115,36 @@ export const deleteMessageLocal = async (id: string): Promise<void> => {
   });
 };
 
+export const savePinLocal = async (sessionId: string, encryptedPin: string): Promise<void> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('pins', 'readwrite');
+    const store = transaction.objectStore('pins');
+    const request = store.put({ sessionId, pin: encryptedPin });
+    request.onsuccess = () => resolve();
+    request.onerror = () => reject(request.error);
+  });
+};
+
+export const getPinLocal = async (sessionId: string): Promise<string | null> => {
+  const db = await openDB();
+  return new Promise((resolve, reject) => {
+    const transaction = db.transaction('pins', 'readonly');
+    const store = transaction.objectStore('pins');
+    const request = store.get(sessionId);
+    request.onsuccess = () => resolve(request.result ? request.result.pin : null);
+    request.onerror = () => reject(request.error);
+  });
+};
+
 export const clearSessionLocal = async (sessionId: string): Promise<void> => {
   const db = await openDB();
+  const hashedSessionId = await hashString(sessionId);
   return new Promise((resolve, reject) => {
     const transaction = db.transaction(STORE_NAME, 'readwrite');
     const store = transaction.objectStore(STORE_NAME);
     const index = store.index('sessionId');
-    const request = index.getAllKeys(sessionId);
+    const request = index.getAllKeys(hashedSessionId);
     
     request.onsuccess = () => {
       const keys = request.result;

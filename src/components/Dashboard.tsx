@@ -221,15 +221,33 @@ export function Dashboard({ user, socket }: DashboardProps) {
       const newPins: Record<string, string> = { ...pinsRef.current };
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
+        const { getPinLocal, savePinLocal } = await import('../utils/db');
+        
         await Promise.all(sessionsData.map(async (s) => {
-          const encPin = user.id.toString() === s.user1_id ? s.pin1 : s.pin2;
           try {
+            // First check the local Secure Vault
+            const localEncryptedPin = await getPinLocal(s.id);
+            if (localEncryptedPin) {
+                newPins[s.id] = await decryptPINWithPrivateKey(localEncryptedPin, user.privateKey!);
+                return;
+            }
+
+            // Fallback to Server PIN
+            const encPin = user.id.toString() === s.user1_id ? s.pin1 : s.pin2;
             if (encPin) {
               newPins[s.id] = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+              // Auto-backup server PIN to local vault if successful
+              if (newPins[s.id] !== 'DECRYPTION_FAILED' && user.publicKey) {
+                  const { encryptPINWithPublicKey } = await import('../utils/e2ee');
+                  const reEncryptedLocalPin = await encryptPINWithPublicKey(newPins[s.id], user.publicKey);
+                  await savePinLocal(s.id, reEncryptedLocalPin);
+              }
             } else {
               newPins[s.id] = 'UNENCRYPTED';
             }
-          } catch(e) {}
+          } catch (e) {
+            newPins[s.id] = 'DECRYPTION_FAILED';
+          }
         }));
         pinsRef.current = newPins;
         setPinsReady(true);
@@ -357,17 +375,27 @@ export function Dashboard({ user, socket }: DashboardProps) {
             onConfirm: async () => {
                 try {
                     const { getAllMessagesLocal, getPrivateKeyLocal } = await import('../utils/db');
-                    const { encryptDataWithPublicKey } = await import('../utils/e2ee');
+                    const { encryptPINWithPublicKey } = await import('../utils/e2ee');
+                    const { encryptData } = await import('../utils/crypto');
                     
                     const privateKey = await getPrivateKeyLocal(user.id.toString());
                     const messages = await getAllMessagesLocal();
                     const pins = pinsRef.current;
 
                     const payloadString = JSON.stringify({ privateKey, messages, pins });
-                    const encryptedPayload = await encryptDataWithPublicKey(payloadString, data.publicKey);
+                    
+                    // Generate a massive 256-bit AES Transport Password
+                    const syncPassword = Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
+                    
+                    // Encrypt the massive JSON string with AES
+                    const encryptedPayload = encryptData(payloadString, syncPassword);
+                    
+                    // Encrypt the short AES Transport Password with the new device's RSA Public Key
+                    const encryptedPassword = await encryptPINWithPublicKey(syncPassword, data.publicKey);
 
                     socket.emit('device_sync_payload', {
                         toSocketId: data.fromSocketId,
+                        encryptedPassword,
                         payload: encryptedPayload
                     });
                     
@@ -380,18 +408,34 @@ export function Dashboard({ user, socket }: DashboardProps) {
         });
     });
 
-    socket.on('device_sync_payload', async (data: { payload: string }) => {
+    socket.on('device_sync_payload', async (data: { encryptedPassword: string, payload: string }) => {
         try {
-            // Decrypt the payload with our temporary private key
-            const { decryptDataWithPrivateKey } = await import('../utils/e2ee');
+            const { decryptPINWithPrivateKey, encryptPINWithPublicKey } = await import('../utils/e2ee');
+            const { decryptData } = await import('../utils/crypto');
             const tempPrivateKey = sessionStorage.getItem('temp_sync_private_key');
             if (!tempPrivateKey) return;
 
-            const decryptedString = await decryptDataWithPrivateKey(data.payload, tempPrivateKey);
+            // Decrypt the AES Transport Password using our RSA Private Key
+            const syncPassword = await decryptPINWithPrivateKey(data.encryptedPassword, tempPrivateKey);
+            if (syncPassword === 'DECRYPTION_FAILED') throw new Error('Decryption Failed');
+
+            // Decrypt the massive JSON payload using the AES Transport Password
+            const decryptedString = decryptData(data.payload, syncPassword);
+            if (!decryptedString) throw new Error('Malformed UTF-8 data');
+
             const { privateKey, messages, pins } = JSON.parse(decryptedString);
 
-            const { savePrivateKeyLocal, importMessagesLocal } = await import('../utils/db');
+            const { savePrivateKeyLocal, importMessagesLocal, savePinLocal } = await import('../utils/db');
             if (privateKey) await savePrivateKeyLocal(user.id.toString(), privateKey);
+            
+            // Encrypt all recovered PINs using our RSA Public Key and save them to the Secure Vault
+            if (pins && user.publicKey) {
+                for (const sessionId of Object.keys(pins)) {
+                    const encryptedLocalPin = await encryptPINWithPublicKey(pins[sessionId], user.publicKey);
+                    await savePinLocal(sessionId, encryptedLocalPin);
+                }
+            }
+            
             if (messages) await importMessagesLocal(messages);
             
             // Clean up temporary keys
