@@ -98,7 +98,20 @@ export const getMessagesLocal = async (sessionId: string): Promise<DBMessage[]> 
     const request = index.getAll(hashedSessionId);
     
     request.onsuccess = () => {
-      resolve(request.result.sort((a, b) => a.timestamp - b.timestamp));
+      const hashedResults = request.result || [];
+      
+      // Backward compatibility: also fetch old messages stored under plaintext sessionId
+      const oldRequest = index.getAll(sessionId);
+      oldRequest.onsuccess = () => {
+         const oldResults = oldRequest.result || [];
+         const combined = [...hashedResults, ...oldResults];
+         // Deduplicate by ID just in case
+         const unique = Array.from(new Map(combined.map(item => [item.id, item])).values());
+         resolve(unique.sort((a, b) => a.timestamp - b.timestamp));
+      };
+      oldRequest.onerror = () => {
+         resolve(hashedResults.sort((a, b) => a.timestamp - b.timestamp));
+      };
     };
     request.onerror = () => reject(request.error);
   });

@@ -891,6 +891,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               }
             }
           } catch (e) {
+             if (decrypted.includes('"type":"stego_call_')) {
+               console.error("[Stego] Dropped corrupted signaling message", e);
+               return; // Do not show corrupted signaling in UI
+             }
              // Not JSON signaling, continue as normal text message
           }
           // ---------------------------------------------
