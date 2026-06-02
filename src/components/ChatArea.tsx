@@ -25,6 +25,7 @@ interface ChatAreaProps {
   onBack?: () => void;
   isBlocked?: boolean;
   onUnblock?: () => void;
+  isActive: boolean;
 }
 
 interface Message {
@@ -668,7 +669,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
   );
 };
 
-export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pendingCall, clearPendingCall, dbSession, onBack, isBlocked, onUnblock }: ChatAreaProps) {
+export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pendingCall, clearPendingCall, dbSession, onBack, isBlocked, onUnblock, isActive }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [snapchatMode, setSnapchatMode] = useState(false); // Disappearing timer
@@ -736,6 +737,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   }, [sessionInfo.sessionId]);
 
   useEffect(() => {
+    if (!isActive) return;
     // Load local messages
     const loadLocalMessages = async () => {
       try {
@@ -801,7 +803,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
     };
     loadLocalMessages();
-  }, [sessionInfo.sessionId, sessionInfo.pin]);
+  }, [sessionInfo.sessionId, sessionInfo.pin, isActive]);
 
   const addMessageLocal = async (msg: Message) => {
     try {
@@ -871,6 +873,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   useEffect(() => {
     if (!socket) return;
+    if (!isActive && callState === 'idle') return;
 
     const handleReceive = async (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
@@ -1087,13 +1090,18 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       socket.off('message_deleted');
       socket.off('call_end', handleCallEnd);
     };
-  }, [socket, sessionInfo.pin, sessionInfo.sessionId, pendingCall, clearPendingCall]);
+  }, [socket, sessionInfo.pin, sessionInfo.sessionId, pendingCall, clearPendingCall, isActive, callState]);
 
   useEffect(() => {
     if (messages.length > 0) {
       if (isInitialLoad.current) {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+        const timer = setTimeout(() => {
+          if (chatContainerRef.current) {
+            chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+          }
+        }, 100);
         isInitialLoad.current = false;
+        return () => clearTimeout(timer);
       } else if (chatContainerRef.current) {
         const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
         const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
@@ -1282,8 +1290,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       
       // Attempt to play audio immediately to satisfy mobile browser user gesture requirements
       if (remoteVideoRef.current && remoteStream) {
-        remoteVideoRef.current.srcObject = remoteStream;
-        remoteVideoRef.current.play().catch(e => console.error("Video play failed:", e));
+        if (remoteVideoRef.current.srcObject !== remoteStream) {
+          remoteVideoRef.current.srcObject = remoteStream;
+        }
+        remoteVideoRef.current.play().catch(e => {
+          if (e.name !== 'AbortError') {
+            console.error("Video play failed:", e);
+          }
+        });
       }
     } catch (err) {
       console.error('Error accepting call:', err);
@@ -1355,12 +1369,24 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
-      remoteVideoRef.current.play().catch(e => console.error("Video play failed:", e));
+      if (remoteVideoRef.current.srcObject !== remoteStream) {
+        remoteVideoRef.current.srcObject = remoteStream;
+      }
+      remoteVideoRef.current.play().catch(e => {
+        if (e.name !== 'AbortError') {
+          console.error("Video play failed:", e);
+        }
+      });
     }
     if (localVideoRef.current && localStream && isVideoCall) {
-      localVideoRef.current.srcObject = localStream;
-      localVideoRef.current.play().catch(e => console.error("Local video play failed:", e));
+      if (localVideoRef.current.srcObject !== localStream) {
+        localVideoRef.current.srcObject = localStream;
+      }
+      localVideoRef.current.play().catch(e => {
+        if (e.name !== 'AbortError') {
+          console.error("Local video play failed:", e);
+        }
+      });
     }
   }, [remoteStream, localStream, callState, isVideoCall]);
 

@@ -13,9 +13,10 @@ export const encryptData = (data: string, pin: string): string => {
 export const decryptData = (ciphertext: string, pin: string): string => {
   try {
     const bytes = CryptoJS.AES.decrypt(ciphertext, pin);
-    return bytes.toString(CryptoJS.enc.Utf8);
+    const decrypted = bytes.toString(CryptoJS.enc.Utf8);
+    return decrypted;
   } catch (e) {
-    console.error('Decryption failed', e);
+    console.warn('Decryption failed (possibly incorrect PIN or legacy residue)');
     return '';
   }
 };

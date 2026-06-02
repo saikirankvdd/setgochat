@@ -568,6 +568,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
                   isOnline={onlineUsers.includes(targetUser.id)}
                   pendingCall={pendingCall}
                   dbSession={targetSession}
+                  isActive={activeChat?.id === targetUser.id}
                   onBack={() => setActiveChat(null)}
                   isBlocked={blockedUsers.includes(targetUser.id as any)}
                   onUnblock={async () => {
