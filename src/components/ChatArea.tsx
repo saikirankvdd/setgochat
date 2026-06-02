@@ -729,6 +729,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   const isDraggingRef = useRef(false);
   const offsetRef = useRef({ x: 0, y: 0 });
+  const isInitialLoad = useRef(true);
+
+  useEffect(() => {
+    isInitialLoad.current = true;
+  }, [sessionInfo.sessionId]);
 
   useEffect(() => {
     // Load local messages
@@ -751,8 +756,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           if (msg.encryptedText) text = decryptData(msg.encryptedText, sessionInfo.pin) || '';
           let file;
           if (msg.encryptedFile) {
-            const decFile = decryptData(msg.encryptedFile, sessionInfo.pin);
-            if (decFile) file = JSON.parse(decFile);
+            try {
+              const decFile = decryptData(msg.encryptedFile, sessionInfo.pin);
+              if (decFile) file = JSON.parse(decFile);
+            } catch (e) {
+              console.error("Failed to parse decrypted file payload", e);
+            }
           }
 
           // Drop and clean up if it is a covert signaling message (e.g. legacy signaling residues in DB)
@@ -1081,14 +1090,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   }, [socket, sessionInfo.pin, sessionInfo.sessionId, pendingCall, clearPendingCall]);
 
   useEffect(() => {
-    if (chatContainerRef.current) {
-      const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
-      const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
-      if (isNearBottom) {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messages.length > 0) {
+      if (isInitialLoad.current) {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'auto' });
+        isInitialLoad.current = false;
+      } else if (chatContainerRef.current) {
+        const { scrollTop, scrollHeight, clientHeight } = chatContainerRef.current;
+        const isNearBottom = scrollHeight - scrollTop - clientHeight < 200;
+        if (isNearBottom) {
+          messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+        }
       }
-    } else {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     }
   }, [messages]);
 
