@@ -904,21 +904,34 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         
         if (decrypted) {
           // --- STEGANOGRAPHIC SIGNALING INTERCEPTION ---
+          let decompressed = '';
           try {
-            if (decrypted.includes('"type":"stego_call_offer"')) {
-              const parsed = JSON.parse(decrypted);
+            const compressedStr = atob(decrypted);
+            const compressedBytes = new Uint8Array(compressedStr.length);
+            for (let i = 0; i < compressedStr.length; i++) {
+              compressedBytes[i] = compressedStr.charCodeAt(i);
+            }
+            const decompressedBytes = gunzipSync(compressedBytes);
+            decompressed = strFromU8(decompressedBytes);
+          } catch (e) {
+            decompressed = decrypted;
+          }
+
+          try {
+            if (decompressed.includes('"type":"stego_call_offer"')) {
+              const parsed = JSON.parse(decompressed);
               if (parsed.type === 'stego_call_offer') {
                 handleCallOffer({ ...parsed, fromId: data.fromId, sessionId: sessionInfo.sessionId });
                 return; // Do not show in UI
               }
-            } else if (decrypted.includes('"type":"stego_call_answer"')) {
-              const parsed = JSON.parse(decrypted);
+            } else if (decompressed.includes('"type":"stego_call_answer"')) {
+              const parsed = JSON.parse(decompressed);
               if (parsed.type === 'stego_call_answer') {
                 handleCallAnswer({ ...parsed, fromId: data.fromId, sessionId: sessionInfo.sessionId });
                 return; // Do not show in UI
               }
-            } else if (decrypted.includes('"type":"stego_call_ice_candidate"')) {
-              const parsed = JSON.parse(decrypted);
+            } else if (decompressed.includes('"type":"stego_call_ice_candidate"')) {
+              const parsed = JSON.parse(decompressed);
               if (parsed.type === 'stego_call_ice_candidate') {
                 handleIceCandidate({ ...parsed, fromId: data.fromId, sessionId: sessionInfo.sessionId });
                 return; // Do not show in UI
@@ -926,12 +939,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             }
 
             // If it contains stego call type but failed exact match or was truncated, drop it
-            if (decrypted.includes('"type":"stego_call_') || decrypted.startsWith('{"type":"stego_')) {
+            if (decompressed.includes('"type":"stego_call_') || decompressed.startsWith('{"type":"stego_')) {
                console.warn("[Stego] Intercepted and dropped partial or unhandled signaling payload");
                return;
             }
           } catch (e) {
-             if (decrypted.includes('"type":"stego_call_') || decrypted.startsWith('{"type":"stego_')) {
+             if (decompressed.includes('"type":"stego_call_') || decompressed.startsWith('{"type":"stego_')) {
                console.error("[Stego] Dropped corrupted signaling message", e);
                return; // Do not show corrupted signaling in UI
              }
@@ -1151,7 +1164,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const sendStegoSignaling = (payloadObj: any, toId: string) => {
     try {
       const jsonStr = JSON.stringify(payloadObj);
-      const encrypted = encryptData(jsonStr, sessionInfo.pin);
+      const compressed = gzipSync(strToU8(jsonStr), { level: 6 });
+      let compressedBin = '';
+      for (let i = 0; i < compressed.length; i++) {
+        compressedBin += String.fromCharCode(compressed[i]);
+      }
+      const compressedBase64 = btoa(compressedBin);
+      
+      const encrypted = encryptData(compressedBase64, sessionInfo.pin);
       const binary = stringToBinary(encrypted);
       const carrier = createDynamicCarrier(binary.length);
       const stegoAudio = encodeLSB(carrier, binary);
@@ -1172,7 +1192,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         isOneTime: false,
         timer: 0
       });
-      console.log(`[Stego-Signaling] Sent covert ${payloadObj.type} via audio LSB`);
+      console.log(`[Stego-Signaling] Sent covert compressed ${payloadObj.type} via audio LSB`);
     } catch (e) {
       console.error("[Stego-Signaling] Failed to send", e);
     }
