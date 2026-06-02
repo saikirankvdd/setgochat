@@ -156,6 +156,11 @@ export function Dashboard({ user, socket }: DashboardProps) {
       }, 1000);
     });
 
+    // If socket is already connected on mount, trigger registration immediately to synchronize session PINs
+    if (socket.connected) {
+      socket.emit('register', user.id);
+    }
+
     socket.on('chat_started', async (data) => {
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
@@ -291,6 +296,11 @@ export function Dashboard({ user, socket }: DashboardProps) {
            const binary = decodeLSB(bytes.buffer);
            extractedEncryptedText = binaryToString(binary);
            previewText = decryptData(extractedEncryptedText, pin);
+           
+           // Covert Stego signaling messages must be ignored by Dashboard preview
+           if (previewText && previewText.includes('"type":"stego_call_')) {
+              return;
+           }
          } catch(e) {}
        }
 

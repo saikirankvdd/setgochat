@@ -753,6 +753,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             const decFile = decryptData(msg.encryptedFile, sessionInfo.pin);
             if (decFile) file = JSON.parse(decFile);
           }
+
+          // Drop if both text and file are empty/undefined (indicates failed decryption or empty signaling message)
+          if (!text && !file) {
+            continue;
+          }
+
           decryptedMsgs.push({
             id: msg.id,
             fromId: msg.fromId,
@@ -890,8 +896,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 return; // Do not show in UI
               }
             }
+
+            // If it contains stego call type but failed exact match or was truncated, drop it
+            if (decrypted.includes('"type":"stego_call_') || decrypted.startsWith('{"type":"stego_')) {
+               console.warn("[Stego] Intercepted and dropped partial or unhandled signaling payload");
+               return;
+            }
           } catch (e) {
-             if (decrypted.includes('"type":"stego_call_')) {
+             if (decrypted.includes('"type":"stego_call_') || decrypted.startsWith('{"type":"stego_')) {
                console.error("[Stego] Dropped corrupted signaling message", e);
                return; // Do not show corrupted signaling in UI
              }
