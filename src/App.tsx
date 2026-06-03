@@ -46,6 +46,36 @@ export default function App() {
             if (!privateKey) {
               privateKey = sessionStorage.getItem('stego_priv_key_' + data.user.id.toString()) || undefined;
             }
+
+            let isValidKey = false;
+            if (privateKey && data.user.publicKey) {
+              const { verifyKeyPair } = await import('./utils/e2ee');
+              isValidKey = await verifyKeyPair(data.user.publicKey, privateKey);
+            }
+
+            if (privateKey && !isValidKey) {
+              console.warn('[E2EE] Mismatched or stale private key detected. Clearing local copy.');
+              const { savePrivateKeyLocal } = await import('./utils/db');
+              await savePrivateKeyLocal(data.user.id.toString(), '');
+              try {
+                sessionStorage.removeItem('stego_priv_key_' + data.user.id.toString());
+              } catch (e) {}
+              privateKey = undefined;
+            }
+
+            if (!privateKey) {
+              console.warn('[E2EE] No valid private key found for session. Logging out to sync keys.');
+              setUser(null);
+              try { await fetch('/api/logout', { method: 'POST' }); } catch (e) {}
+              showModal({
+                title: 'Secure Vault Desynced',
+                message: 'Your E2E security keys have been updated or desynced. Please log in again with your password to restore your secure vault.',
+                iconType: 'warning'
+              });
+              setIsBootstrapping(false);
+              return;
+            }
+
             setUser({ ...data.user, privateKey });
           }
         }

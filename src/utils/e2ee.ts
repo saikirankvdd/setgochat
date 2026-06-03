@@ -71,6 +71,18 @@ export async function decryptPINWithPrivateKey(encryptedPinBase64: string, priva
   }
 }
 
+export async function verifyKeyPair(publicKeyBase64: string, privateKeyBase64: string): Promise<boolean> {
+  if (!publicKeyBase64 || !privateKeyBase64) return false;
+  try {
+    const testMessage = 'verify_key_pair_match';
+    const encrypted = await encryptPINWithPublicKey(testMessage, publicKeyBase64);
+    const decrypted = await decryptPINWithPrivateKey(encrypted, privateKeyBase64);
+    return decrypted === testMessage;
+  } catch (err) {
+    return false;
+  }
+}
+
 // Encrypt Private Key with User's Login Password using PBKDF2 + AES-GCM (Finding 2)
 export async function encryptPrivateKeyWithPassword(privateKey: string, password: string): Promise<string> {
   const salt = window.crypto.getRandomValues(new Uint8Array(16));

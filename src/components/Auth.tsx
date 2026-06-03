@@ -110,8 +110,16 @@ export function Auth({ onLogin }: AuthProps) {
             let privateKey = '';
             if (data.user.encryptedPrivateKey && data.user.encryptedPrivateKey !== 'ADMIN') {
                // Decrypt the private key securely (Finding 2)
-               const decrypted = await decryptPrivateKeyWithPassword(data.user.encryptedPrivateKey, password);
-               privateKey = decrypted.key;
+                const decrypted = await decryptPrivateKeyWithPassword(data.user.encryptedPrivateKey, password);
+                privateKey = decrypted.key;
+
+                const { verifyKeyPair } = await import('../utils/e2ee');
+                const isValid = await verifyKeyPair(data.user.publicKey, privateKey);
+                if (!isValid) {
+                   setError('Vault decryption failed. Stale or corrupted security key in vault.');
+                   setIsLoading(false);
+                   return;
+                }
                
                // Transparent legacy upgrade logic: if CryptoJS was used, migrate to PBKDF2 + AES-GCM silently (Finding 2)
                if (decrypted.upgraded) {
