@@ -882,7 +882,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     if (!isActive && callState === 'idle') return;
 
     const handleReceive = async (data: any) => {
-      if (data.isStegoSignaling) return; // Discard WebRTC call signaling immediately
       if (data.sessionId !== sessionInfo.sessionId) return;
       // Deduplicate: if this msgId was already processed (e.g. offline re-delivery), skip
       if (data.msgId) {

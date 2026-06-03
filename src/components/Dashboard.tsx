@@ -298,8 +298,9 @@ export function Dashboard({ user, socket }: DashboardProps) {
         }
         
         if (!resolvedPrivateKey) {
-          // No private key available at all — can't decrypt PINs, abort silently
+          // No private key available — can't decrypt PINs, but must still unblock the UI
           console.debug('[E2EE] No private key available for PIN decryption on session_pins.');
+          setPinsReady(true); // Unblock UI so chats render (they'll show as empty until key is restored)
           return;
         }
         
