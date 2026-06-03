@@ -199,10 +199,16 @@ export function Dashboard({ user, socket }: DashboardProps) {
     socket.on('chat_started', async (data) => {
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
+        const { getPrivateKeyLocal } = await import('../utils/db');
+        // Resolve private key with fallback chain
+        let resolvedKey: string | undefined = user.privateKey
+          || sessionStorage.getItem('stego_priv_key_' + user.id.toString())
+          || await getPrivateKeyLocal(user.id.toString())
+          || undefined;
         const encPin = user.id.toString() === data.user1_id ? data.pin1 : data.pin2;
         let decryptedPin = 'UNENCRYPTED';
-        if (encPin) {
-           decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+        if (encPin && resolvedKey) {
+           decryptedPin = await decryptPINWithPrivateKey(encPin, resolvedKey);
         }
 
         const oldPin = pinsRef.current[data.sessionId];
@@ -225,10 +231,16 @@ export function Dashboard({ user, socket }: DashboardProps) {
     socket.on('chat_ready', async (data) => {
       try {
         const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
+        const { getPrivateKeyLocal } = await import('../utils/db');
+        // Resolve private key with fallback chain
+        let resolvedKey: string | undefined = user.privateKey
+          || sessionStorage.getItem('stego_priv_key_' + user.id.toString())
+          || await getPrivateKeyLocal(user.id.toString())
+          || undefined;
         const encPin = user.id.toString() === data.user1_id ? data.pin1 : data.pin2;
         let decryptedPin = 'UNENCRYPTED';
-        if (encPin) {
-           decryptedPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+        if (encPin && resolvedKey) {
+           decryptedPin = await decryptPINWithPrivateKey(encPin, resolvedKey);
         }
 
         const oldPin = pinsRef.current[data.sessionId];
@@ -272,24 +284,38 @@ export function Dashboard({ user, socket }: DashboardProps) {
       setSessions(sessionsData);
       const newPins: Record<string, string> = { ...pinsRef.current };
       try {
-        const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
-        const { getPinLocal, savePinLocal } = await import('../utils/db');
+        const { decryptPINWithPrivateKey, encryptPINWithPublicKey } = await import('../utils/e2ee');
+        const { getPinLocal, savePinLocal, getPrivateKeyLocal } = await import('../utils/db');
+
+        // Resolve private key from multiple fallback sources to handle cases where
+        // user.privateKey is undefined after a forced version-mismatch reload
+        let resolvedPrivateKey: string | undefined = user.privateKey;
+        if (!resolvedPrivateKey) {
+          resolvedPrivateKey = sessionStorage.getItem('stego_priv_key_' + user.id.toString()) || undefined;
+        }
+        if (!resolvedPrivateKey) {
+          resolvedPrivateKey = await getPrivateKeyLocal(user.id.toString()) || undefined;
+        }
+        
+        if (!resolvedPrivateKey) {
+          // No private key available at all — can't decrypt PINs, abort silently
+          console.debug('[E2EE] No private key available for PIN decryption on session_pins.');
+          return;
+        }
         
         await Promise.all(sessionsData.map(async (s) => {
           try {
-            const { encryptPINWithPublicKey } = await import('../utils/e2ee');
-            
             // Decrypt the Server PIN first
             const encPin = user.id.toString() === s.user1_id ? s.pin1 : s.pin2;
             let serverPin = 'UNENCRYPTED';
             if (encPin) {
-              serverPin = await decryptPINWithPrivateKey(encPin, user.privateKey!);
+              serverPin = await decryptPINWithPrivateKey(encPin, resolvedPrivateKey!);
             }
 
             // Check the local Secure Vault
             const localEncryptedPin = await getPinLocal(s.id);
             if (localEncryptedPin) {
-                const localPin = await decryptPINWithPrivateKey(localEncryptedPin, user.privateKey!);
+                const localPin = await decryptPINWithPrivateKey(localEncryptedPin, resolvedPrivateKey!);
                 
                 // If local pin and server pin are different and both valid, reconcile/re-encrypt
                 if (localPin && serverPin && localPin !== 'DECRYPTION_FAILED' && serverPin !== 'DECRYPTION_FAILED' && localPin !== 'UNENCRYPTED' && serverPin !== 'UNENCRYPTED' && localPin !== serverPin) {

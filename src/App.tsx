@@ -98,11 +98,15 @@ export default function App() {
         if (version !== APP_VERSION) {
           showModal({
             title: 'Security Update Required',
-            message: 'A secure version update is available. Reloading application to ensure encryption compatibility...',
+            message: 'A secure version update is available. Reloading in 3 seconds to apply encryption compatibility fixes...',
             iconType: 'info'
           });
           setTimeout(() => {
-            window.location.reload();
+            // Hard cache-busting reload — forces browser to fetch fresh JS bundle
+            // window.location.reload() serves cached JS; adding ?v=timestamp bypasses cache
+            const url = new URL(window.location.href);
+            url.searchParams.set('v', Date.now().toString());
+            window.location.replace(url.toString());
           }, 3000);
         }
       });
