@@ -24,7 +24,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import 'dotenv/config';
 
 // Application version matching client bundle
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 
 // Safe in-memory nonce store for Socket.IO single-use connection bridging
 const nonceMap = new Map<string, string>();

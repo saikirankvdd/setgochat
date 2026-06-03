@@ -17,7 +17,7 @@ interface DashboardProps {
   socket: Socket;
 }
 
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 
 export function Dashboard({ user, socket }: DashboardProps) {
   const [activeChat, setActiveChat] = useState<User | null>(null);
@@ -362,19 +362,9 @@ export function Dashboard({ user, socket }: DashboardProps) {
            if (previewText && (previewText.includes('"type":"stego_call_') || previewText.startsWith('{"type":"stego_'))) {
               return;
            }
+           // Any H4sI prefix = Gzip stego signaling payload — always discard
            if (previewText && previewText.startsWith('H4sI')) {
-              try {
-                const compressedStr = atob(previewText);
-                const compressedBytes = new Uint8Array(compressedStr.length);
-                for (let i = 0; i < compressedStr.length; i++) {
-                  compressedBytes[i] = compressedStr.charCodeAt(i);
-                }
-                const decompressedBytes = gunzipSync(compressedBytes);
-                const decompressed = strFromU8(decompressedBytes);
-                if (decompressed.includes('"type":"stego_call_') || decompressed.startsWith('{"type":"stego_')) {
-                   return; // Ignore signaling message in dashboard preview
-                }
-              } catch (e) {}
+              return; // Never display or save stego signaling residues
            }
          } catch(e) {}
        }

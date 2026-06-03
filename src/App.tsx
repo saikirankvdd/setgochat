@@ -26,7 +26,7 @@ export function getCookie(name: string): string | null {
   return match ? decodeURIComponent(match[2]) : null;
 }
 
-const APP_VERSION = '2.2.0';
+const APP_VERSION = '2.3.0';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);

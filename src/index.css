@@ -94,3 +94,22 @@ body {
   animation: fadeIn 0.3s ease-out forwards;
 }
 
+/* ============================================
+   Mobile Zoom & Touch Prevention
+   ============================================ */
+
+/* Prevent iOS/Android zoom when focusing input fields (font-size must be >= 16px) */
+input, textarea, select {
+  font-size: 16px !important;
+  touch-action: manipulation;
+}
+
+/* Prevent double-tap zoom on interactive elements */
+button, a, [role="button"] {
+  touch-action: manipulation;
+}
+
+/* Prevent the entire page from zooming on touch gestures */
+html {
+  touch-action: pan-x pan-y;
+}

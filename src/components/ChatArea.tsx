@@ -772,23 +772,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             continue;
           }
 
-          // Drop and clean up if it is a Gzip-compressed signaling residue starting with H4sI
+          // Drop and clean up ANY Gzip-compressed base64 residue (H4sI prefix = always stego signaling)
           if (text && text.startsWith('H4sI')) {
-            try {
-              const compressedStr = atob(text);
-              const compressedBytes = new Uint8Array(compressedStr.length);
-              for (let i = 0; i < compressedStr.length; i++) {
-                compressedBytes[i] = compressedStr.charCodeAt(i);
-              }
-              const decompressedBytes = gunzipSync(compressedBytes);
-              const decompressed = strFromU8(decompressedBytes);
-              if (decompressed.includes('"type":"stego_call_') || decompressed.startsWith('{"type":"stego_')) {
-                toDeleteIds.push(msg.id);
-                continue;
-              }
-            } catch (e) {
-              // Not a valid compressed signaling message, keep it as text
-            }
+            toDeleteIds.push(msg.id);
+            continue;
           }
 
           // Drop if both text and file are empty/undefined (indicates failed decryption or empty signaling message)
