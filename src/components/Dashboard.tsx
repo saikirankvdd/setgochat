@@ -623,22 +623,33 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
     setActiveChat(targetUser);
     try {
       if (!user.publicKey || !targetUser.publicKey) return;
-      const { encryptPINWithPublicKey } = await import('../utils/e2ee');
 
       const sId = [String(user.id), String(targetUser.id)].sort().join('-');
       const existingPin = pinsRef.current[sId];
       
-      // If the PIN is DECRYPTION_FAILED, do NOT auto-reset the session or emit start_chat!
-      // This protects the E2EE PIN from being corrupted on other devices.
+      // If the PIN is DECRYPTION_FAILED, show the mismatch banner (don't auto-reset).
+      // The user must explicitly click "Reset Session" to generate a new PIN.
       if (existingPin === 'DECRYPTION_FAILED') {
         console.warn('[E2EE] Not auto-generating PIN for decryption-failed session:', sId);
         return;
       }
 
-      // Reuse the existing PIN if it is valid — this keeps offline messages decodable.
-      // Only mint a fresh PIN for brand-new sessions or when the old one was broken.
+      // KEY FIX: If a valid PIN already exists for this session, do NOT emit start_chat.
+      // The ChatArea is already rendered with isActive=false (pinsRef was populated by
+      // session_pins on login). setActiveChat() above flips isActive to true, which
+      // triggers loadLocalMessages() with the correct stable PIN already in pinsRef.
+      // Emitting start_chat here would race against the decryption loop and could
+      // replace the stored PIN with a newly-encrypted version before recovery finishes.
       const isValidPin = existingPin && existingPin !== 'UNENCRYPTED' && existingPin.length >= 6;
-      const pinToUse = isValidPin ? existingPin : Math.floor(100000 + Math.random() * 900000).toString();
+      if (isValidPin) {
+        console.log('[E2EE] Existing valid PIN found for session', sId, '— skipping start_chat. Recovery will use stored PIN.');
+        return;
+      }
+
+      // Brand-new session (no PIN in pinsRef yet) or UNENCRYPTED legacy session:
+      // generate a fresh PIN and perform the full handshake.
+      const { encryptPINWithPublicKey } = await import('../utils/e2ee');
+      const pinToUse = Math.floor(100000 + Math.random() * 900000).toString();
 
       const ids = [String(user.id), String(targetUser.id)].sort();
       const iAmUser1 = ids[0] === String(user.id);

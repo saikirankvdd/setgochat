@@ -748,6 +748,31 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         const toDeleteIds: string[] = [];
         const now = Date.now();
         const total = localMsgs.length;
+
+        // Fetch a backup PIN from the local vault. This is the RSA-encrypted copy saved
+        // by session_pins. We decrypt it here as a plain AES key string so we can use it
+        // as a fallback if the current sessionInfo.pin fails on any stored message.
+        let vaultFallbackPin: string | null = null;
+        try {
+          const { getPinLocal, getPrivateKeyLocal } = await import('../utils/db');
+          const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
+          const encLocalPin = await getPinLocal(sessionInfo.sessionId);
+          if (encLocalPin) {
+            const privKey = user.privateKey
+              || sessionStorage.getItem('stego_priv_key_' + user.id.toString())
+              || await getPrivateKeyLocal(user.id.toString())
+              || null;
+            if (privKey) {
+              const plain = await decryptPINWithPrivateKey(encLocalPin, privKey);
+              if (plain && plain !== 'DECRYPTION_FAILED' && plain !== 'UNENCRYPTED') {
+                vaultFallbackPin = plain;
+              }
+            }
+          }
+        } catch (e) {
+          // Non-fatal: vault PIN fallback is best-effort
+          console.debug('[Recovery] Could not load vault fallback PIN:', e);
+        }
         
         if (total > 0) {
           setRecoveryProgress(0);
@@ -763,11 +788,21 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               continue;
             }
             let text = '';
-            if (msg.encryptedText) text = decryptData(msg.encryptedText, sessionInfo.pin) || '';
+            if (msg.encryptedText) {
+              text = decryptData(msg.encryptedText, sessionInfo.pin) || '';
+              // Fallback: if current PIN produced nothing, try the local vault PIN.
+              // This handles cases where re-encryption after a PIN change was incomplete.
+              if (!text && vaultFallbackPin && vaultFallbackPin !== sessionInfo.pin) {
+                text = decryptData(msg.encryptedText, vaultFallbackPin) || '';
+              }
+            }
             let file;
             if (msg.encryptedFile) {
               try {
-                const decFile = decryptData(msg.encryptedFile, sessionInfo.pin);
+                let decFile = decryptData(msg.encryptedFile, sessionInfo.pin);
+                if (!decFile && vaultFallbackPin && vaultFallbackPin !== sessionInfo.pin) {
+                  decFile = decryptData(msg.encryptedFile, vaultFallbackPin);
+                }
                 if (decFile) file = JSON.parse(decFile);
               } catch (e) {
                 console.error("Failed to parse decrypted file payload", e);
