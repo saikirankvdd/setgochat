@@ -1964,8 +1964,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       <div className="flex-1 flex flex-col relative">
         {/* Call UI Overlay */}
         {callState !== 'idle' && (
-          <div className="absolute inset-0 z-50 bg-[#0b141a]/95 backdrop-blur-md flex flex-col items-center justify-center animate-fade-in p-8">
-            {/* Always mount video so ref attaches, hide visual if audio-only */}
+          <div className={`absolute inset-0 z-50 flex flex-col items-center justify-center animate-fade-in
+            ${
+              callState === 'connected' && !isVideoCall
+                // Audio connected: compact floating card at top, chat visible + blurred behind
+                ? 'bg-black/40 backdrop-blur-sm'
+                // Calling/receiving/video: full blur overlay
+                : 'bg-black/60 backdrop-blur-md'
+            }
+          `}>
+            {/* Remote video — fullscreen behind for video calls */}
             <video 
               ref={remoteVideoRef} 
               autoPlay 
@@ -1973,95 +1981,122 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               className={`absolute inset-0 w-full h-full object-cover z-0 ${isVideoCall && callState === 'connected' ? 'block' : 'hidden'}`} 
             />
 
-            <div className={`relative w-full max-w-3xl flex-1 flex flex-col items-center justify-center z-10 ${isVideoCall && callState === 'connected' ? 'bg-transparent' : 'bg-[#202c33] rounded-3xl border border-[#2a3942] p-8 shadow-2xl max-h-[400px]'}`}>
-              {/* Avatar for Audio Call or connecting */}
-              {(!isVideoCall || callState !== 'connected') && (
-                <div className="flex flex-col items-center">
-                  <div className="w-24 h-24 bg-[#00a884] rounded-full flex items-center justify-center mb-6 animate-pulse shadow-lg shadow-[#00a884]/20">
-                    {isVideoCall ? <Video className="w-10 h-10 text-white" /> : <Phone className="w-10 h-10 text-white" />}
-                  </div>
-                  <h2 className="text-2xl text-white font-medium mb-2">
-                    {callState === 'receiving' ? (String(callerId) === String(targetUser.id) ? targetUser.username : 'Unknown') : targetUser.username}
-                  </h2>
-                  <p className="text-[#8696a0] mb-2 text-lg">
-                    {callState === 'calling' && 'Calling...'}
-                    {callState === 'receiving' && `Incoming ${isVideoCall ? 'Video ' : 'Audio '}Call`}
-                    {callState === 'connected' && formatDuration(callDuration)}
-                  </p>
+            {/* Audio Call Connected: compact floating card (chat visible behind) */}
+            {callState === 'connected' && !isVideoCall ? (
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 bg-[#202c33]/90 backdrop-blur-md border border-[#2a3942] rounded-2xl px-5 py-3 shadow-2xl">
+                <div className="w-9 h-9 bg-[#00a884] rounded-full flex items-center justify-center shadow-lg">
+                  <Phone className="w-4 h-4 text-white" />
                 </div>
-              )}
-              
-              {/* Local PiP feed (Draggable) */}
-              <div 
-                className={`absolute z-50 cursor-move rounded-2xl overflow-hidden shadow-2xl border-2 border-[#2a3942] bg-[#202c33] transition-opacity w-32 md:w-48 h-48 md:h-64 ${isVideoCall && !isVideoOff && callState === 'connected' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-                style={{ left: localVidPos.x, top: localVidPos.y, touchAction: 'none' }}
-                onPointerDown={(e) => {
-                  const target = e.currentTarget as HTMLElement;
-                  isDraggingRef.current = true;
-                  target.setPointerCapture(e.pointerId);
-                  offsetRef.current = { x: e.clientX - localVidPos.x, y: e.clientY - localVidPos.y };
-                }}
-                onPointerMove={(e) => {
-                  if (!isDraggingRef.current) return;
-                  setLocalVidPos({ x: e.clientX - offsetRef.current.x, y: e.clientY - offsetRef.current.y });
-                }}
-                onPointerUp={(e) => {
-                  isDraggingRef.current = false;
-                  const target = e.currentTarget as HTMLElement;
-                  target.releasePointerCapture(e.pointerId);
-                  const wX = window.innerWidth;
-                  const wY = window.innerHeight;
-                  const midX = wX / 2;
-                  const snapX = localVidPos.x > midX ? wX - (wX > 768 ? 220 : 150) : 20;
-                  let snapY = localVidPos.y;
-                  if (snapY < 20) snapY = 20;
-                  if (snapY > wY - 300) snapY = wY - 300;
-                  setLocalVidPos({ x: snapX, y: snapY });
-                }}
-              >
-                <video 
-                  ref={localVideoRef} 
-                  autoPlay 
-                  playsInline 
-                  muted 
-                  className="w-full h-full object-cover" 
-                />
+                <div>
+                  <p className="text-white font-medium text-sm leading-tight">{targetUser.username}</p>
+                  <p className="text-[#00a884] text-xs font-mono">{formatDuration(callDuration)}</p>
+                </div>
+                <div className="flex items-center gap-2 ml-2">
+                  <button onClick={toggleMute} className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${isMuted ? 'bg-red-500/80 text-white' : 'bg-[#2a3942] hover:bg-[#3b4a54] text-white'}`}>
+                    {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                  </button>
+                  <button onClick={togglePiP} className="w-9 h-9 rounded-full flex items-center justify-center bg-[#2a3942] hover:bg-[#3b4a54] text-white transition-colors">
+                    <ExternalLink className="w-4 h-4" />
+                  </button>
+                  <button onClick={() => endCall()} className="w-9 h-9 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-colors">
+                    <Phone className="w-4 h-4 text-white rotate-[135deg]" />
+                  </button>
+                </div>
               </div>
-
-              {/* Actions Bar */}
-              <div className="absolute bottom-8 flex items-center justify-center space-x-6 w-full">
-                {callState === 'receiving' ? (
-                  <>
-                    <button onClick={acceptCall} className="w-16 h-16 bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
-                      {isVideoCall ? <Video className="w-7 h-7 text-white" /> : <Phone className="w-7 h-7 text-white" />}
-                    </button>
-                    <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
-                      <Phone className="w-7 h-7 text-white rotate-[135deg]" />
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button onClick={toggleMute} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isMuted ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
-                      {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-                    </button>
-                    
-                    {isVideoCall && (
-                      <button onClick={toggleVideo} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isVideoOff ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
-                        {isVideoOff ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
-                      </button>
-                    )}
-
-                    <button onClick={togglePiP} className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors bg-[#202c33] hover:bg-[#2a3942] text-white">
-                      <ExternalLink className="w-6 h-6" />
-                    </button>
-
-                    <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
-                      <Phone className="w-7 h-7 text-white rotate-[135deg]" />
-                    </button>
-                  </>
+            ) : (
+              /* Calling / Receiving / Video connected: centred card */
+              <div className={`relative w-full max-w-sm flex-1 flex flex-col items-center justify-center z-10 ${
+                isVideoCall && callState === 'connected' ? 'bg-transparent' : 'bg-[#202c33] rounded-3xl border border-[#2a3942] p-8 shadow-2xl max-h-[420px] mx-8'
+              }`}>
+                {/* Avatar for non-video states */}
+                {(!isVideoCall || callState !== 'connected') && (
+                  <div className="flex flex-col items-center">
+                    <div className="w-24 h-24 bg-[#00a884] rounded-full flex items-center justify-center mb-6 animate-pulse shadow-lg shadow-[#00a884]/20">
+                      {isVideoCall ? <Video className="w-10 h-10 text-white" /> : <Phone className="w-10 h-10 text-white" />}
+                    </div>
+                    <h2 className="text-2xl text-white font-medium mb-2">
+                      {callState === 'receiving' ? (String(callerId) === String(targetUser.id) ? targetUser.username : 'Unknown') : targetUser.username}
+                    </h2>
+                    <p className="text-[#8696a0] mb-2 text-lg">
+                      {callState === 'calling' && 'Calling...'}
+                      {callState === 'receiving' && `Incoming ${isVideoCall ? 'Video ' : 'Audio '}Call`}
+                      {callState === 'connected' && formatDuration(callDuration)}
+                    </p>
+                  </div>
                 )}
+
+                {/* Local PiP feed (Draggable) */}
+                <div 
+                  className={`absolute z-50 cursor-move rounded-2xl overflow-hidden shadow-2xl border-2 border-[#2a3942] bg-[#202c33] transition-opacity w-32 md:w-48 h-48 md:h-64 ${isVideoCall && !isVideoOff && callState === 'connected' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                  style={{ left: localVidPos.x, top: localVidPos.y, touchAction: 'none' }}
+                  onPointerDown={(e) => {
+                    const target = e.currentTarget as HTMLElement;
+                    isDraggingRef.current = true;
+                    target.setPointerCapture(e.pointerId);
+                    offsetRef.current = { x: e.clientX - localVidPos.x, y: e.clientY - localVidPos.y };
+                  }}
+                  onPointerMove={(e) => {
+                    if (!isDraggingRef.current) return;
+                    setLocalVidPos({ x: e.clientX - offsetRef.current.x, y: e.clientY - offsetRef.current.y });
+                  }}
+                  onPointerUp={(e) => {
+                    isDraggingRef.current = false;
+                    const target = e.currentTarget as HTMLElement;
+                    target.releasePointerCapture(e.pointerId);
+                    const wX = window.innerWidth;
+                    const wY = window.innerHeight;
+                    const midX = wX / 2;
+                    const snapX = localVidPos.x > midX ? wX - (wX > 768 ? 220 : 150) : 20;
+                    let snapY = localVidPos.y;
+                    if (snapY < 20) snapY = 20;
+                    if (snapY > wY - 300) snapY = wY - 300;
+                    setLocalVidPos({ x: snapX, y: snapY });
+                  }}
+                >
+                  <video 
+                    ref={localVideoRef} 
+                    autoPlay 
+                    playsInline 
+                    muted 
+                    className="w-full h-full object-cover" 
+                  />
+                </div>
+
+                {/* Actions Bar */}
+                <div className="absolute bottom-8 flex items-center justify-center space-x-6 w-full">
+                  {callState === 'receiving' ? (
+                    <>
+                      <button onClick={acceptCall} className="w-16 h-16 bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
+                        {isVideoCall ? <Video className="w-7 h-7 text-white" /> : <Phone className="w-7 h-7 text-white" />}
+                      </button>
+                      <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
+                        <Phone className="w-7 h-7 text-white rotate-[135deg]" />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button onClick={toggleMute} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isMuted ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
+                        {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                      </button>
+                      
+                      {isVideoCall && (
+                        <button onClick={toggleVideo} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isVideoOff ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
+                          {isVideoOff ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
+                        </button>
+                      )}
+
+                      <button onClick={togglePiP} className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors bg-[#202c33] hover:bg-[#2a3942] text-white">
+                        <ExternalLink className="w-6 h-6" />
+                      </button>
+
+                      <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
+                        <Phone className="w-7 h-7 text-white rotate-[135deg]" />
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
 

@@ -41,6 +41,8 @@ html, body, #root {
   margin: 0;
   padding: 0;
   overflow: hidden;
+  /* Prevent mobile browser pull-to-refresh from intercepting touch scrolls */
+  overscroll-behavior: none;
 }
 
 body {
@@ -49,6 +51,9 @@ body {
   font-family: var(--font-sans);
   user-select: none;
   -webkit-user-select: none;
+  /* Allow normal touch scroll gestures inside the app on mobile */
+  touch-action: pan-x pan-y;
+  overscroll-behavior: none;
 }
 
 /* Theme Overrides for Hardcoded Tailwind Classes */
