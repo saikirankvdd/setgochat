@@ -298,10 +298,19 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
           resolvedPrivateKey = await getPrivateKeyLocal(user.id.toString()) || undefined;
         }
         
-        if (!resolvedPrivateKey) {
-          // No private key available — can't decrypt PINs, but must still unblock the UI
-          console.debug('[E2EE] No private key available for PIN decryption on session_pins.');
-          setPinsReady(true); // Unblock UI so chats render (they'll show as empty until key is restored)
+        // Verify that the private key matches the user's public key
+        let isCurrentKeyValid = false;
+        if (resolvedPrivateKey && user.publicKey) {
+          const { verifyKeyPair } = await import('../utils/e2ee');
+          isCurrentKeyValid = await verifyKeyPair(user.publicKey, resolvedPrivateKey);
+        }
+
+        if (!resolvedPrivateKey || !isCurrentKeyValid) {
+          console.warn('[E2EE] Private key is missing or mismatched with public key. Triggering reauth.');
+          if (onReauthRequired) {
+            onReauthRequired();
+          }
+          setPinsReady(true);
           return;
         }
         
@@ -352,10 +361,6 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
         }));
         pinsRef.current = newPins;
         setPinsReady(true);
-        if (allFailed && onReauthRequired) {
-          console.warn('[E2EE] All session PIN decryptions failed. Triggering reauth.');
-          onReauthRequired();
-        }
       } catch(e) {}
     });
 
