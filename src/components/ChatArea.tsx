@@ -709,6 +709,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isImporting, setIsImporting] = useState(false);
   const [showDataModal, setShowDataModal] = useState(false);
   const [showSharedMedia, setShowSharedMedia] = useState(false);
+  const [recoveryProgress, setRecoveryProgress] = useState<number | null>(null);
   const { showModal } = useModal();
 
   const [showReportModal, setShowReportModal] = useState(false);
@@ -745,55 +746,71 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         const decryptedMsgs: Message[] = [];
         const toDeleteIds: string[] = [];
         const now = Date.now();
-        for (const msg of localMsgs) {
-          if (msg.expiresAt && msg.expiresAt < now) {
-            toDeleteIds.push(msg.id);
-            continue;
-          }
-          if (msg.isSelfDestruct) {
-            toDeleteIds.push(msg.id);
-            continue;
-          }
-          let text = '';
-          if (msg.encryptedText) text = decryptData(msg.encryptedText, sessionInfo.pin) || '';
-          let file;
-          if (msg.encryptedFile) {
-            try {
-              const decFile = decryptData(msg.encryptedFile, sessionInfo.pin);
-              if (decFile) file = JSON.parse(decFile);
-            } catch (e) {
-              console.error("Failed to parse decrypted file payload", e);
+        const total = localMsgs.length;
+        
+        if (total > 0) {
+          setRecoveryProgress(0);
+          const batchSize = 30;
+          for (let i = 0; i < total; i++) {
+            const msg = localMsgs[i];
+            if (msg.expiresAt && msg.expiresAt < now) {
+              toDeleteIds.push(msg.id);
+              continue;
+            }
+            if (msg.isSelfDestruct) {
+              toDeleteIds.push(msg.id);
+              continue;
+            }
+            let text = '';
+            if (msg.encryptedText) text = decryptData(msg.encryptedText, sessionInfo.pin) || '';
+            let file;
+            if (msg.encryptedFile) {
+              try {
+                const decFile = decryptData(msg.encryptedFile, sessionInfo.pin);
+                if (decFile) file = JSON.parse(decFile);
+              } catch (e) {
+                console.error("Failed to parse decrypted file payload", e);
+              }
+            }
+
+            // Drop and clean up if it is a covert signaling message (e.g. legacy signaling residues in DB)
+            if (text && (text.includes('"type":"stego_call_') || text.startsWith('{"type":"stego_'))) {
+              toDeleteIds.push(msg.id);
+              continue;
+            }
+
+            // Drop and clean up ANY Gzip-compressed base64 residue (H4sI prefix = always stego signaling)
+            if (text && text.startsWith('H4sI')) {
+              toDeleteIds.push(msg.id);
+              continue;
+            }
+
+            // Drop if both text and file are empty/undefined (indicates failed decryption or empty signaling message)
+            if (!text && !file) {
+              continue;
+            }
+
+            decryptedMsgs.push({
+              id: msg.id,
+              fromId: msg.fromId,
+              toId: msg.toId,
+              text,
+              timestamp: msg.timestamp,
+              isSelfDestruct: msg.isSelfDestruct,
+              expiresAt: msg.expiresAt,
+              file
+            });
+
+            if (i > 0 && i % batchSize === 0) {
+              setRecoveryProgress(Math.round((i / total) * 100));
+              await new Promise(resolve => setTimeout(resolve, 0));
             }
           }
-
-          // Drop and clean up if it is a covert signaling message (e.g. legacy signaling residues in DB)
-          if (text && (text.includes('"type":"stego_call_') || text.startsWith('{"type":"stego_'))) {
-            toDeleteIds.push(msg.id);
-            continue;
-          }
-
-          // Drop and clean up ANY Gzip-compressed base64 residue (H4sI prefix = always stego signaling)
-          if (text && text.startsWith('H4sI')) {
-            toDeleteIds.push(msg.id);
-            continue;
-          }
-
-          // Drop if both text and file are empty/undefined (indicates failed decryption or empty signaling message)
-          if (!text && !file) {
-            continue;
-          }
-
-          decryptedMsgs.push({
-            id: msg.id,
-            fromId: msg.fromId,
-            toId: msg.toId,
-            text,
-            timestamp: msg.timestamp,
-            isSelfDestruct: msg.isSelfDestruct,
-            expiresAt: msg.expiresAt,
-            file
-          });
+          setRecoveryProgress(100);
+          await new Promise(resolve => setTimeout(resolve, 300));
+          setRecoveryProgress(null);
         }
+        
         setMessages(decryptedMsgs);
 
         // Perform batch deletes asynchronously in the background to avoid UI block
@@ -809,7 +826,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
     };
     loadLocalMessages();
-  }, [sessionInfo.sessionId, sessionInfo.pin, isActive]);
+  }, [sessionInfo.sessionId, sessionInfo.pin, isActive, recoveryProgress === null]);
 
   const addMessageLocal = async (msg: Message) => {
     try {
@@ -2020,6 +2037,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 <Shield className="w-3 h-3 mr-1 text-[#00a884] flex-shrink-0" />
                 <span className="text-[#00a884] hidden sm:inline">SECURE SESSION ACTIVE</span>
               </div>
+              {recoveryProgress !== null && (
+                <div className="text-[10px] text-[#00a884] font-medium mt-0.5 animate-pulse">
+                  Recovering messages: {recoveryProgress}%
+                </div>
+              )}
             </div>
           </div>
         </div>
