@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { User, getCookie } from '../App';
 import { Socket } from 'socket.io-client';
-import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX, Upload, Image as ImageIcon } from 'lucide-react';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX, Upload, Image as ImageIcon, RefreshCw } from 'lucide-react';
 import { SharedMediaViewer } from './SharedMediaViewer';
 import { useModal } from '../contexts/ModalContext';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
@@ -26,6 +26,7 @@ interface ChatAreaProps {
   isBlocked?: boolean;
   onUnblock?: () => void;
   isActive: boolean;
+  onResetSession?: () => void;
 }
 
 interface Message {
@@ -669,7 +670,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
   );
 };
 
-export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pendingCall, clearPendingCall, dbSession, onBack, isBlocked, onUnblock, isActive }: ChatAreaProps) {
+export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pendingCall, clearPendingCall, dbSession, onBack, isBlocked, onUnblock, isActive, onResetSession }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputText, setInputText] = useState('');
   const [snapchatMode, setSnapchatMode] = useState(false); // Disappearing timer
@@ -826,7 +827,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
     };
     loadLocalMessages();
-  }, [sessionInfo.sessionId, sessionInfo.pin, isActive, recoveryProgress === null]);
+  }, [sessionInfo.sessionId, sessionInfo.pin, isActive]);
 
   const addMessageLocal = async (msg: Message) => {
     try {
@@ -900,6 +901,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const handleReceive = async (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
+      if (sessionInfo.pin === 'DECRYPTION_FAILED') {
+        console.warn('[E2EE] Discarding incoming message/signal: PIN decryption failed state');
+        return;
+      }
       // Deduplicate: if this msgId was already processed (e.g. offline re-delivery), skip
       if (data.msgId) {
         setMessages(prev => {
@@ -1008,6 +1013,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const handleReceiveFile = (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
+      if (sessionInfo.pin === 'DECRYPTION_FAILED') return;
       try {
         const decryptedFile = decryptData(data.encryptedFile, sessionInfo.pin);
         if (decryptedFile) {
@@ -1240,6 +1246,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const startCall = async (withVideo: boolean = false) => {
+    if (sessionInfo.pin === 'DECRYPTION_FAILED') {
+      showModal({
+        title: 'Encryption Error',
+        message: 'Cannot place secure call. E2EE keys are mismatched. Please synchronize your device or reset the session first.',
+        iconType: 'warning'
+      });
+      return;
+    }
     try {
       pendingCandidates.current = [];
       setIsVideoCall(withVideo);
@@ -2291,7 +2305,22 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       </div>
       
       {/* Input Area or Request Panel */}
-      {dbSession?.status === 'pending' ? (
+      {sessionInfo.pin === 'DECRYPTION_FAILED' ? (
+        <div className="bg-[#202c33] p-4 flex flex-col md:flex-row items-center justify-between border-t border-red-500/30 gap-4 z-20 chat-input-area text-[#e9edef] w-full">
+          <div className="flex items-start gap-3 min-w-0">
+            <ShieldAlert className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+            <div className="text-sm leading-normal">
+              <span className="font-semibold text-red-400">Encryption Mismatch:</span> Your device failed to decrypt E2EE keys. Use the <strong className="text-white">Device Sync</strong> option in the sidebar menu (three dots) to sync keys from your phone, or reset this session to start fresh.
+            </div>
+          </div>
+          <button 
+            onClick={() => onResetSession?.()}
+            className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-colors flex-shrink-0 flex items-center gap-1.5 shadow-md"
+          >
+            <RefreshCw className="w-3.5 h-3.5" /> Reset Session
+          </button>
+        </div>
+      ) : dbSession?.status === 'pending' ? (
         <div className="bg-[#202c33] p-4 flex items-center justify-center border-t border-[#2a3942] z-20 text-[#8696a0] chat-input-area">
           {dbSession.initiator_id === user.id 
             ? "Waiting for user to accept your request..."

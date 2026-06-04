@@ -627,9 +627,17 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
 
       const sId = [String(user.id), String(targetUser.id)].sort().join('-');
       const existingPin = pinsRef.current[sId];
+      
+      // If the PIN is DECRYPTION_FAILED, do NOT auto-reset the session or emit start_chat!
+      // This protects the E2EE PIN from being corrupted on other devices.
+      if (existingPin === 'DECRYPTION_FAILED') {
+        console.warn('[E2EE] Not auto-generating PIN for decryption-failed session:', sId);
+        return;
+      }
+
       // Reuse the existing PIN if it is valid — this keeps offline messages decodable.
       // Only mint a fresh PIN for brand-new sessions or when the old one was broken.
-      const isValidPin = existingPin && existingPin !== 'DECRYPTION_FAILED' && existingPin !== 'UNENCRYPTED' && existingPin.length >= 6;
+      const isValidPin = existingPin && existingPin !== 'UNENCRYPTED' && existingPin.length >= 6;
       const pinToUse = isValidPin ? existingPin : Math.floor(100000 + Math.random() * 900000).toString();
 
       const ids = [String(user.id), String(targetUser.id)].sort();
@@ -645,6 +653,39 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
       }
       socket.emit('start_chat', { toId: targetUser.id, pin1, pin2 });
     } catch (err) { console.error('E2EE Handshake failed', err); }
+  };
+
+  const handleResetChatSession = async (targetUser: User) => {
+    try {
+      if (!user.publicKey || !targetUser.publicKey) return;
+      const { encryptPINWithPublicKey } = await import('../utils/e2ee');
+
+      const sId = [String(user.id), String(targetUser.id)].sort().join('-');
+      const pinToUse = Math.floor(100000 + Math.random() * 900000).toString();
+
+      const ids = [String(user.id), String(targetUser.id)].sort();
+      const iAmUser1 = ids[0] === String(user.id);
+      let pin1, pin2;
+
+      if (iAmUser1) {
+         pin1 = await encryptPINWithPublicKey(pinToUse, user.publicKey);
+         pin2 = await encryptPINWithPublicKey(pinToUse, targetUser.publicKey);
+      } else {
+         pin1 = await encryptPINWithPublicKey(pinToUse, targetUser.publicKey);
+         pin2 = await encryptPINWithPublicKey(pinToUse, user.publicKey);
+      }
+      
+      console.log('[E2EE] Manually resetting chat session keys for', sId);
+      socket.emit('start_chat', { toId: targetUser.id, pin1, pin2 });
+      
+      showModal({
+        title: 'Session Reset',
+        message: 'A fresh secure session has been initialized. You can now start chatting!',
+        iconType: 'success'
+      });
+    } catch (err) {
+      console.error('Manual E2EE Handshake failed', err);
+    }
   };
 
   const visibleUsers = users.filter(u => !blockedUsers.includes(u.id as any));
@@ -719,6 +760,7 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
                        }
                      } catch(e) { console.error(e); }
                   }}
+                  onResetSession={() => handleResetChatSession(targetUser)}
                 />
               </div>
            );
