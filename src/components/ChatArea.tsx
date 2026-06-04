@@ -958,6 +958,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           }
           // ---------------------------------------------
           
+          if (data.isStegoSignaling) {
+            console.log("[Stego] Discarding stego signaling message that failed processing");
+            return;
+          }
+          
           const msgId = data.msgId || Math.random().toString(36).substr(2, 9);
           // Skip if already in messages (dedup for offline re-delivery)
           setMessages(prev => {
