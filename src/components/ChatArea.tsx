@@ -749,9 +749,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         const now = Date.now();
         const total = localMsgs.length;
 
-        // DIAGNOSTIC: Shows whether IndexedDB has messages and if the PIN is usable
-        console.log(`[Recovery] IndexedDB scan: ${total} messages found for session ${sessionInfo.sessionId.substring(0,12)}... | PIN status: ${sessionInfo.pin === 'DECRYPTION_FAILED' ? 'FAILED' : sessionInfo.pin === 'UNENCRYPTED' ? 'UNENCRYPTED' : `valid(len=${sessionInfo.pin.length})`}`);
-
         // Fetch a backup PIN from the local vault. This is the RSA-encrypted copy saved
         // by session_pins. We decrypt it here as a plain AES key string so we can use it
         // as a fallback if the current sessionInfo.pin fails on any stored message.
@@ -776,9 +773,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           // Non-fatal: vault PIN fallback is best-effort
           console.debug('[Recovery] Could not load vault fallback PIN:', e);
         }
-
-        // DIAGNOSTIC: Shows whether a different vault backup PIN is available as fallback
-        console.log(`[Recovery] Vault fallback PIN: ${vaultFallbackPin ? (vaultFallbackPin === sessionInfo.pin ? 'same as session PIN (no extra help)' : `DIFFERENT from session PIN — will try both`) : 'not available'}`);
         
         if (total > 0) {
           setRecoveryProgress(0);
@@ -852,9 +846,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           await new Promise(resolve => setTimeout(resolve, 300));
           setRecoveryProgress(null);
         }
-
-        // DIAGNOSTIC: Final count — tells us if messages are there but PIN is wrong
-        console.log(`[Recovery] Complete: ${decryptedMsgs.length} messages shown, ${toDeleteIds.length} deleted (expired/signaling), ${total - decryptedMsgs.length - toDeleteIds.length} dropped (PIN mismatch or empty)`);
+        
         setMessages(decryptedMsgs);
 
         // Perform batch deletes asynchronously in the background to avoid UI block
