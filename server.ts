@@ -406,9 +406,9 @@ app.post('/api/login', authLimiter, async (req: any, res: any, next: any) => {
     );
 
     // Alert existing active socket session (if online) that a new login is attempted/completed
-    const activeSocketId = userSockets.get(user._id.toString());
-    if (activeSocketId) {
-      io.to(activeSocketId).emit('security_alert', {
+    const hasActiveSockets = userSockets.has(user._id.toString());
+    if (hasActiveSockets) {
+      io.to(`user_${user._id.toString()}`).emit('security_alert', {
         type: 'login_attempt',
         title: 'Security Alert',
         message: 'A new login attempt was detected on another device.'
@@ -472,9 +472,9 @@ app.post('/api/login', authLimiter, async (req: any, res: any, next: any) => {
   } else {
     // If user exists but login failed, notify them as a precaution!
     if (user) {
-      const activeSocketId = userSockets.get(user._id.toString());
-      if (activeSocketId) {
-        io.to(activeSocketId).emit('security_alert', {
+      const hasActiveSockets = userSockets.has(user._id.toString());
+      if (hasActiveSockets) {
+        io.to(`user_${user._id.toString()}`).emit('security_alert', {
           type: 'failed_login',
           title: 'Security Alert',
           message: 'Someone entered an incorrect password trying to login to your account.'
@@ -490,7 +490,7 @@ app.post('/api/login', authLimiter, async (req: any, res: any, next: any) => {
 
 
 // Socket.io Logic
-const userSockets = new Map<string, string>();
+const userSockets = new Map<string, Set<string>>();
 const otps = new Map<string, string>();
 const requestOtpSchema = z.object({
   emailOrUsername: z.string().trim().min(1).max(254),
@@ -515,9 +515,9 @@ app.post('/api/request-otp', authLimiter, async (req: any, res: any, next: any) 
     }
 
     // Alert active socket if someone requests a reset OTP
-    const activeSocketId = userSockets.get(user._id.toString());
-    if (activeSocketId) {
-      io.to(activeSocketId).emit('security_alert', {
+    const hasActiveSockets = userSockets.has(user._id.toString());
+    if (hasActiveSockets) {
+      io.to(`user_${user._id.toString()}`).emit('security_alert', {
         type: 'otp_attempt',
         title: 'Security Alert',
         message: 'Someone requested a password reset OTP for your account.'
@@ -688,27 +688,22 @@ io.on('connection', (socket: any) => {
        return;
     }
 
-    // Force disconnect any other active socket session for this user:
-    const existingSocketId = userSockets.get(userId);
-    if (existingSocketId && existingSocketId !== socket.id) {
-       const oldSocket = io.sockets.sockets.get(existingSocketId);
-       if (oldSocket) {
-          oldSocket.emit('force_logout', { message: 'Your account was signed in on another device. You have been logged out for your security.' });
-          oldSocket.disconnect(true);
-       }
+    // Add to multi-device socket Set
+    if (!userSockets.has(userId)) {
+      userSockets.set(userId, new Set());
     }
-
-
-
-    userSockets.set(userId, socket.id);
+    userSockets.get(userId)!.add(socket.id);
     socket.join(`user_${userId}`);
     console.log(`User ${userId} registered with socket ${socket.id}`);
     socket.emit('system_info', { version: APP_VERSION });
     broadcastOnlineUsers();
 
-    // Send all pins for this user
+    // Send all pins for this user and make socket join session rooms
     try {
       const sessions = await Session.find({ $or: [{ user1_id: userId }, { user2_id: userId }] });
+      for (const s of sessions) {
+         socket.join(s.id);
+      }
       io.to(socket.id).emit('session_pins', sessions);
     } catch(e) { console.error('Error syncing pins:', e); }
   });
@@ -744,9 +739,10 @@ io.on('connection', (socket: any) => {
       const sessionId = [socket.userId, toId].sort().join('-');
       await assertParticipant(socket.userId, sessionId);
       
-      const toSocketId = userSockets.get(toId);
-      if (toSocketId) {
-        io.to(toSocketId).emit('message_deleted', { msgId });
+      const toSockets = userSockets.get(toId);
+      if (toSockets && toSockets.size > 0) {
+        io.to(`user_${toId}`).emit('message_deleted', { msgId });
+        socket.to(`user_${socket.userId}`).emit('message_deleted', { msgId });
       } else {
         const payload = JSON.stringify({ type: 'delete_msg', msgId: msgId });
         const offlineMsg = new OfflineMessage({
@@ -764,15 +760,18 @@ io.on('connection', (socket: any) => {
 
   socket.on('disconnect', () => {
     let disconnectedUserId: string | null = null;
-    for (const [userId, socketId] of userSockets.entries()) {
-      if (socketId === socket.id) {
-        disconnectedUserId = userId;
+    for (const [userId, socketIds] of userSockets.entries()) {
+      if (socketIds.has(socket.id)) {
+        socketIds.delete(socket.id);
+        if (socketIds.size === 0) {
+          disconnectedUserId = userId;
+        }
         break;
       }
     }
     if (disconnectedUserId !== null) {
       userSockets.delete(disconnectedUserId);
-      console.log(`User ${disconnectedUserId} disconnected`);
+      console.log(`User ${disconnectedUserId} disconnected completely`);
       broadcastOnlineUsers();
     }
   });
@@ -787,10 +786,7 @@ io.on('connection', (socket: any) => {
     // data contains { toId, packet } 
     // This acts as our WebTransport fallback for prototype testing.
     // In production, this would be a raw HTTP/3 WebTransport stream.
-    const toSocketId = userSockets.get(data.toId);
-    if (toSocketId) {
-       io.to(toSocketId).emit('stealth_rtp_receive', data.packet);
-    }
+    io.to(`user_${data.toId}`).emit('stealth_rtp_receive', data.packet);
   });
 
   socket.on('start_chat', async ({ toId, pin1, pin2 }) => {
@@ -798,8 +794,10 @@ io.on('connection', (socket: any) => {
     const fromId = socket.userId; // Trusted ID
     const sessionId = [fromId, toId].sort().join('-');
     const [sorted1, sorted2] = [fromId, toId].sort();
-    const sortedPin1 = (fromId.toString() === sorted1.toString()) ? pin1 : pin2;
-    const sortedPin2 = (fromId.toString() === sorted1.toString()) ? pin2 : pin1;
+    
+    // Save PINs exactly as sent, since client already pre-sorts them
+    const sortedPin1 = pin1;
+    const sortedPin2 = pin2;
     let session = await Session.findOne({ id: sessionId });
     
     if (!session) {
@@ -814,18 +812,29 @@ io.on('connection', (socket: any) => {
           initiator_id: fromId
       });
     } else {
-      // Always refresh pin1/pin2 so freshly-encrypted keys replace any stale/mismatched ones
       session.pin1 = sortedPin1;
       session.pin2 = sortedPin2;
       await session.save();
     }
 
-    socket.join(sessionId);
-    const toSocketId = userSockets.get(toId);
-    if (toSocketId) {
-      io.to(toSocketId).emit('chat_started', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id, fromId });
+    // Join all sockets of both users in the session to the sessionId room
+    const fromSockets = userSockets.get(fromId);
+    if (fromSockets) {
+      for (const socketId of fromSockets) {
+        const s = io.sockets.sockets.get(socketId);
+        s?.join(sessionId);
+      }
     }
-    socket.emit('chat_ready', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id });
+    const toSockets = userSockets.get(toId);
+    if (toSockets) {
+      for (const socketId of toSockets) {
+        const s = io.sockets.sockets.get(socketId);
+        s?.join(sessionId);
+      }
+    }
+
+    io.to(`user_${toId}`).emit('chat_started', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id, fromId });
+    io.to(`user_${fromId}`).emit('chat_ready', { sessionId, pin1: session.pin1, pin2: session.pin2, user1_id: session.user1_id, user2_id: session.user2_id, status: session.status, initiator_id: session.initiator_id });
   });
 
   socket.on('accept_request', async ({ sessionId }, ack) => {
@@ -884,13 +893,13 @@ io.on('connection', (socket: any) => {
       const toSocketId = userSockets.get(safeData.toId);
       
       if (toSocketId) {
-        io.to(toSocketId).emit('receive_message', safeData);
+        io.to(`user_${safeData.toId}`).emit('receive_message', safeData);
+        socket.to(`user_${socket.userId}`).emit('receive_message', safeData);
         
-        // For active sessions, setup the timed server deletion to keep state clean on both sides
         if (data.timer && data.msgId) {
           setTimeout(() => {
-            io.to(toSocketId).emit('message_deleted', { msgId: data.msgId });
-            io.to(socket.id).emit('message_deleted', { msgId: data.msgId });
+            io.to(`user_${safeData.toId}`).emit('message_deleted', { msgId: data.msgId });
+            io.to(`user_${socket.userId}`).emit('message_deleted', { msgId: data.msgId });
           }, data.timer * 1000);
         }
       } else {
@@ -925,12 +934,13 @@ io.on('connection', (socket: any) => {
       const toSocketId = userSockets.get(safeData.toId);
       
       if (toSocketId) {
-        io.to(toSocketId).emit('receive_file', safeData);
+        io.to(`user_${safeData.toId}`).emit('receive_file', safeData);
+        socket.to(`user_${socket.userId}`).emit('receive_file', safeData);
         
         if (data.timer && data.msgId) {
           setTimeout(() => {
-            io.to(toSocketId).emit('message_deleted', { msgId: data.msgId });
-            io.to(socket.id).emit('message_deleted', { msgId: data.msgId });
+            io.to(`user_${safeData.toId}`).emit('message_deleted', { msgId: data.msgId });
+            io.to(`user_${socket.userId}`).emit('message_deleted', { msgId: data.msgId });
           }, data.timer * 1000);
         }
       } else {
@@ -1028,9 +1038,8 @@ io.on('connection', (socket: any) => {
       await assertParticipant(socket.userId, sessionId);
       
       await CallHistory.create({ from_id: socket.userId, to_id: data.toId, status: data.status });
-      const toSocketId = userSockets.get(data.toId);
-      if (toSocketId) io.to(toSocketId).emit('new_call_log');
-      io.to(socket.id).emit('new_call_log');
+      io.to(`user_${data.toId}`).emit('new_call_log');
+      io.to(`user_${socket.userId}`).emit('new_call_log');
       ack?.({ ok: true });
     } catch (err: any) {
       console.error('[Security] log_call rejected:', err.message);
@@ -1208,10 +1217,10 @@ app.post('/api/admin/feedback/:id/resolve', verifyAdmin, async (req: any, res: a
     const feedback = await Feedback.findById(req.params.id);
     if (!feedback) return res.status(404).json({ error: 'Feedback not found' });
     
-    const socketId = userSockets.get(feedback.user_id);
+    const hasActiveSockets = userSockets.has(feedback.user_id);
     const alertBody = { title: 'Feedback Update', message: 'Thank you for your feedback. We have successfully resolved your issue.\n\n- Team StegoChat' };
-    if (socketId) {
-       io.to(socketId).emit('system_alert', alertBody);
+    if (hasActiveSockets) {
+       io.to(`user_${feedback.user_id}`).emit('system_alert', alertBody);
     } else {
        await OfflineMessage.create({ to_id: feedback.user_id, payload: JSON.stringify({ type: 'system_alert', data: alertBody }) });
     }
@@ -1316,25 +1325,30 @@ app.post('/api/admin/reports/:id/review', verifyAdmin, async (req: any, res: any
              await Session.deleteMany({ $or: [{ user1_id: report.reported_id }, { user2_id: report.reported_id }] });
              await User.findByIdAndDelete(report.reported_id);
              
-             const socketId = userSockets.get(report.reported_id);
-             if (socketId) {
-                io.to(socketId).emit('banned');
-                io.sockets.sockets.get(socketId)?.disconnect(true);
+             const sockets = io.sockets.adapter.rooms.get(`user_${report.reported_id}`);
+             if (sockets) {
+                for (const socketId of sockets) {
+                   const s = io.sockets.sockets.get(socketId);
+                   if (s) {
+                      s.emit('banned');
+                      s.disconnect(true);
+                   }
+                }
              }
           } else {
              await User.findByIdAndUpdate(report.reported_id, { warningsCount: newCount });
-             const socketId = userSockets.get(report.reported_id);
+             const hasActiveSockets = userSockets.has(report.reported_id);
              const alertBody = { title: 'Terms of Service Warning', message: `We received a report about you violating our community guidelines. This is warning ${newCount}/3.\n\nFurther violations will result in permanent account suspension and an irreversible email ban.\n\n- Team StegoChat Admin` };
-             if (socketId) io.to(socketId).emit('system_alert', alertBody);
+             if (hasActiveSockets) io.to(`user_${report.reported_id}`).emit('system_alert', alertBody);
              else await OfflineMessage.create({ to_id: report.reported_id, payload: JSON.stringify({ type: 'system_alert', data: alertBody }) });
           }
        }
        report.status = 'warned';
     } else if (action === 'reject') {
-       const socketId = userSockets.get(report.reporter_id);
-       const alertBody = { title: 'Report Update', message: 'We have carefully reviewed your request. However, the user actions fall under our standard acceptable user policy, or insufficient evidence was provided. No action will be taken at this time.\n\n- Team StegoChat Admin' };
-       if (socketId) io.to(socketId).emit('system_alert', alertBody);
-       else await OfflineMessage.create({ to_id: report.reporter_id, payload: JSON.stringify({ type: 'system_alert', data: alertBody }) });
+        const hasActiveSockets = userSockets.has(report.reporter_id);
+        const alertBody = { title: 'Report Update', message: 'We have carefully reviewed your request. However, the user actions fall under our standard acceptable user policy, or insufficient evidence was provided. No action will be taken at this time.\n\n- Team StegoChat Admin' };
+        if (hasActiveSockets) io.to(`user_${report.reporter_id}`).emit('system_alert', alertBody);
+        else await OfflineMessage.create({ to_id: report.reporter_id, payload: JSON.stringify({ type: 'system_alert', data: alertBody }) });
        report.status = 'rejected';
     }
     await report.save();
@@ -1369,8 +1383,8 @@ app.get('/api/admin/stats', verifyAdmin, async (req: any, res: any) => {
   const allUsers = await User.find({}, '_id username email');
   const anonymizedUsers = allUsers.map(u => {
     const uIdStr = u._id.toString();
-    const socketId = userSockets.get(uIdStr);
-    const maskedName = socketId ? `${socketId}` : `Offline`;
+    const activeSockets = userSockets.get(uIdStr);
+    const maskedName = (activeSockets && activeSockets.size > 0) ? `${Array.from(activeSockets)[0]}` : `Offline`;
     const maskedEmail = crypto.createHash('sha256').update(u.email as string).digest('hex').substring(0, 8) + '@hidden.root';
     return { id: uIdStr, maskedName, maskedEmail };
   });
@@ -1395,13 +1409,18 @@ app.delete('/api/admin/users/:id', verifyAdmin, async (req: any, res: any) => {
     await User.findByIdAndDelete(targetIdStr);
     
     // Disconnect their live socket connection immediately
-    const socketId = userSockets.get(targetIdStr);
-    if (socketId) {
-      io.to(socketId).emit('banned');
-      io.sockets.sockets.get(socketId)?.disconnect(true);
-      userSockets.delete(targetIdStr);
-      broadcastOnlineUsers();
+    const sockets = io.sockets.adapter.rooms.get(`user_${targetIdStr}`);
+    if (sockets) {
+      for (const socketId of sockets) {
+        const s = io.sockets.sockets.get(socketId);
+        if (s) {
+          s.emit('banned');
+          s.disconnect(true);
+        }
+      }
     }
+    userSockets.delete(targetIdStr);
+    broadcastOnlineUsers();
     
     res.json({ success: true });
   } catch (err: any) {

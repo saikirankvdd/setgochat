@@ -206,7 +206,7 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
           || sessionStorage.getItem('stego_priv_key_' + user.id.toString())
           || await getPrivateKeyLocal(user.id.toString())
           || undefined;
-        const encPin = user.id.toString() === data.user1_id ? data.pin1 : data.pin2;
+        const encPin = String(user.id) === String(data.user1_id) ? data.pin1 : data.pin2;
         let decryptedPin = 'UNENCRYPTED';
         if (encPin && resolvedKey) {
            decryptedPin = await decryptPINWithPrivateKey(encPin, resolvedKey);
@@ -238,7 +238,7 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
           || sessionStorage.getItem('stego_priv_key_' + user.id.toString())
           || await getPrivateKeyLocal(user.id.toString())
           || undefined;
-        const encPin = user.id.toString() === data.user1_id ? data.pin1 : data.pin2;
+        const encPin = String(user.id) === String(data.user1_id) ? data.pin1 : data.pin2;
         let decryptedPin = 'UNENCRYPTED';
         if (encPin && resolvedKey) {
            decryptedPin = await decryptPINWithPrivateKey(encPin, resolvedKey);
@@ -318,7 +318,7 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
         await Promise.all(sessionsData.map(async (s) => {
           try {
             // Decrypt the Server PIN first
-            const encPin = user.id.toString() === s.user1_id ? s.pin1 : s.pin2;
+            const encPin = String(user.id) === String(s.user1_id) ? s.pin1 : s.pin2;
             let serverPin = 'UNENCRYPTED';
             if (encPin) {
               serverPin = await decryptPINWithPrivateKey(encPin, resolvedPrivateKey!);
