@@ -2265,20 +2265,20 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       
       {/* Input Area or Request Panel */}
       {dbSession?.status === 'pending' ? (
-        <div className="bg-[#202c33] p-4 flex items-center justify-center border-t border-[#2a3942] z-20 text-[#8696a0]">
+        <div className="bg-[#202c33] p-4 flex items-center justify-center border-t border-[#2a3942] z-20 text-[#8696a0] chat-input-area">
           {dbSession.initiator_id === user.id 
             ? "Waiting for user to accept your request..."
             : "You must accept the request to send messages."}
         </div>
       ) : isBlocked ? (
-        <div className="bg-[#202c33] p-4 flex flex-col items-center justify-center border-t border-[#2a3942] z-20">
+        <div className="bg-[#202c33] p-4 flex flex-col items-center justify-center border-t border-[#2a3942] z-20 chat-input-area">
           <p className="text-[#8696a0] mb-3 text-sm">You blocked this user. You can't send or receive messages.</p>
           <button onClick={onUnblock} className="px-6 py-2 bg-[#00a884] hover:bg-[#06cf9c] text-white rounded-lg font-bold transition-colors">
              Unblock
           </button>
         </div>
       ) : (
-        <div className="bg-[#202c33] p-3 flex flex-wrap md:flex-nowrap items-center gap-3 relative border-t border-[#2a3942] z-20">
+        <div className="bg-[#202c33] p-3 flex flex-wrap md:flex-nowrap items-center gap-3 relative border-t border-[#2a3942] z-20 chat-input-area">
           {showEmojiPicker && (
             <div className="absolute bottom-[70px] left-2 md:left-4 z-50 shadow-2xl">
               <EmojiPicker onEmojiClick={onEmojiClick} theme={Theme.DARK} width={window.innerWidth < 768 ? 320 : undefined}/>

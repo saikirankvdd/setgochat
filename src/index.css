@@ -113,3 +113,16 @@ button, a, [role="button"] {
 html {
   touch-action: pan-x pan-y;
 }
+
+/* Force h-screen and min-h-screen to use dynamic viewport height to prevent mobile browser bar overlapping */
+.h-screen {
+  height: 100dvh !important;
+}
+.min-h-screen {
+  min-height: 100dvh !important;
+}
+
+/* Safe area insets for phone notches and browser bottom navigation bars */
+.chat-input-area {
+  padding-bottom: env(safe-area-inset-bottom, 8px);
+}

@@ -15,11 +15,12 @@ import { Shield, Lock, Phone, Video, X } from 'lucide-react';
 interface DashboardProps {
   user: User;
   socket: Socket;
+  onReauthRequired?: () => void;
 }
 
 const APP_VERSION = '2.3.0';
 
-export function Dashboard({ user, socket }: DashboardProps) {
+export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
   const [activeChat, setActiveChat] = useState<User | null>(null);
   const [sessionInfo, setSessionInfo] = useState<{ sessionId: string; pin: string } | null>(null);
   const [showAdmin, setShowAdmin] = useState(false);
@@ -304,6 +305,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
           return;
         }
         
+        let allFailed = sessionsData.length > 0;
         await Promise.all(sessionsData.map(async (s) => {
           try {
             // Decrypt the Server PIN first
@@ -327,15 +329,22 @@ export function Dashboard({ user, socket }: DashboardProps) {
                         await savePinLocal(s.id, reEncryptedLocalPin);
                     }
                 }
-                newPins[s.id] = (serverPin !== 'DECRYPTION_FAILED') ? serverPin : localPin;
+                const resolvedPin = (serverPin !== 'DECRYPTION_FAILED') ? serverPin : localPin;
+                newPins[s.id] = resolvedPin;
+                if (resolvedPin !== 'DECRYPTION_FAILED') {
+                  allFailed = false;
+                }
                 return;
             }
 
             // Fallback to Server PIN if no local PIN backup exists
             newPins[s.id] = serverPin;
-            if (serverPin !== 'DECRYPTION_FAILED' && user.publicKey) {
-                const reEncryptedLocalPin = await encryptPINWithPublicKey(serverPin, user.publicKey);
-                await savePinLocal(s.id, reEncryptedLocalPin);
+            if (serverPin !== 'DECRYPTION_FAILED') {
+                allFailed = false;
+                if (user.publicKey) {
+                    const reEncryptedLocalPin = await encryptPINWithPublicKey(serverPin, user.publicKey);
+                    await savePinLocal(s.id, reEncryptedLocalPin);
+                }
             }
           } catch (e) {
             newPins[s.id] = 'DECRYPTION_FAILED';
@@ -343,6 +352,10 @@ export function Dashboard({ user, socket }: DashboardProps) {
         }));
         pinsRef.current = newPins;
         setPinsReady(true);
+        if (allFailed && onReauthRequired) {
+          console.warn('[E2EE] All session PIN decryptions failed. Triggering reauth.');
+          onReauthRequired();
+        }
       } catch(e) {}
     });
 
@@ -592,6 +605,15 @@ export function Dashboard({ user, socket }: DashboardProps) {
     };
   }, [socket, user.id, user.privateKey]);
 
+  // Re-register and request offline messages when private key is updated/restored
+  useEffect(() => {
+    if (socket && user.privateKey) {
+      console.log('[E2EE] Private key synchronized/updated. Re-registering socket to decrypt pins.');
+      socket.emit('register', { version: APP_VERSION });
+      socket.emit('request_offline_messages');
+    }
+  }, [user.privateKey, socket]);
+
   const handleStartChat = async (targetUser: User) => {
     setActiveChat(targetUser);
     try {
@@ -623,7 +645,7 @@ export function Dashboard({ user, socket }: DashboardProps) {
   const visibleUsers = users.filter(u => !blockedUsers.includes(u.id as any));
 
   return (
-    <div className="flex h-screen bg-[#111b21] overflow-hidden w-full max-w-full relative">
+    <div className="flex h-[100dvh] bg-[#111b21] overflow-hidden w-full max-w-full relative">
       <div className={`w-full md:w-[420px] border-r border-[#2a3942] z-10 transition-all shadow-xl ${activeChat ? 'hidden md:flex md:flex-col' : 'flex flex-col'}`}>
         <Sidebar 
           currentUser={user} 

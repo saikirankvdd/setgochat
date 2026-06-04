@@ -9,6 +9,7 @@ import { Dashboard } from './components/Dashboard';
 import { io, Socket } from 'socket.io-client';
 import { getPrivateKeyLocal } from './utils/db';
 import { useModal } from './contexts/ModalContext';
+import { VaultReauthModal } from './components/VaultReauthModal';
 
 export type User = {
   id: string | number;
@@ -32,6 +33,12 @@ export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [reauthData, setReauthData] = useState<{
+    userId: string;
+    encryptedPrivateKey: string;
+    publicKey: string;
+    userObj: User;
+  } | null>(null);
   const { showModal } = useModal();
 
   // Bootstrap user session from HttpOnly cookie on mount (Finding 1)
@@ -64,13 +71,12 @@ export default function App() {
             }
 
             if (!privateKey) {
-              console.warn('[E2EE] No valid private key found for session. Logging out to sync keys.');
-              setUser(null);
-              try { await fetch('/api/logout', { method: 'POST' }); } catch (e) {}
-              showModal({
-                title: 'Secure Vault Desynced',
-                message: 'Your E2E security keys have been updated or desynced. Please log in again with your password to restore your secure vault.',
-                iconType: 'warning'
+              console.warn('[E2EE] No valid private key found for session. Showing Vault reauth prompt.');
+              setReauthData({
+                userId: data.user.id.toString(),
+                encryptedPrivateKey: data.user.encryptedPrivateKey,
+                publicKey: data.user.publicKey,
+                userObj: data.user
               });
               setIsBootstrapping(false);
               return;
@@ -178,6 +184,25 @@ export default function App() {
     );
   }
 
+  if (reauthData) {
+    return (
+      <VaultReauthModal
+        userId={reauthData.userId}
+        encryptedPrivateKey={reauthData.encryptedPrivateKey}
+        publicKey={reauthData.publicKey}
+        onSuccess={(decryptedPrivateKey) => {
+          setUser({ ...reauthData.userObj, privateKey: decryptedPrivateKey });
+          setReauthData(null);
+        }}
+        onLogout={async () => {
+          setReauthData(null);
+          setUser(null);
+          try { await fetch('/api/logout', { method: 'POST' }); } catch (e) {}
+        }}
+      />
+    );
+  }
+
   if (!user) {
     return <Auth onLogin={setUser} />;
   }
@@ -191,5 +216,18 @@ export default function App() {
     );
   }
 
-  return <Dashboard user={user} socket={socket} />;
+  return (
+    <Dashboard
+      user={user}
+      socket={socket}
+      onReauthRequired={() => {
+        setReauthData({
+          userId: user.id.toString(),
+          encryptedPrivateKey: user.encryptedPrivateKey || '',
+          publicKey: user.publicKey || '',
+          userObj: user
+        });
+      }}
+    />
+  );
 }

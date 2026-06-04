@@ -421,7 +421,7 @@ app.post('/api/login', authLimiter, async (req: any, res: any, next: any) => {
       username: user.username, 
       isAdmin, 
       sessionVersion: updatedUser.sessionVersion 
-    }, process.env.JWT_SECRET || 'fallback_secret_for_jwt', { expiresIn: '7d' });
+    }, process.env.JWT_SECRET || 'fallback_secret_for_jwt', { expiresIn: '90d' });
     
     // Set httpOnly cookie access_token with explicit path=/
     res.cookie('access_token', token, {
@@ -429,7 +429,7 @@ app.post('/api/login', authLimiter, async (req: any, res: any, next: any) => {
       secure: true,
       sameSite: 'Strict',
       path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      maxAge: 90 * 24 * 60 * 60 * 1000 // 90 days
     });
 
     // Generate a secure CSRF token (double-submit pattern)
@@ -439,7 +439,7 @@ app.post('/api/login', authLimiter, async (req: any, res: any, next: any) => {
       secure: true,
       sameSite: 'Strict',
       path: '/',
-      maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+      maxAge: 90 * 24 * 60 * 60 * 1000 // 90 days
     });
 
     // Generate single-use nonce for socket authentication containing both userId & sessionVersion
