@@ -993,7 +993,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         const encryptedText = binaryToString(binary);
         
         // 4. Decrypt using Session PIN
+        if (data.isStegoSignaling) {
+          console.warn("[Stego-Signaling] Decrypting signaling payload with PIN:", sessionInfo.pin, "Ciphertext length:", encryptedText.length);
+        }
         const decrypted = decryptData(encryptedText, sessionInfo.pin);
+        if (!decrypted && data.isStegoSignaling) {
+          console.warn("[Stego-Signaling] Decryption failed for signaling payload! Ciphertext:", encryptedText);
+        }
         
         if (decrypted) {
           // --- STEGANOGRAPHIC SIGNALING INTERCEPTION ---
@@ -1364,6 +1370,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
       const compressedBase64 = btoa(compressedBin);
       
+      console.warn("[Stego-Signaling] Encrypting signaling payload with PIN:", sessionInfo.pin);
       const encrypted = encryptData(compressedBase64, sessionInfo.pin);
       const binary = stringToBinary(encrypted);
       const carrier = createDynamicCarrier(binary.length);
