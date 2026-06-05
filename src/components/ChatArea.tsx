@@ -700,6 +700,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isProcessing, setIsProcessing] = useState(false);
   const [showUserProfile, setShowUserProfile] = useState(false);
   const [callState, setCallState] = useState<'idle' | 'calling' | 'receiving' | 'connected'>('idle');
+  const callStateRef = useRef(callState);
+  useEffect(() => {
+    callStateRef.current = callState;
+  }, [callState]);
   const [isHovering, setIsHovering] = useState<number | null>(null);
   const [hashedMyId, setHashedMyId] = useState<string>('');
 
@@ -1137,9 +1141,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rStream.addTrack(event.track);
         }
         setRemoteStream(rStream);
-        startStealthAudioDecode(rStream);
-        if (rStream && typeof rStream.getVideoTracks === 'function' && rStream.getVideoTracks().length > 0) {
-          startStealthVideoDecode(rStream);
+        // Only decode if the call is officially active
+        if (callStateRef.current === 'connected' || callStateRef.current === 'calling') {
+          startStealthAudioDecode(rStream);
+          if (rStream && typeof rStream.getVideoTracks === 'function' && rStream.getVideoTracks().length > 0) {
+            startStealthVideoDecode(rStream);
+          }
         }
       };
 
@@ -1539,6 +1546,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const startStealthAudioDecode = async (remoteStream: MediaStream) => {
+    if ((window as any).stealthDecodeWorklet) {
+      console.log("[Stealth] Audio Decode Pipeline already initialized. Skipping.");
+      return;
+    }
     try {
       console.log("[Stealth] Initializing Audio Decode Pipeline...");
       const audioCtx = getOrCreateAudioContext();
@@ -1660,6 +1671,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const startStealthVideoDecode = async (remoteStream: MediaStream) => {
+    if (videoDecoderRef.current) {
+      console.log("[Stealth] Video Decode Pipeline already initialized. Skipping.");
+      return;
+    }
     try {
       console.log("[Stealth] Initializing Video Decode Pipeline...");
       if (!decodedVideoCanvasRef.current) {
@@ -1777,9 +1792,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rStream.addTrack(event.track);
         }
         setRemoteStream(rStream);
-        startStealthAudioDecode(rStream);
-        if (rStream && typeof rStream.getVideoTracks === 'function' && rStream.getVideoTracks().length > 0) {
-          startStealthVideoDecode(rStream);
+        // Only decode if the call is officially active
+        if (callStateRef.current === 'connected' || callStateRef.current === 'calling') {
+          startStealthAudioDecode(rStream);
+          if (rStream && typeof rStream.getVideoTracks === 'function' && rStream.getVideoTracks().length > 0) {
+            startStealthVideoDecode(rStream);
+          }
         }
       };
 
@@ -1859,6 +1877,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }, callerId || targetUser.id);
 
       setCallState('connected');
+      callStateRef.current = 'connected';
       
       setMessages(prev => [...prev, {
         id: Math.random().toString(36).substr(2, 9),
@@ -1871,10 +1890,18 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         isRevealed: true,
       }]);
       
+      // Start decoding the remote stream now that the call is accepted
+      if (remoteStream) {
+        startStealthAudioDecode(remoteStream);
+        if (isVideoCall && typeof remoteStream.getVideoTracks === 'function' && remoteStream.getVideoTracks().length > 0) {
+          startStealthVideoDecode(remoteStream);
+        }
+      }
+      
       // Attempt to play audio immediately to satisfy mobile browser user gesture requirements
-      // The remote video element is always muted for audio calls - voice is decoded via the stealth worklet
+      // The remote video element is always muted - voice is decoded via the stealth worklet
       if (remoteVideoRef.current && remoteStream) {
-        remoteVideoRef.current.muted = !isVideoCall; // video calls: unmuted; audio calls: muted (decoded by worklet)
+        remoteVideoRef.current.muted = true; // Always mute WebRTC cover song audio
         if (remoteVideoRef.current.srcObject !== remoteStream) {
           remoteVideoRef.current.srcObject = remoteStream;
         }
@@ -1981,11 +2008,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      // For video calls, the remote video element plays normally (unmuted)
-      // For audio calls, the element is hidden and audio goes through the steganographic decoder
-      // But we still attach srcObject so the browser negotiates the stream properly
-      remoteVideoRef.current.muted = !isVideoCall; // unmuted for video, muted for audio (audio decoded via worklet)
+    if (remoteVideoRef.current && remoteStream && callState === 'connected') {
+      // The remote video element is always muted - voice is decoded via the stealth worklet
+      remoteVideoRef.current.muted = true; // Always mute WebRTC cover song audio
       if (remoteVideoRef.current.srcObject !== remoteStream) {
         remoteVideoRef.current.srcObject = remoteStream;
       }
@@ -2485,6 +2510,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               ref={remoteVideoRef} 
               autoPlay 
               playsInline 
+              muted
               className={`absolute inset-0 w-full h-full object-cover z-0 opacity-0 pointer-events-none ${isVideoCall && callState === 'connected' ? 'block' : 'hidden'}`} 
             />
 
