@@ -752,6 +752,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
 
   // --- STEGANOGRAPHY CALL REFS ---
   const coverSongRef = useRef<Float32Array | null>(null);
@@ -1140,6 +1141,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rStream = new MediaStream();
           rStream.addTrack(event.track);
         }
+        remoteStreamRef.current = rStream;
         setRemoteStream(rStream);
         // Only decode if the call is officially active
         if (callStateRef.current === 'connected' || callStateRef.current === 'calling') {
@@ -1245,12 +1247,18 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           const decompressedBytes = gunzipSync(compressedBytes);
 
-          const voice8kHz = new Float32Array(decompressedBytes.length);
-          for (let i = 0; i < decompressedBytes.length; i++) {
-            voice8kHz[i] = (decompressedBytes[i] / 127.5) - 1.0;
+          const voice16kHz = new Float32Array(decompressedBytes.length / 2);
+          for (let i = 0; i < voice16kHz.length; i++) {
+            const low = decompressedBytes[i * 2];
+            const high = decompressedBytes[i * 2 + 1];
+            let s16 = low | (high << 8);
+            if (s16 & 0x8000) {
+              s16 |= ~0xFFFF;
+            }
+            voice16kHz[i] = s16 / 32768.0;
           }
 
-          const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+          const upsampled = upsampleAudio(voice16kHz, 16000, audioCtx.sampleRate);
           
           console.log("[Stealth-RTP] Decoded and upsampled", upsampled.length, "samples. Pushing to voice queue.");
           voiceQueueRef.current.push(...Array.from(upsampled));
@@ -1443,8 +1451,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     const newLength = Math.round(buffer.length * sampleRateRatio);
     const result = new Float32Array(newLength);
     for (let i = 0; i < result.length; i++) {
-      const srcIdx = Math.floor(i / sampleRateRatio);
-      result[i] = buffer[srcIdx] || 0;
+      const srcIdx = i / sampleRateRatio;
+      const index = Math.floor(srcIdx);
+      const frac = srcIdx - index;
+      const s0 = buffer[index] || 0;
+      const s1 = (index + 1 < buffer.length) ? buffer[index + 1] : s0;
+      result[i] = s0 + (s1 - s0) * frac;
     }
     return result;
   };
@@ -1496,13 +1508,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const chunk = micAccumulator.splice(0, triggerLength);
           const rawFloats = Float32Array.from(chunk);
           
-          const downsampled = downsampleAudio(rawFloats, audioCtx.sampleRate, 8000);
+          const downsampled = downsampleAudio(rawFloats, audioCtx.sampleRate, 16000);
           
-          const bytes = new Uint8Array(downsampled.length);
+          const bytes = new Uint8Array(downsampled.length * 2);
           const micGain = 3.5; // Boost gain factor for voice clarity
           for (let i = 0; i < downsampled.length; i++) {
             const boosted = Math.max(-1.0, Math.min(1.0, downsampled[i] * micGain));
-            bytes[i] = Math.max(0, Math.min(255, Math.floor((boosted + 1.0) * 127.5)));
+            const s16 = Math.max(-32768, Math.min(32767, Math.floor(boosted * 32767)));
+            bytes[i * 2] = s16 & 0xFF;         // Low byte
+            bytes[i * 2 + 1] = (s16 >> 8) & 0xFF; // High byte
           }
 
           const compressed = gzipSync(bytes, { level: 6 });
@@ -1733,6 +1747,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rStream = new MediaStream();
           rStream.addTrack(event.track);
         }
+        remoteStreamRef.current = rStream;
         setRemoteStream(rStream);
         // Only decode if the call is officially active
         if (callStateRef.current === 'connected' || callStateRef.current === 'calling') {
@@ -1833,19 +1848,20 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }]);
       
       // Start decoding the remote stream now that the call is accepted
-      if (remoteStream) {
-        startStealthAudioDecode(remoteStream);
-        if (isVideoCall && typeof remoteStream.getVideoTracks === 'function' && remoteStream.getVideoTracks().length > 0) {
-          startStealthVideoDecode(remoteStream);
+      const rStream = remoteStreamRef.current;
+      if (rStream) {
+        startStealthAudioDecode(rStream);
+        if (isVideoCall && typeof rStream.getVideoTracks === 'function' && rStream.getVideoTracks().length > 0) {
+          startStealthVideoDecode(rStream);
         }
       }
       
       // Attempt to play audio immediately to satisfy mobile browser user gesture requirements
       // The remote video element is always muted - voice is decoded via the stealth worklet
-      if (remoteVideoRef.current && remoteStream) {
+      if (remoteVideoRef.current && rStream) {
         remoteVideoRef.current.muted = true; // Always mute WebRTC cover song audio
-        if (remoteVideoRef.current.srcObject !== remoteStream) {
-          remoteVideoRef.current.srcObject = remoteStream;
+        if (remoteVideoRef.current.srcObject !== rStream) {
+          remoteVideoRef.current.srcObject = rStream;
         }
         remoteVideoRef.current.play().catch(e => {
           if (e.name !== 'AbortError') {
@@ -1940,6 +1956,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       peerConnectionRef.current.close();
       peerConnectionRef.current = null;
     }
+    remoteStreamRef.current = null;
     setRemoteStream(null);
     if (emit) {
       socket.emit('call_end', {
