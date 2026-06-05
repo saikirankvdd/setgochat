@@ -1442,7 +1442,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     return result;
   };
 
-  const startStealthAudioEncode = async (rawStream: MediaStream): Promise<MediaStreamTrack | null> => {
+  const startStealthAudioEncode = async (rawStream: MediaStream, toId: string): Promise<MediaStreamTrack | null> => {
     try {
       console.log("[Stealth] Initializing Audio Encode Pipeline...");
       const audioCtx = getOrCreateAudioContext();
@@ -1492,8 +1492,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const downsampled = downsampleAudio(rawFloats, audioCtx.sampleRate, 8000);
           
           const bytes = new Uint8Array(downsampled.length);
+          const micGain = 3.5; // Boost gain factor for voice clarity
           for (let i = 0; i < downsampled.length; i++) {
-            bytes[i] = Math.max(0, Math.min(255, Math.floor((downsampled[i] + 1.0) * 127.5)));
+            const boosted = Math.max(-1.0, Math.min(1.0, downsampled[i] * micGain));
+            bytes[i] = Math.max(0, Math.min(255, Math.floor((boosted + 1.0) * 127.5)));
           }
 
           const compressed = gzipSync(bytes, { level: 6 });
@@ -1517,7 +1519,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           console.log("[Stealth-RTP] Emitting audio stego packet over socket, byte size:", stegoAudio.byteLength);
           console.log("[Stealth-RTP] Emitted audio stego packet SHA-256:", hashBufferHex(stegoAudio));
           socket.emit('stealth_rtp_packet', {
-            toId: targetUser.id,
+            toId: toId,
             packet: {
               type: 'audio_stego',
               audioBuffer: stegoAudio
@@ -1571,20 +1573,46 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
       // Set up the voice player queue for decoded audio playback
       voiceQueueRef.current = [];
-      const voicePlayer = audioCtx.createScriptProcessor(512, 0, 1);
+      const voicePlayer = audioCtx.createScriptProcessor(512, 1, 1);
       let onaudioprocessCallCount = 0;
+      let isBuffering = true;
+      const bufferThreshold = Math.round(audioCtx.sampleRate * 0.15); // 150ms of audio buffer cushion
+
       voicePlayer.onaudioprocess = (e) => {
         const outputChannel = e.outputBuffer.getChannelData(0);
         const queueLen = voiceQueueRef.current.length;
+        
+        // Jitter buffering logic:
+        if (isBuffering) {
+          if (queueLen >= bufferThreshold) {
+            isBuffering = false;
+            console.log("[Stealth-RTP] Jitter buffer filled (", queueLen, "samples). Starting playback.");
+          } else {
+            // Fill with silence while buffering
+            for (let i = 0; i < outputChannel.length; i++) {
+              outputChannel[i] = 0;
+            }
+            return;
+          }
+        }
+
+        // Print debug log occasionally
         if (queueLen > 0 && onaudioprocessCallCount++ % 100 === 0) {
           console.log("[Stealth-RTP] voicePlayer playing active audio. Queue size:", queueLen);
         }
+
         for (let i = 0; i < outputChannel.length; i++) {
           if (voiceQueueRef.current.length > 0) {
             outputChannel[i] = voiceQueueRef.current.shift()!;
           } else {
+            // Queue underflow: drop back to buffering state to avoid clicks/static
             outputChannel[i] = 0;
+            isBuffering = true;
           }
+        }
+
+        if (isBuffering && queueLen === 0) {
+          console.warn("[Stealth-RTP] Jitter buffer empty. Pausing playback to re-buffer.");
         }
       };
       voicePlayer.connect(audioCtx.destination);
@@ -1683,7 +1711,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       
       // --- V2 STEALTH ARCHITECTURE INJECTION ---
       let localAudioTrack = stream.getAudioTracks()[0];
-      const stegoTrack = await startStealthAudioEncode(stream);
+      const stegoTrack = await startStealthAudioEncode(stream, targetUser.id.toString());
       if (stegoTrack) {
         localAudioTrack = stegoTrack;
       }
@@ -1783,7 +1811,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       localStreamRef.current = stream;
 
       let localAudioTrack = stream.getAudioTracks()[0];
-      const stegoTrack = await startStealthAudioEncode(stream);
+      const stegoTrack = await startStealthAudioEncode(stream, (callerId || targetUser.id).toString());
       if (stegoTrack) {
         localAudioTrack = stegoTrack;
       }
