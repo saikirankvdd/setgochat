@@ -5,22 +5,33 @@
 
 export const encodeLSB = (audioBuffer: ArrayBuffer, data: string): ArrayBuffer => {
   const view = new DataView(audioBuffer);
-  const dataBinary = data + '0000000000000000'; // Null terminator (16 bits)
-  
   const headerSize = 44;
   const availableSamples = (view.byteLength - headerSize) / 2;
 
-  if (dataBinary.length > availableSamples) {
+  const totalBitsNeeded = 32 + data.length;
+  if (totalBitsNeeded > availableSamples) {
     throw new Error('Data too large for this audio file');
   }
 
   const newBuffer = audioBuffer.slice(0);
   const newView = new DataView(newBuffer);
 
-  for (let i = 0; i < dataBinary.length; i++) {
+  // 1. Write data length (32-bit unsigned integer) in the first 32 samples
+  const length = data.length;
+  for (let i = 0; i < 32; i++) {
+    const bit = (length >>> (31 - i)) & 1;
     const offset = headerSize + i * 2;
     let sample = newView.getInt16(offset, true);
-    if (dataBinary[i] === '1') sample |= 1;
+    if (bit === 1) sample |= 1;
+    else sample &= ~1;
+    newView.setInt16(offset, sample, true);
+  }
+
+  // 2. Write payload bits sequentially
+  for (let i = 0; i < data.length; i++) {
+    const offset = headerSize + (32 + i) * 2;
+    let sample = newView.getInt16(offset, true);
+    if (data[i] === '1') sample |= 1;
     else sample &= ~1;
     newView.setInt16(offset, sample, true);
   }
@@ -33,19 +44,28 @@ export const decodeLSB = (audioBuffer: ArrayBuffer): string => {
   const headerSize = 44;
   const availableSamples = (view.byteLength - headerSize) / 2;
 
-  let binaryData = '';
-  let nullCounter = 0;
+  if (availableSamples < 32) return '';
 
-  for (let i = 0; i < availableSamples; i++) {
+  // 1. Read data length from the first 32 samples
+  let dataLength = 0;
+  for (let i = 0; i < 32; i++) {
     const offset = headerSize + i * 2;
     const sample = view.getInt16(offset, true);
-    const bit = (sample & 1).toString();
-    binaryData += bit;
+    const bit = sample & 1;
+    dataLength = (dataLength << 1) | bit;
+  }
 
-    if (bit === '0') nullCounter++;
-    else nullCounter = 0;
+  // 2. Bound check
+  if (dataLength <= 0 || dataLength > availableSamples - 32) {
+    return '';
+  }
 
-    if (nullCounter === 16) return binaryData.slice(0, -16);
+  // 3. Read payload bits sequentially
+  let binaryData = '';
+  for (let i = 0; i < dataLength; i++) {
+    const offset = headerSize + (32 + i) * 2;
+    const sample = view.getInt16(offset, true);
+    binaryData += (sample & 1).toString();
   }
 
   return binaryData;
@@ -724,7 +744,7 @@ export const createDynamicCarrier = (binaryLength: number): ArrayBuffer => {
   const byteRate      = sampleRate * numChannels * (bitsPerSample / 8);
   const blockAlign    = numChannels * (bitsPerSample / 8);
 
-  const numSamples = Math.ceil((binaryLength + 16) * 1.15);
+  const numSamples = Math.ceil((binaryLength + 48) * 1.15); // Safety padding for 32-bit header
   const dataSize   = numSamples * 2; 
   const fileSize   = 44 + dataSize;
 
@@ -755,7 +775,7 @@ export const createDynamicCarrier = (binaryLength: number): ArrayBuffer => {
 };
 
 export const createDynamicCarrier4Bit = (binaryLength: number): ArrayBuffer => {
-  const numSamples = Math.ceil(((binaryLength + 16) / 4) * 1.15);
+  const numSamples = Math.ceil(((binaryLength + 48) / 4) * 1.15);
   return createDynamicCarrier(numSamples * 4); 
 };
 
