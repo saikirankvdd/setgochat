@@ -1197,9 +1197,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const headerBytes = new Uint8Array(audioBuffer.slice(0, 12));
           console.log("[Stealth-RTP] Received audioBuffer size:", audioBuffer.byteLength, "WAV Header bytes:", Array.from(headerBytes));
 
-          const binary = decodeLSB(audioBuffer);
+           const binary = decodeLSB(audioBuffer);
           const encryptedText = binaryToString(binary);
+          console.log("[Stealth-RTP] Extracted ciphertext:", encryptedText);
           const decrypted = decryptData(encryptedText, sessionInfo.pin);
+          console.log("[Stealth-RTP] Decrypted payload:", decrypted ? decrypted.substring(0, 30) + "..." : "null");
           if (!decrypted) {
             console.warn("[Stealth-RTP] Decryption failed for incoming voice packet!");
             return;
@@ -1487,6 +1489,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const carrier = createDynamicCarrier(bits.length);
           const stegoAudio = encodeLSB(carrier, bits);
           
+          console.log("[Stealth-RTP] Encrypted voice payload to send:", encrypted);
           console.log("[Stealth-RTP] Emitting audio stego packet over socket, byte size:", stegoAudio.byteLength);
           socket.emit('stealth_rtp_packet', {
             toId: targetUser.id,
