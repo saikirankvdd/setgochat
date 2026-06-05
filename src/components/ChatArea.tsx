@@ -1177,9 +1177,27 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             console.warn("[Stealth-RTP] Cannot process packet: stealthAudioCtxRef is null!");
             return;
           }
-          console.log("[Stealth-RTP] AudioContext state:", audioCtx.state);
 
-          const binary = decodeLSB(packet.audioBuffer);
+          // Coerce binary payload to native ArrayBuffer (Socket.io often delivers Uint8Array/Buffer in browser)
+          let audioBuffer = packet.audioBuffer;
+          if (audioBuffer && !(audioBuffer instanceof ArrayBuffer)) {
+            console.log("[Stealth-RTP] Coercing non-ArrayBuffer payload:", audioBuffer.constructor?.name);
+            if (audioBuffer.buffer instanceof ArrayBuffer) {
+              audioBuffer = audioBuffer.buffer.slice(audioBuffer.byteOffset, audioBuffer.byteOffset + audioBuffer.byteLength);
+            } else if (typeof audioBuffer === 'object' && audioBuffer.type === 'Buffer' && Array.isArray(audioBuffer.data)) {
+              audioBuffer = new Uint8Array(audioBuffer.data).buffer;
+            }
+          }
+
+          if (!audioBuffer || !(audioBuffer instanceof ArrayBuffer)) {
+            console.error("[Stealth-RTP] Failed to resolve binary ArrayBuffer from payload!");
+            return;
+          }
+
+          const headerBytes = new Uint8Array(audioBuffer.slice(0, 12));
+          console.log("[Stealth-RTP] Received audioBuffer size:", audioBuffer.byteLength, "WAV Header bytes:", Array.from(headerBytes));
+
+          const binary = decodeLSB(audioBuffer);
           const encryptedText = binaryToString(binary);
           const decrypted = decryptData(encryptedText, sessionInfo.pin);
           if (!decrypted) {
