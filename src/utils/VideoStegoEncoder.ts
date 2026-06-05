@@ -18,18 +18,21 @@ export class VideoStegoEncoder {
   private stegoStream: MediaStream | null;
   private isRunning: boolean;
   private wasmEngine: StealthEngine | null;
+  private onStegoFrame?: (base64Png: string, frameIndex: number) => void;
 
   constructor(
     localStream: MediaStream,
     pin: string,
     resolution: '480p' | '1080p',
-    onProgress: (pct: number) => void
+    onProgress: (pct: number) => void,
+    onStegoFrame?: (base64Png: string, frameIndex: number) => void
   ) {
     this.localStream = localStream;
     this.pin = pin;
     this.width = resolution === '1080p' ? 1920 : 640;
     this.height = resolution === '1080p' ? 1080 : 480;
     this.onProgress = onProgress;
+    this.onStegoFrame = onStegoFrame;
     this.frameIndex = 0;
     this.clipSequence = getClipSequence(pin);
     this.videoEls = [];
@@ -190,6 +193,15 @@ export class VideoStegoEncoder {
 
       // 5. Draw modified cover pixels to output canvas
       outCtx.putImageData(coverImageData, 0, 0);
+
+      // Send the stego frame losslessly as a PNG via callback
+      if (this.onStegoFrame) {
+        if (this.frameIndex % 6 === 0) { // 5 fps (reduces socket overhead while keeping video smooth enough for stego)
+          const stegoDataUrl = outputCanvas.toDataURL('image/png');
+          const stegoBase64 = stegoDataUrl.substring(stegoDataUrl.indexOf(',') + 1);
+          this.onStegoFrame(stegoBase64, this.frameIndex);
+        }
+      }
 
       // 6. Update progress percentage
       const totalBitsNeeded = 32 + dataBits.length;

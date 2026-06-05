@@ -68,11 +68,103 @@ export class VideoStegoDecoder {
     if (this.isRunning) return;
     this.isRunning = true;
     this.frameIndex = 0;
-    this.processFrame();
+    if (this.remoteVideoEl && this.remoteVideoEl.srcObject) {
+      this.processFrame();
+    }
   }
 
   stop(): void {
     this.isRunning = false;
+  }
+
+  decodeFrame(base64Png: string, frameIndex: number): void {
+    if (!this.isRunning) return;
+    try {
+      const decodeCanvas = this.decodeCanvas;
+      const coverCanvas = this.coverCanvas;
+      const displayCanvas = this.displayCanvas;
+
+      if (!decodeCanvas || !coverCanvas || !displayCanvas) return;
+
+      const img = new Image();
+      img.onload = () => {
+        const decCtx = decodeCanvas.getContext('2d');
+        if (!decCtx) return;
+
+        decCtx.drawImage(img, 0, 0, this.width, this.height);
+        const receivedImageData = decCtx.getImageData(0, 0, this.width, this.height);
+        const pixels = receivedImageData.data;
+
+        const totalPixels = this.width * this.height;
+        const totalChannels = totalPixels * 3;
+        const maxUsable = totalChannels - 32;
+
+        let bitString = '';
+
+        if (this.wasmEngine) {
+          const pixelBytes = new Uint8Array(pixels.buffer);
+          bitString = this.wasmEngine.extract_video_frame(pixelBytes, this.pin, frameIndex);
+        } else {
+          // Fallback: Use JS LSB extraction
+          const encBytes = new Uint8Array(4);
+          let channelIdx = 0;
+          for (let i = 0; i < 32; i++) {
+            if (channelIdx % 4 === 3) channelIdx++; // skip alpha
+            
+            const bit = pixels[channelIdx] & 1;
+            const byteIdx = Math.floor(i / 8);
+            const bitIdx = 7 - (i % 8);
+            encBytes[byteIdx] |= (bit << bitIdx);
+            
+            channelIdx++;
+          }
+
+          const dataLength = this.decryptLengthHeaderJS(encBytes, this.pin + '_' + frameIndex);
+
+          if (dataLength > 0 && dataLength <= maxUsable) {
+            const stride = Math.floor(maxUsable / dataLength);
+            const prng = new JS_PRNG(this.pin + '_scatter_' + frameIndex);
+
+            for (let i = 0; i < dataLength; i++) {
+              const relativeLogicalIdx = i * stride + Math.floor(prng.next() * stride);
+              const targetLogicalIdx = 32 + relativeLogicalIdx;
+              const actualIdx = targetLogicalIdx + Math.floor(targetLogicalIdx / 3);
+
+              const bit = pixels[actualIdx] & 1;
+              bitString += bit.toString();
+            }
+          }
+        }
+
+        if (bitString && bitString.length > 0) {
+          const encrypted = binaryToString(bitString);
+          const base64 = decryptData(encrypted, this.pin + '_' + frameIndex);
+
+          if (base64) {
+            const innerImg = new Image();
+            innerImg.onload = () => {
+              const displayCtx = displayCanvas.getContext('2d');
+              displayCtx?.drawImage(innerImg, 0, 0, displayCanvas.width, displayCanvas.height);
+            };
+            innerImg.src = 'data:image/jpeg;base64,' + base64;
+          }
+
+          // Update progress percentage
+          const usagePct = ((32 + bitString.length) / totalChannels) * 100;
+          this.onProgress(Math.min(100, Math.round(usagePct)));
+        } else {
+          // Fallback: Draw the cover image frame
+          const clipIdx = getCurrentClipIndex(frameIndex, this.clipSequence);
+          const coverVideo = this.videoEls[clipIdx];
+          const coverImageData = getFrameAtIndex(coverVideo, frameIndex, coverCanvas);
+          const displayCtx = displayCanvas.getContext('2d');
+          displayCtx?.putImageData(coverImageData, 0, 0);
+        }
+      };
+      img.src = 'data:image/png;base64,' + base64Png;
+    } catch (e) {
+      console.error("Error decoding video stego frame:", e);
+    }
   }
 
   private processFrame = (): void => {

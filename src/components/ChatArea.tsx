@@ -742,6 +742,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const videoEncoderRef = useRef<VideoStegoEncoder | null>(null);
   const videoDecoderRef = useRef<VideoStegoDecoder | null>(null);
   const decodedVideoCanvasRef = useRef<HTMLCanvasElement>(null);
+  const voiceQueueRef = useRef<number[]>([]);
 
   const isDraggingRef = useRef(false);
   const offsetRef = useRef({ x: 0, y: 0 });
@@ -1167,6 +1168,51 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       endCall(false);
     };
 
+    const handleStealthRtpReceive = async (packet: any) => {
+      if (packet.type === 'audio_stego') {
+        try {
+          const audioCtx = stealthAudioCtxRef.current;
+          if (!audioCtx) return;
+
+          const binaryString = atob(packet.audioBase64);
+          const bytes = new Uint8Array(binaryString.length);
+          for (let i = 0; i < binaryString.length; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          const binary = decodeLSB(bytes.buffer);
+          const encryptedText = binaryToString(binary);
+          const decrypted = decryptData(encryptedText, sessionInfo.pin);
+          if (!decrypted) return;
+
+          const binStr = atob(decrypted);
+          const compressedBytes = new Uint8Array(binStr.length);
+          for (let i = 0; i < binStr.length; i++) {
+            compressedBytes[i] = binStr.charCodeAt(i);
+          }
+
+          const decompressedBytes = gunzipSync(compressedBytes);
+
+          const voice8kHz = new Float32Array(decompressedBytes.length);
+          for (let i = 0; i < decompressedBytes.length; i++) {
+            voice8kHz[i] = (decompressedBytes[i] / 127.5) - 1.0;
+          }
+
+          const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+          
+          voiceQueueRef.current.push(...Array.from(upsampled));
+          if (voiceQueueRef.current.length > audioCtx.sampleRate * 2) {
+            voiceQueueRef.current.splice(0, voiceQueueRef.current.length - audioCtx.sampleRate);
+          }
+        } catch (err) {
+          console.error("[Stealth] Error decoding received socket voice packet:", err);
+        }
+      } else if (packet.type === 'video_stego') {
+        if (videoDecoderRef.current) {
+          videoDecoderRef.current.decodeFrame(packet.videoBase64, packet.frameIndex);
+        }
+      }
+    };
+
     if (pendingCall && pendingCall.sessionId === sessionInfo.sessionId) {
       handleCallOffer(pendingCall);
       if (clearPendingCall) clearPendingCall();
@@ -1185,6 +1231,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     });
 
     socket.on('call_end', handleCallEnd);
+    socket.on('stealth_rtp_receive', handleStealthRtpReceive);
 
     return () => {
       socket.off('receive_message', handleReceive);
@@ -1194,6 +1241,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       socket.off('call_ice_candidate', handleIceCandidate);
       socket.off('message_deleted');
       socket.off('call_end', handleCallEnd);
+      socket.off('stealth_rtp_receive', handleStealthRtpReceive);
     };
   }, [socket, sessionInfo.pin, sessionInfo.sessionId, pendingCall, clearPendingCall, isActive, callState]);
 
@@ -1411,16 +1459,26 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const encrypted = encryptData(base64, sessionInfo.pin);
 
           const bits = stringToBinary(encrypted);
-          
-          const N = bits.length;
-          const headerBits: number[] = [];
-          for (let i = 31; i >= 0; i--) {
-            headerBits.push((N >>> i) & 1);
-          }
-          const payloadBits = bits.split('').map(Number);
-          const packetBits = [...headerBits, ...payloadBits];
 
-          workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: packetBits });
+          // Rather than sending over WebRTC (which Opus corrupts), we use the lossless socket fallback channel.
+          // To keep it 100% steganographic, we embed the payload bits into a small dynamic WAV carrier:
+          const carrier = createDynamicCarrier(bits.length);
+          const stegoAudio = encodeLSB(carrier, bits);
+          
+          const stegoBytes = new Uint8Array(stegoAudio);
+          let stegoBinaryStr = '';
+          for (let i = 0; i < stegoBytes.byteLength; i++) {
+            stegoBinaryStr += String.fromCharCode(stegoBytes[i]);
+          }
+          const stegoBase64 = btoa(stegoBinaryStr);
+
+          socket.emit('stealth_rtp_packet', {
+            toId: targetUser.id,
+            packet: {
+              type: 'audio_stego',
+              audioBase64: stegoBase64
+            }
+          });
         }
       };
 
@@ -1468,13 +1526,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       nullGain.connect(audioCtx.destination);
 
       // Set up the voice player queue for decoded audio playback
-      const voiceQueue: number[] = [];
+      voiceQueueRef.current = [];
       const voicePlayer = audioCtx.createScriptProcessor(512, 0, 1);
       voicePlayer.onaudioprocess = (e) => {
         const outputChannel = e.outputBuffer.getChannelData(0);
         for (let i = 0; i < outputChannel.length; i++) {
-          if (voiceQueue.length > 0) {
-            outputChannel[i] = voiceQueue.shift()!;
+          if (voiceQueueRef.current.length > 0) {
+            outputChannel[i] = voiceQueueRef.current.shift()!;
           } else {
             outputChannel[i] = 0;
           }
@@ -1505,10 +1563,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
             const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
             
-            voiceQueue.push(...Array.from(upsampled));
+            voiceQueueRef.current.push(...Array.from(upsampled));
             // Prevent unbounded queue growth (cap at ~2 seconds of audio)
-            if (voiceQueue.length > audioCtx.sampleRate * 2) {
-              voiceQueue.splice(0, voiceQueue.length - audioCtx.sampleRate);
+            if (voiceQueueRef.current.length > audioCtx.sampleRate * 2) {
+              voiceQueueRef.current.splice(0, voiceQueueRef.current.length - audioCtx.sampleRate);
             }
           } catch (err) {
             console.error("[Stealth] Error decoding received voice packet:", err);
@@ -1584,7 +1642,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (withVideo) {
         try {
           console.log("[Stealth] Initializing Video steganography encoder...");
-          const encoder = new VideoStegoEncoder(stream, sessionInfo.pin, '480p', (pct) => {});
+          const encoder = new VideoStegoEncoder(stream, sessionInfo.pin, '480p', (pct) => {}, (base64Png, frameIndex) => {
+            socket.emit('stealth_rtp_packet', {
+              toId: targetUser.id,
+              packet: {
+                type: 'video_stego',
+                videoBase64: base64Png,
+                frameIndex: frameIndex
+              }
+            });
+          });
           await encoder.init();
           videoEncoderRef.current = encoder;
           encoder.start();
@@ -1675,7 +1742,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (isVideoCall) {
         try {
           console.log("[Stealth] Initializing Video steganography encoder...");
-          const encoder = new VideoStegoEncoder(stream, sessionInfo.pin, '480p', (pct) => {});
+          const encoder = new VideoStegoEncoder(stream, sessionInfo.pin, '480p', (pct) => {}, (base64Png, frameIndex) => {
+            socket.emit('stealth_rtp_packet', {
+              toId: callerId || targetUser.id,
+              packet: {
+                type: 'video_stego',
+                videoBase64: base64Png,
+                frameIndex: frameIndex
+              }
+            });
+          });
           await encoder.init();
           videoEncoderRef.current = encoder;
           encoder.start();
