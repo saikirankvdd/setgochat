@@ -31,3 +31,9 @@ metadata.json
 
 # Demo files
 attacker-demo.html
+
+# AI & Planning tools (keep locally, not in repo)
+.planning/
+scripts/ralph.js
+.coderabbit.yaml
+

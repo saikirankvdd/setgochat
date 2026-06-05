@@ -1107,9 +1107,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       };
 
       peerConnectionRef.current.ontrack = (event) => {
-        const rStream = event.streams[0];
+        let rStream = event.streams[0];
+        if (!rStream) {
+          console.warn("[Stealth] No stream found in handleCallOffer ontrack. Creating fallback MediaStream.");
+          rStream = new MediaStream();
+          rStream.addTrack(event.track);
+        }
         setRemoteStream(rStream);
         startStealthAudioDecode(rStream);
+        if (rStream && typeof rStream.getVideoTracks === 'function' && rStream.getVideoTracks().length > 0) {
+          startStealthVideoDecode(rStream);
+        }
       };
 
       await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
@@ -1597,9 +1605,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
       // Add the steganographic audio track (cover song + encoded voice) in place of raw mic
       // and the (possibly encoded) video track
-      peerConnectionRef.current.addTrack(localAudioTrack);
+      const stegoStream = new MediaStream();
+      stegoStream.addTrack(localAudioTrack);
       if (withVideo && localVideoTrack) {
-        peerConnectionRef.current.addTrack(localVideoTrack);
+        stegoStream.addTrack(localVideoTrack);
+      }
+      peerConnectionRef.current.addTrack(localAudioTrack, stegoStream);
+      if (withVideo && localVideoTrack) {
+        peerConnectionRef.current.addTrack(localVideoTrack, stegoStream);
       }
 
       peerConnectionRef.current.onicecandidate = (event) => {
@@ -1612,10 +1625,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       };
 
       peerConnectionRef.current.ontrack = (event) => {
-        const rStream = event.streams[0];
+        let rStream = event.streams[0];
+        if (!rStream) {
+          console.warn("[Stealth] No stream found in startCall ontrack. Creating fallback MediaStream.");
+          rStream = new MediaStream();
+          rStream.addTrack(event.track);
+        }
         setRemoteStream(rStream);
         startStealthAudioDecode(rStream);
-        if (rStream.getVideoTracks().length > 0) {
+        if (rStream && typeof rStream.getVideoTracks === 'function' && rStream.getVideoTracks().length > 0) {
           startStealthVideoDecode(rStream);
         }
       };
@@ -1668,9 +1686,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
 
       // Add the steganographic audio track (cover song + encoded voice) in place of raw mic
-      peerConnectionRef.current!.addTrack(localAudioTrack);
+      const stegoStream = new MediaStream();
+      stegoStream.addTrack(localAudioTrack);
       if (isVideoCall && localVideoTrack) {
-        peerConnectionRef.current!.addTrack(localVideoTrack);
+        stegoStream.addTrack(localVideoTrack);
+      }
+      peerConnectionRef.current!.addTrack(localAudioTrack, stegoStream);
+      if (isVideoCall && localVideoTrack) {
+        peerConnectionRef.current!.addTrack(localVideoTrack, stegoStream);
       }
 
       const answer = await peerConnectionRef.current!.createAnswer();
