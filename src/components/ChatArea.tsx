@@ -1174,12 +1174,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const audioCtx = stealthAudioCtxRef.current;
           if (!audioCtx) return;
 
-          const binaryString = atob(packet.audioBase64);
-          const bytes = new Uint8Array(binaryString.length);
-          for (let i = 0; i < binaryString.length; i++) {
-            bytes[i] = binaryString.charCodeAt(i);
-          }
-          const binary = decodeLSB(bytes.buffer);
+          const binary = decodeLSB(packet.audioBuffer);
           const encryptedText = binaryToString(binary);
           const decrypted = decryptData(encryptedText, sessionInfo.pin);
           if (!decrypted) return;
@@ -1421,7 +1416,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       const dest = audioCtx.createMediaStreamDestination();
       workletNode.connect(dest);
 
-      const micSource = audioCtx.createMediaStreamSource(localStream);
+      const micSource = audioCtx.createMediaStreamSource(rawStream);
       const micProcessor = audioCtx.createScriptProcessor(512, 1, 1);
       micSource.connect(micProcessor);
 
@@ -1465,18 +1460,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const carrier = createDynamicCarrier(bits.length);
           const stegoAudio = encodeLSB(carrier, bits);
           
-          const stegoBytes = new Uint8Array(stegoAudio);
-          let stegoBinaryStr = '';
-          for (let i = 0; i < stegoBytes.byteLength; i++) {
-            stegoBinaryStr += String.fromCharCode(stegoBytes[i]);
-          }
-          const stegoBase64 = btoa(stegoBinaryStr);
-
           socket.emit('stealth_rtp_packet', {
             toId: targetUser.id,
             packet: {
               type: 'audio_stego',
-              audioBase64: stegoBase64
+              audioBuffer: stegoAudio
             }
           });
         }
