@@ -1389,7 +1389,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     return result;
   };
 
-  const startStealthAudioEncode = async (localStream: MediaStream): Promise<MediaStreamTrack | null> => {
+  const startStealthAudioEncode = async (rawStream: MediaStream): Promise<MediaStreamTrack | null> => {
     try {
       console.log("[Stealth] Initializing Audio Encode Pipeline...");
       const audioCtx = getOrCreateAudioContext();
