@@ -217,7 +217,7 @@ export const decodeLSB1Bit = (audioBuffer: ArrayBuffer, password: string): strin
 // ==========================================
 
 const MUSIC_GENRES = ['lofi', 'orchestral', 'jazz', 'synthwave', 'nature', 'edm'] as const;
-type MusicGenre = typeof MUSIC_GENRES[number];
+export type MusicGenre = typeof MUSIC_GENRES[number];
 
 export async function generateMusicCarrier(payloadBitLength: number): Promise<{ buffer: ArrayBuffer, type: string }> {
   const sampleRate = 44100;
@@ -253,7 +253,7 @@ export async function generateMusicCarrier(payloadBitLength: number): Promise<{ 
 // Genre 1: Lo-fi Chill
 // Warm vinyl-esque pads, laid-back plucks, soft kick, gentle hiss
 // ------------------------------------------------------------------
-function generateLofi(ctx: OfflineAudioContext, duration: number) {
+export function generateLofi(ctx: OfflineAudioContext, duration: number) {
   const prng = new PRNG('lofi_' + duration);
 
   // Soft vinyl hiss (filtered white noise)
@@ -330,7 +330,7 @@ function generateLofi(ctx: OfflineAudioContext, duration: number) {
 // Genre 2: Epic Orchestral
 // Swelling strings, brass stabs, rising tension, cinematic feel
 // ------------------------------------------------------------------
-function generateOrchestral(ctx: OfflineAudioContext, duration: number) {
+export function generateOrchestral(ctx: OfflineAudioContext, duration: number) {
   const prng = new PRNG('orch_' + duration);
 
   // String pads (Dm chord: D F A)
@@ -389,7 +389,7 @@ function generateOrchestral(ctx: OfflineAudioContext, duration: number) {
 // Genre 3: Jazz Improvisation
 // Walking bass, syncopated chords, swung melody
 // ------------------------------------------------------------------
-function generateJazz(ctx: OfflineAudioContext, duration: number) {
+export function generateJazz(ctx: OfflineAudioContext, duration: number) {
   const prng = new PRNG('jazz_' + duration);
 
   // Walking bass (E Dorian-ish: E F# G A B D)
@@ -449,7 +449,7 @@ function generateJazz(ctx: OfflineAudioContext, duration: number) {
 // Genre 4: Synthwave / Retrowave
 // Pulsing arpeggios, thick bass, detuned lead synth, 80s feel
 // ------------------------------------------------------------------
-function generateSynthwave(ctx: OfflineAudioContext, duration: number) {
+export function generateSynthwave(ctx: OfflineAudioContext, duration: number) {
   const prng = new PRNG('synth_' + duration);
 
   // Thick pulsing bass (sawtooth + sub)
@@ -526,7 +526,7 @@ function generateSynthwave(ctx: OfflineAudioContext, duration: number) {
 // Genre 5: Nature Ambient
 // Wind, water flow, bird-like calls, slow evolving drones
 // ------------------------------------------------------------------
-function generateNature(ctx: OfflineAudioContext, duration: number) {
+export function generateNature(ctx: OfflineAudioContext, duration: number) {
   const prng = new PRNG('nature_' + duration);
 
   // Wind (low-passed white noise)
@@ -604,7 +604,7 @@ function generateNature(ctx: OfflineAudioContext, duration: number) {
 // Genre 6: EDM / Dance
 // Four-on-the-floor kick, driving bass, synth stabs, hi-hats
 // ------------------------------------------------------------------
-function generateEDM(ctx: OfflineAudioContext, duration: number) {
+export function generateEDM(ctx: OfflineAudioContext, duration: number) {
   const prng = new PRNG('edm_' + duration);
   const BPM = 128;
   const beat = 60 / BPM;

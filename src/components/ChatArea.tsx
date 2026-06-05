@@ -11,6 +11,9 @@ import { encodeLSB, decodeLSB, createDynamicCarrier, encodeLSB4Bit, decodeLSB4Bi
 import { generateWallpaperCanvas, encodeImageLSB, decodeImageLSB } from '../utils/imageStego';
 import { strToU8, gzipSync, strFromU8, gunzipSync } from 'fflate';
 import { saveMessageLocal, getMessagesLocal, deleteMessageLocal, getAllMessagesLocal, importMessagesLocal } from '../utils/db';
+import { generateCoverSong } from '../utils/coverSongGenerator';
+import { VideoStegoEncoder } from '../utils/VideoStegoEncoder';
+import { VideoStegoDecoder } from '../utils/VideoStegoDecoder';
 
 interface ChatAreaProps {
   key?: string | number;
@@ -730,6 +733,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
   const localStreamRef = useRef<MediaStream | null>(null);
 
+  // --- STEGANOGRAPHY CALL REFS ---
+  const coverSongRef = useRef<Float32Array | null>(null);
+  const stealthWorkletRef = useRef<AudioWorkletNode | null>(null);
+  const stealthAudioCtxRef = useRef<AudioContext | null>(null);
+  const callStartTimeRef = useRef<number>(0);
+  const videoEncoderRef = useRef<VideoStegoEncoder | null>(null);
+  const videoDecoderRef = useRef<VideoStegoDecoder | null>(null);
+  const decodedVideoCanvasRef = useRef<HTMLCanvasElement>(null);
+
   const isDraggingRef = useRef(false);
   const offsetRef = useRef({ x: 0, y: 0 });
   const isInitialLoad = useRef(true);
@@ -1094,7 +1106,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       };
 
       peerConnectionRef.current.ontrack = (event) => {
-        setRemoteStream(event.streams[0]);
+        const rStream = event.streams[0];
+        setRemoteStream(rStream);
+        startStealthAudioDecode(rStream);
       };
 
       await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
@@ -1280,6 +1294,264 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
   };
 
+  const getOrCreateAudioContext = () => {
+    if (!stealthAudioCtxRef.current) {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      stealthAudioCtxRef.current = new AudioCtx();
+    }
+    return stealthAudioCtxRef.current;
+  };
+
+  const downsampleAudio = (buffer: Float32Array, fromSampleRate: number, toSampleRate: number): Float32Array => {
+    if (fromSampleRate === toSampleRate) return buffer;
+    const sampleRateRatio = fromSampleRate / toSampleRate;
+    const newLength = Math.round(buffer.length / sampleRateRatio);
+    const result = new Float32Array(newLength);
+    let offsetResult = 0;
+    let offsetBuffer = 0;
+    while (offsetResult < result.length) {
+      const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+      let accum = 0;
+      let count = 0;
+      for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+        accum += buffer[i];
+        count++;
+      }
+      result[offsetResult] = count > 0 ? accum / count : 0;
+      offsetResult++;
+      offsetBuffer = nextOffsetBuffer;
+    }
+    return result;
+  };
+
+  const upsampleAudio = (buffer: Float32Array, fromSampleRate: number, toSampleRate: number): Float32Array => {
+    if (fromSampleRate === toSampleRate) return buffer;
+    const sampleRateRatio = toSampleRate / fromSampleRate;
+    const newLength = Math.round(buffer.length * sampleRateRatio);
+    const result = new Float32Array(newLength);
+    for (let i = 0; i < result.length; i++) {
+      const srcIdx = Math.floor(i / sampleRateRatio);
+      result[i] = buffer[srcIdx] || 0;
+    }
+    return result;
+  };
+
+  const startStealthAudioEncode = async (localStream: MediaStream): Promise<MediaStreamTrack | null> => {
+    try {
+      console.log("[Stealth] Initializing Audio Encode Pipeline...");
+      const audioCtx = getOrCreateAudioContext();
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+
+      await audioCtx.audioWorklet.addModule('/stealth-worklet.js');
+
+      const song = coverSongRef.current || await generateCoverSong(sessionInfo.pin);
+      coverSongRef.current = song;
+
+      const workletNode = new AudioWorkletNode(audioCtx, 'stealth-processor');
+      workletNode.port.postMessage({ type: 'SET_COVER', samples: song });
+      workletNode.port.postMessage({ type: 'SET_PIN', pin: sessionInfo.pin });
+      workletNode.port.postMessage({ type: 'SET_MODE_ENCODE' });
+
+      // Compile and link WASM module if fetched
+      try {
+        const response = await fetch('/stealth-engine/stealth_engine_bg.wasm');
+        const wasmBuffer = await response.arrayBuffer();
+        const wasmModule = await WebAssembly.compile(wasmBuffer);
+        workletNode.port.postMessage({ type: 'INIT_WASM', module: wasmModule });
+      } catch (wasmErr) {
+        console.warn("[Stealth] WASM Compilation failed, using JS fallback:", wasmErr);
+      }
+
+      const dest = audioCtx.createMediaStreamDestination();
+      workletNode.connect(dest);
+
+      const micSource = audioCtx.createMediaStreamSource(localStream);
+      const micProcessor = audioCtx.createScriptProcessor(512, 1, 1);
+      micSource.connect(micProcessor);
+
+      const silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0;
+      micProcessor.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
+
+      let micAccumulator: number[] = [];
+
+      micProcessor.onaudioprocess = (e) => {
+        const inputData = e.inputBuffer.getChannelData(0);
+        micAccumulator.push(...(Array.from(inputData) as number[]));
+
+        const triggerLength = audioCtx.sampleRate === 48000 ? 4460 : 4096;
+        if (micAccumulator.length >= triggerLength) {
+          const chunk = micAccumulator.splice(0, triggerLength);
+          const rawFloats = Float32Array.from(chunk);
+          
+          const downsampled = downsampleAudio(rawFloats, audioCtx.sampleRate, 8000);
+          
+          const bytes = new Uint8Array(downsampled.length);
+          for (let i = 0; i < downsampled.length; i++) {
+            bytes[i] = Math.max(0, Math.min(255, Math.floor((downsampled[i] + 1.0) * 127.5)));
+          }
+
+          const compressed = gzipSync(bytes, { level: 6 });
+          
+          let binStr = '';
+          for (let i = 0; i < compressed.length; i++) {
+            binStr += String.fromCharCode(compressed[i]);
+          }
+          const base64 = btoa(binStr);
+
+          const encrypted = encryptData(base64, sessionInfo.pin);
+
+          const bits = stringToBinary(encrypted);
+          
+          const N = bits.length;
+          const headerBits: number[] = [];
+          for (let i = 31; i >= 0; i--) {
+            headerBits.push((N >>> i) & 1);
+          }
+          const payloadBits = bits.split('').map(Number);
+          const packetBits = [...headerBits, ...payloadBits];
+
+          workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: packetBits });
+        }
+      };
+
+      stealthWorkletRef.current = workletNode;
+      (window as any).stealthMicProcessor = micProcessor; // prevent GC
+
+      return dest.stream.getAudioTracks()[0];
+    } catch (e) {
+      console.error("[Stealth] Failed to start encode pipeline:", e);
+      return null;
+    }
+  };
+
+  const startStealthAudioDecode = async (remoteStream: MediaStream) => {
+    try {
+      console.log("[Stealth] Initializing Audio Decode Pipeline...");
+      const audioCtx = getOrCreateAudioContext();
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+
+      await audioCtx.audioWorklet.addModule('/stealth-worklet.js');
+
+      const song = coverSongRef.current || await generateCoverSong(sessionInfo.pin);
+      coverSongRef.current = song;
+
+      const decodeWorklet = new AudioWorkletNode(audioCtx, 'stealth-processor');
+      decodeWorklet.port.postMessage({ type: 'SET_COVER', samples: song });
+      decodeWorklet.port.postMessage({ type: 'SET_PIN', pin: sessionInfo.pin });
+      decodeWorklet.port.postMessage({ type: 'SET_MODE_DECODE' });
+
+      // Compile and link WASM module if fetched
+      try {
+        const response = await fetch('/stealth-engine/stealth_engine_bg.wasm');
+        const wasmBuffer = await response.arrayBuffer();
+        const wasmModule = await WebAssembly.compile(wasmBuffer);
+        decodeWorklet.port.postMessage({ type: 'INIT_WASM', module: wasmModule });
+      } catch (wasmErr) {
+        console.warn("[Stealth] WASM Compilation failed, using JS fallback:", wasmErr);
+      }
+
+      const remoteSource = audioCtx.createMediaStreamSource(remoteStream);
+      remoteSource.connect(decodeWorklet);
+
+      const silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0.005; // tiny monitor hum for debug, or 0
+      decodeWorklet.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
+
+      // Set up the voice player queue
+      const voiceQueue: number[] = [];
+      const voicePlayer = audioCtx.createScriptProcessor(256, 0, 1);
+      voicePlayer.onaudioprocess = (e) => {
+        const outputChannel = e.outputBuffer.getChannelData(0);
+        for (let i = 0; i < outputChannel.length; i++) {
+          if (voiceQueue.length > 0) {
+            outputChannel[i] = voiceQueue.shift()!;
+          } else {
+            outputChannel[i] = 0;
+          }
+        }
+      };
+      voicePlayer.connect(audioCtx.destination);
+      (window as any).stealthVoicePlayer = voicePlayer; // prevent GC
+
+      decodeWorklet.port.onmessage = (e) => {
+        if (e.data.type === 'VOICE_BITS_READY') {
+          try {
+            const encrypted = binaryToString(e.data.bits.join(''));
+            const base64 = decryptData(encrypted, sessionInfo.pin);
+            if (!base64) return;
+
+            const binStr = atob(base64);
+            const compressedBytes = new Uint8Array(binStr.length);
+            for (let i = 0; i < binStr.length; i++) {
+              compressedBytes[i] = binStr.charCodeAt(i);
+            }
+
+            const decompressedBytes = gunzipSync(compressedBytes);
+
+            const voice8kHz = new Float32Array(decompressedBytes.length);
+            for (let i = 0; i < decompressedBytes.length; i++) {
+              voice8kHz[i] = (decompressedBytes[i] / 127.5) - 1.0;
+            }
+
+            const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+            
+            voiceQueue.push(...Array.from(upsampled));
+            if (voiceQueue.length > 8192) {
+              voiceQueue.splice(0, voiceQueue.length - 4096);
+            }
+          } catch (err) {
+            console.error("[Stealth] Error decoding received voice packet:", err);
+          }
+        }
+      };
+
+      (window as any).stealthDecodeWorklet = decodeWorklet; // prevent GC
+    } catch (e) {
+      console.error("[Stealth] Failed to start decode pipeline:", e);
+    }
+  };
+
+  const startStealthVideoDecode = async (remoteStream: MediaStream) => {
+    try {
+      console.log("[Stealth] Initializing Video Decode Pipeline...");
+      if (!decodedVideoCanvasRef.current) {
+        console.warn("[Stealth] Decoded video canvas not ready yet.");
+        return;
+      }
+
+      let attempts = 0;
+      const initDecoder = async () => {
+        if (remoteVideoRef.current && decodedVideoCanvasRef.current) {
+          remoteVideoRef.current.muted = true;
+          const decoder = new VideoStegoDecoder(
+            remoteVideoRef.current,
+            sessionInfo.pin,
+            decodedVideoCanvasRef.current,
+            '480p',
+            (pct) => {}
+          );
+          await decoder.init();
+          videoDecoderRef.current = decoder;
+          decoder.start();
+          console.log("[Stealth] Video decoder pipeline successfully started.");
+        } else if (attempts < 20) {
+          attempts++;
+          setTimeout(initDecoder, 100);
+        }
+      };
+      initDecoder();
+    } catch (e) {
+      console.error("[Stealth] Failed to start video decode pipeline:", e);
+    }
+  };
+
   const startCall = async (withVideo: boolean = false) => {
     if (sessionInfo.pin === 'DECRYPTION_FAILED') {
       showModal({
@@ -1297,27 +1569,24 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
       
       // --- V2 STEALTH ARCHITECTURE INJECTION ---
-      if (!withVideo) {
-         try {
-             console.log("[Stealth] Initializing V2 AudioWorklet for absolute privacy...");
-             const audioCtx = new window.AudioContext();
-             await audioCtx.audioWorklet.addModule('/stealth-worklet.js');
-             const source = audioCtx.createMediaStreamSource(stream);
-             const workletNode = new AudioWorkletNode(audioCtx, 'stealth-processor');
-             source.connect(workletNode);
-             
-             // Route fake RTP packets to our binary socket
-             workletNode.port.onmessage = (e) => {
-                 if (e.data.type === 'STEALTH_RTP_OUTPUT') {
-                     socket.emit('stealth_rtp_packet', { toId: targetUser.id, packet: e.data.payload });
-                 }
-             };
-             
-             // Example dummy payload to trigger the steganography engine
-             workletNode.port.postMessage({ type: 'START_STEALTH', payload: new Uint8Array([1,0,1,0,1,1,1]) });
-             
-             (window as any).stealthAudioCtx = audioCtx;
-         } catch(e) { console.error("[Stealth] Worklet failed to initialize", e); }
+      let localAudioTrack = stream.getAudioTracks()[0];
+      const stegoTrack = await startStealthAudioEncode(stream);
+      if (stegoTrack) {
+        localAudioTrack = stegoTrack;
+      }
+
+      let localVideoTrack = stream.getVideoTracks()[0];
+      if (withVideo) {
+        try {
+          console.log("[Stealth] Initializing Video steganography encoder...");
+          const encoder = new VideoStegoEncoder(stream, sessionInfo.pin, '480p', (pct) => {});
+          await encoder.init();
+          videoEncoderRef.current = encoder;
+          encoder.start();
+          localVideoTrack = encoder.getStegoStream().getVideoTracks()[0];
+        } catch (e) {
+          console.error("[Stealth] Video encoder failed to initialize", e);
+        }
       }
       // -----------------------------------------
 
@@ -1330,7 +1599,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       });
 
       stream.getTracks().forEach(track => {
-        peerConnectionRef.current?.addTrack(track, stream);
+        if (track.kind === 'audio') {
+          peerConnectionRef.current?.addTrack(localAudioTrack, stream);
+        } else if (track.kind === 'video') {
+          peerConnectionRef.current?.addTrack(localVideoTrack, stream);
+        } else {
+          peerConnectionRef.current?.addTrack(track, stream);
+        }
       });
 
       peerConnectionRef.current.onicecandidate = (event) => {
@@ -1343,7 +1618,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       };
 
       peerConnectionRef.current.ontrack = (event) => {
-        setRemoteStream(event.streams[0]);
+        const rStream = event.streams[0];
+        setRemoteStream(rStream);
+        startStealthAudioDecode(rStream);
+        if (rStream.getVideoTracks().length > 0) {
+          startStealthVideoDecode(rStream);
+        }
       };
 
       const offer = await peerConnectionRef.current.createOffer();
@@ -1373,8 +1653,34 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setLocalStream(stream);
       localStreamRef.current = stream;
 
+      let localAudioTrack = stream.getAudioTracks()[0];
+      const stegoTrack = await startStealthAudioEncode(stream);
+      if (stegoTrack) {
+        localAudioTrack = stegoTrack;
+      }
+
+      let localVideoTrack = stream.getVideoTracks()[0];
+      if (isVideoCall) {
+        try {
+          console.log("[Stealth] Initializing Video steganography encoder...");
+          const encoder = new VideoStegoEncoder(stream, sessionInfo.pin, '480p', (pct) => {});
+          await encoder.init();
+          videoEncoderRef.current = encoder;
+          encoder.start();
+          localVideoTrack = encoder.getStegoStream().getVideoTracks()[0];
+        } catch (e) {
+          console.error("[Stealth] Video encoder failed to initialize", e);
+        }
+      }
+
       stream.getTracks().forEach(track => {
-        peerConnectionRef.current?.addTrack(track, stream);
+        if (track.kind === 'audio') {
+          peerConnectionRef.current?.addTrack(localAudioTrack, stream);
+        } else if (track.kind === 'video') {
+          peerConnectionRef.current?.addTrack(localVideoTrack, stream);
+        } else {
+          peerConnectionRef.current?.addTrack(track, stream);
+        }
       });
 
       const answer = await peerConnectionRef.current!.createAnswer();
@@ -1400,6 +1706,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       
       // Attempt to play audio immediately to satisfy mobile browser user gesture requirements
       if (remoteVideoRef.current && remoteStream) {
+        remoteVideoRef.current.muted = true;
         if (remoteVideoRef.current.srcObject !== remoteStream) {
           remoteVideoRef.current.srcObject = remoteStream;
         }
@@ -1452,10 +1759,36 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     pendingCandidates.current = [];
     
     // --- V2 STEALTH CLEANUP ---
-    if ((window as any).stealthAudioCtx) {
-       (window as any).stealthAudioCtx.close();
-       delete (window as any).stealthAudioCtx;
-       console.log("[Stealth] V2 AudioWorklet disconnected.");
+    try {
+      stealthWorkletRef.current?.port.postMessage({ type: 'STOP' });
+      stealthWorkletRef.current = null;
+      
+      const decodeWorklet = (window as any).stealthDecodeWorklet;
+      if (decodeWorklet) {
+        decodeWorklet.port.postMessage({ type: 'STOP' });
+        delete (window as any).stealthDecodeWorklet;
+      }
+
+      if (stealthAudioCtxRef.current) {
+        stealthAudioCtxRef.current.close();
+        stealthAudioCtxRef.current = null;
+      }
+
+      coverSongRef.current = null;
+
+      // Stop video stego if active
+      videoEncoderRef.current?.stop();
+      videoEncoderRef.current = null;
+      videoDecoderRef.current?.stop();
+      videoDecoderRef.current = null;
+
+      // Clean up processors and players
+      delete (window as any).stealthMicProcessor;
+      delete (window as any).stealthVoicePlayer;
+
+      console.log("[Stealth] Steganography context and worklets cleaned up.");
+    } catch (e) {
+      console.error("[Stealth] Error during cleanup:", e);
     }
 
     if (localStreamRef.current) {
@@ -1479,6 +1812,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
+      remoteVideoRef.current.muted = true;
       if (remoteVideoRef.current.srcObject !== remoteStream) {
         remoteVideoRef.current.srcObject = remoteStream;
       }
@@ -1978,7 +2312,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               ref={remoteVideoRef} 
               autoPlay 
               playsInline 
-              className={`absolute inset-0 w-full h-full object-cover z-0 ${isVideoCall && callState === 'connected' ? 'block' : 'hidden'}`} 
+              className={`absolute inset-0 w-full h-full object-cover z-0 opacity-0 pointer-events-none ${isVideoCall && callState === 'connected' ? 'block' : 'hidden'}`} 
+            />
+
+            {/* Decoded Video Canvas — shows decrypted real face */}
+            <canvas
+              ref={decodedVideoCanvasRef}
+              className={`absolute inset-0 w-full h-full object-cover z-0 ${isVideoCall && callState === 'connected' ? 'block' : 'hidden'}`}
             />
 
             {/* Audio Call Connected: compact floating card (chat visible behind) */}
