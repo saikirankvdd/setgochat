@@ -1169,15 +1169,23 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     };
 
     const handleStealthRtpReceive = async (packet: any) => {
+      console.log("[Stealth-RTP] Received socket packet type:", packet?.type);
       if (packet.type === 'audio_stego') {
         try {
           const audioCtx = stealthAudioCtxRef.current;
-          if (!audioCtx) return;
+          if (!audioCtx) {
+            console.warn("[Stealth-RTP] Cannot process packet: stealthAudioCtxRef is null!");
+            return;
+          }
+          console.log("[Stealth-RTP] AudioContext state:", audioCtx.state);
 
           const binary = decodeLSB(packet.audioBuffer);
           const encryptedText = binaryToString(binary);
           const decrypted = decryptData(encryptedText, sessionInfo.pin);
-          if (!decrypted) return;
+          if (!decrypted) {
+            console.warn("[Stealth-RTP] Decryption failed for incoming voice packet!");
+            return;
+          }
 
           const binStr = atob(decrypted);
           const compressedBytes = new Uint8Array(binStr.length);
@@ -1194,6 +1202,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
           
+          console.log("[Stealth-RTP] Decoded and upsampled", upsampled.length, "samples. Pushing to voice queue.");
           voiceQueueRef.current.push(...Array.from(upsampled));
           if (voiceQueueRef.current.length > audioCtx.sampleRate * 2) {
             voiceQueueRef.current.splice(0, voiceQueueRef.current.length - audioCtx.sampleRate);
@@ -1460,6 +1469,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const carrier = createDynamicCarrier(bits.length);
           const stegoAudio = encodeLSB(carrier, bits);
           
+          console.log("[Stealth-RTP] Emitting audio stego packet over socket, byte size:", stegoAudio.byteLength);
           socket.emit('stealth_rtp_packet', {
             toId: targetUser.id,
             packet: {
@@ -1516,8 +1526,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       // Set up the voice player queue for decoded audio playback
       voiceQueueRef.current = [];
       const voicePlayer = audioCtx.createScriptProcessor(512, 0, 1);
+      let onaudioprocessCallCount = 0;
       voicePlayer.onaudioprocess = (e) => {
         const outputChannel = e.outputBuffer.getChannelData(0);
+        const queueLen = voiceQueueRef.current.length;
+        if (queueLen > 0 && onaudioprocessCallCount++ % 100 === 0) {
+          console.log("[Stealth-RTP] voicePlayer playing active audio. Queue size:", queueLen);
+        }
         for (let i = 0; i < outputChannel.length; i++) {
           if (voiceQueueRef.current.length > 0) {
             outputChannel[i] = voiceQueueRef.current.shift()!;
@@ -1527,6 +1542,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
       };
       voicePlayer.connect(audioCtx.destination);
+      console.log("[Stealth-RTP] voicePlayer ScriptProcessorNode initialized and connected to AudioContext destination.");
       (window as any).stealthVoicePlayer = voicePlayer; // prevent GC
 
       decodeWorklet.port.onmessage = (e) => {
