@@ -620,7 +620,7 @@ io.use((socket: any, next) => {
 
 // Event Size Limits config (Finding 2)
 const EVENT_SIZE_LIMITS: Record<string, number> = {
-  send_message:      50000,   // 50 KB
+  send_message:      500000,   // 500 KB (Raised to accommodate compressed stego WebRTC signaling offers/answers)
   send_file:         200000000,  // 200 MB
   call_offer:        25000,
   call_answer:       25000,
@@ -631,7 +631,10 @@ const EVENT_SIZE_LIMITS: Record<string, number> = {
   decline_request:   5000,
   log_call:          5000,
   register:          1000,
-  request_offline_messages: 1000
+  request_offline_messages: 1000,
+  stealth_rtp_packet: 1000000, // 1 MB (Added to allow stego real-time voice packets ~12KB and video frames ~200KB)
+  device_sync_request: 10000,   // 10 KB
+  device_sync_payload: 1000000  // 1 MB (Added to allow database sync files)
 };
 
 // Event Rate Limiting Store
