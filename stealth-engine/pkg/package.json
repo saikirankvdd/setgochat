@@ -1,0 +1,15 @@
+{
+  "name": "stealth-engine",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "stealth_engine_bg.wasm",
+    "stealth_engine.js",
+    "stealth_engine.d.ts"
+  ],
+  "main": "stealth_engine.js",
+  "types": "stealth_engine.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}
