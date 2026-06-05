@@ -1546,7 +1546,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const startStealthAudioDecode = async (remoteStream: MediaStream) => {
-    if ((window as any).stealthDecodeWorklet) {
+    if ((window as any).stealthDecodePipelineActive) {
       console.log("[Stealth] Audio Decode Pipeline already initialized. Skipping.");
       return;
     }
@@ -1556,31 +1556,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (audioCtx.state === 'suspended') {
         await audioCtx.resume();
       }
-
-      // Only call addModule once per AudioContext instance
-      if (!workletModuleLoadedRef.current) {
-        await audioCtx.audioWorklet.addModule('/stealth-worklet.js');
-        workletModuleLoadedRef.current = true;
-      }
-
-      const song = coverSongRef.current || await generateCoverSong(sessionInfo.pin, audioCtx.sampleRate);
-      coverSongRef.current = song;
-
-      const decodeWorklet = new AudioWorkletNode(audioCtx, 'stealth-processor');
-      // Use transferable to avoid copying 40MB Float32Array
-      const decSongBuffer = song.buffer.slice(0);
-      decodeWorklet.port.postMessage({ type: 'SET_COVER', buffer: decSongBuffer }, [decSongBuffer]);
-      decodeWorklet.port.postMessage({ type: 'SET_PIN', pin: sessionInfo.pin });
-      decodeWorklet.port.postMessage({ type: 'SET_MODE_DECODE' });
-
-      const remoteSource = audioCtx.createMediaStreamSource(remoteStream);
-      remoteSource.connect(decodeWorklet);
-
-      // Worklet output goes to null (cover song is discarded; only voice bits matter)
-      const nullGain = audioCtx.createGain();
-      nullGain.gain.value = 0;
-      decodeWorklet.connect(nullGain);
-      nullGain.connect(audioCtx.destination);
 
       // Set up the voice player queue for decoded audio playback
       voiceQueueRef.current = [];
@@ -1627,45 +1602,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           console.warn("[Stealth-RTP] Jitter buffer empty. Pausing playback to re-buffer.");
         }
       };
+
       voicePlayer.connect(audioCtx.destination);
       console.log("[Stealth-RTP] voicePlayer ScriptProcessorNode initialized and connected to AudioContext destination.");
       (window as any).stealthVoicePlayer = voicePlayer; // prevent GC
-
-      decodeWorklet.port.onmessage = (e) => {
-        if (e.data.type === 'VOICE_BITS_READY') {
-          try {
-            const encrypted = binaryToString(e.data.bits.join(''));
-            const base64 = decryptData(encrypted, sessionInfo.pin);
-            if (!base64) return;
-
-            const binStr = atob(base64);
-            const compressedBytes = new Uint8Array(binStr.length);
-            for (let i = 0; i < binStr.length; i++) {
-              compressedBytes[i] = binStr.charCodeAt(i);
-            }
-
-            const decompressedBytes = gunzipSync(compressedBytes);
-
-            const voice8kHz = new Float32Array(decompressedBytes.length);
-            for (let i = 0; i < decompressedBytes.length; i++) {
-              voice8kHz[i] = (decompressedBytes[i] / 127.5) - 1.0;
-            }
-
-            const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
-            
-            voiceQueueRef.current.push(...Array.from(upsampled));
-            // Prevent unbounded queue growth (cap at ~2 seconds of audio)
-            if (voiceQueueRef.current.length > audioCtx.sampleRate * 2) {
-              voiceQueueRef.current.splice(0, voiceQueueRef.current.length - audioCtx.sampleRate);
-            }
-          } catch (err) {
-            console.error("[Stealth] Error decoding received voice packet:", err);
-          }
-        }
-      };
-
-      (window as any).stealthDecodeWorklet = decodeWorklet; // prevent GC
-      (window as any).stealthRemoteSource = remoteSource; // prevent GC
+      (window as any).stealthDecodePipelineActive = true;
     } catch (e) {
       console.error("[Stealth] Failed to start decode pipeline:", e);
     }
@@ -1964,6 +1905,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         decodeWorklet.port.postMessage({ type: 'STOP' });
         delete (window as any).stealthDecodeWorklet;
       }
+      delete (window as any).stealthDecodePipelineActive;
 
       if (stealthAudioCtxRef.current) {
         stealthAudioCtxRef.current.close();
