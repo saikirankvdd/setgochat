@@ -14,6 +14,22 @@ import { saveMessageLocal, getMessagesLocal, deleteMessageLocal, getAllMessagesL
 import { generateCoverSong } from '../utils/coverSongGenerator';
 import { VideoStegoEncoder } from '../utils/VideoStegoEncoder';
 import { VideoStegoDecoder } from '../utils/VideoStegoDecoder';
+import CryptoJS from 'crypto-js';
+
+const hashBufferHex = (buffer: ArrayBuffer): string => {
+  const uint8 = new Uint8Array(buffer);
+  const words = [];
+  for (let i = 0; i < uint8.length; i += 4) {
+    words.push(
+      (uint8[i] << 24) |
+      ((uint8[i + 1] || 0) << 16) |
+      ((uint8[i + 2] || 0) << 8) |
+      (uint8[i + 3] || 0)
+    );
+  }
+  const wa = CryptoJS.lib.WordArray.create(words, uint8.length);
+  return CryptoJS.SHA256(wa).toString();
+};
 
 interface ChatAreaProps {
   key?: string | number;
@@ -1196,6 +1212,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           const headerBytes = new Uint8Array(audioBuffer.slice(0, 12));
           console.log("[Stealth-RTP] Received audioBuffer size:", audioBuffer.byteLength, "WAV Header bytes:", Array.from(headerBytes));
+          console.log("[Stealth-RTP] Received audioBuffer SHA-256:", hashBufferHex(audioBuffer));
 
            const binary = decodeLSB(audioBuffer);
           const encryptedText = binaryToString(binary);
@@ -1491,6 +1508,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           
           console.log("[Stealth-RTP] Encrypted voice payload to send:", encrypted);
           console.log("[Stealth-RTP] Emitting audio stego packet over socket, byte size:", stegoAudio.byteLength);
+          console.log("[Stealth-RTP] Emitted audio stego packet SHA-256:", hashBufferHex(stegoAudio));
           socket.emit('stealth_rtp_packet', {
             toId: targetUser.id,
             packet: {
