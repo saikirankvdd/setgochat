@@ -45,11 +45,12 @@ export function selectGenreOrder(pin: string): MusicGenre[] {
 }
 
 /**
- * Generates a 2-minute cover song (4 genres, 30s each) deterministically from a PIN
+ * Generates a 2-minute cover song (4 genres, 30s each) deterministically from a PIN.
+ * @param pin - Session PIN to derive genre order
+ * @param sampleRate - Target sample rate (default: 48000 to match most AudioContext instances)
  */
-export async function generateCoverSong(pin: string): Promise<Float32Array> {
+export async function generateCoverSong(pin: string, sampleRate: number = 48000): Promise<Float32Array> {
   const genres = selectGenreOrder(pin);
-  const sampleRate = 44100;
   const segmentDuration = 30; // 30 seconds
   const segmentSamples = sampleRate * segmentDuration;
   const totalSamples = segmentSamples * 4;

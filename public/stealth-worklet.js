@@ -32,7 +32,12 @@ class StealthProcessor extends AudioWorkletProcessor {
         console.error("AudioWorklet: Failed to initialize WASM Engine:", err);
       }
     } else if (data.type === 'SET_COVER') {
-      this.coverSamples = data.samples;
+      // Accept either a transferable ArrayBuffer (fast) or legacy Float32Array
+      if (data.buffer instanceof ArrayBuffer) {
+        this.coverSamples = new Float32Array(data.buffer);
+      } else if (data.samples) {
+        this.coverSamples = data.samples;
+      }
       this.coverIndex = 0;
       console.log("AudioWorklet: Cover song buffer set. Length:", this.coverSamples ? this.coverSamples.length : 0);
     } else if (data.type === 'SET_PIN') {

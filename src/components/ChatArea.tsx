@@ -737,6 +737,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const coverSongRef = useRef<Float32Array | null>(null);
   const stealthWorkletRef = useRef<AudioWorkletNode | null>(null);
   const stealthAudioCtxRef = useRef<AudioContext | null>(null);
+  const workletModuleLoadedRef = useRef<boolean>(false); // track if addModule already done for this ctx
   const callStartTimeRef = useRef<number>(0);
   const videoEncoderRef = useRef<VideoStegoEncoder | null>(null);
   const videoDecoderRef = useRef<VideoStegoDecoder | null>(null);
@@ -1295,9 +1296,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const getOrCreateAudioContext = () => {
-    if (!stealthAudioCtxRef.current) {
+    if (!stealthAudioCtxRef.current || stealthAudioCtxRef.current.state === 'closed') {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       stealthAudioCtxRef.current = new AudioCtx();
+      workletModuleLoadedRef.current = false; // new context needs module loaded again
     }
     return stealthAudioCtxRef.current;
   };
@@ -1344,25 +1346,21 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         await audioCtx.resume();
       }
 
-      await audioCtx.audioWorklet.addModule('/stealth-worklet.js');
+      // Only call addModule once per AudioContext instance to avoid InvalidStateError
+      if (!workletModuleLoadedRef.current) {
+        await audioCtx.audioWorklet.addModule('/stealth-worklet.js');
+        workletModuleLoadedRef.current = true;
+      }
 
-      const song = coverSongRef.current || await generateCoverSong(sessionInfo.pin);
+      const song = coverSongRef.current || await generateCoverSong(sessionInfo.pin, audioCtx.sampleRate);
       coverSongRef.current = song;
 
       const workletNode = new AudioWorkletNode(audioCtx, 'stealth-processor');
-      workletNode.port.postMessage({ type: 'SET_COVER', samples: song });
+      // Use transferable to avoid copying 40MB Float32Array (much faster)
+      const songBuffer = song.buffer.slice(0);
+      workletNode.port.postMessage({ type: 'SET_COVER', buffer: songBuffer }, [songBuffer]);
       workletNode.port.postMessage({ type: 'SET_PIN', pin: sessionInfo.pin });
       workletNode.port.postMessage({ type: 'SET_MODE_ENCODE' });
-
-      // Compile and link WASM module if fetched
-      try {
-        const response = await fetch('/stealth-engine/stealth_engine_bg.wasm');
-        const wasmBuffer = await response.arrayBuffer();
-        const wasmModule = await WebAssembly.compile(wasmBuffer);
-        workletNode.port.postMessage({ type: 'INIT_WASM', module: wasmModule });
-      } catch (wasmErr) {
-        console.warn("[Stealth] WASM Compilation failed, using JS fallback:", wasmErr);
-      }
 
       const dest = audioCtx.createMediaStreamDestination();
       workletNode.connect(dest);
@@ -1436,37 +1434,34 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         await audioCtx.resume();
       }
 
-      await audioCtx.audioWorklet.addModule('/stealth-worklet.js');
+      // Only call addModule once per AudioContext instance
+      if (!workletModuleLoadedRef.current) {
+        await audioCtx.audioWorklet.addModule('/stealth-worklet.js');
+        workletModuleLoadedRef.current = true;
+      }
 
-      const song = coverSongRef.current || await generateCoverSong(sessionInfo.pin);
+      const song = coverSongRef.current || await generateCoverSong(sessionInfo.pin, audioCtx.sampleRate);
       coverSongRef.current = song;
 
       const decodeWorklet = new AudioWorkletNode(audioCtx, 'stealth-processor');
-      decodeWorklet.port.postMessage({ type: 'SET_COVER', samples: song });
+      // Use transferable to avoid copying 40MB Float32Array
+      const decSongBuffer = song.buffer.slice(0);
+      decodeWorklet.port.postMessage({ type: 'SET_COVER', buffer: decSongBuffer }, [decSongBuffer]);
       decodeWorklet.port.postMessage({ type: 'SET_PIN', pin: sessionInfo.pin });
       decodeWorklet.port.postMessage({ type: 'SET_MODE_DECODE' });
-
-      // Compile and link WASM module if fetched
-      try {
-        const response = await fetch('/stealth-engine/stealth_engine_bg.wasm');
-        const wasmBuffer = await response.arrayBuffer();
-        const wasmModule = await WebAssembly.compile(wasmBuffer);
-        decodeWorklet.port.postMessage({ type: 'INIT_WASM', module: wasmModule });
-      } catch (wasmErr) {
-        console.warn("[Stealth] WASM Compilation failed, using JS fallback:", wasmErr);
-      }
 
       const remoteSource = audioCtx.createMediaStreamSource(remoteStream);
       remoteSource.connect(decodeWorklet);
 
-      const silentGain = audioCtx.createGain();
-      silentGain.gain.value = 0.005; // tiny monitor hum for debug, or 0
-      decodeWorklet.connect(silentGain);
-      silentGain.connect(audioCtx.destination);
+      // Worklet output goes to null (cover song is discarded; only voice bits matter)
+      const nullGain = audioCtx.createGain();
+      nullGain.gain.value = 0;
+      decodeWorklet.connect(nullGain);
+      nullGain.connect(audioCtx.destination);
 
-      // Set up the voice player queue
+      // Set up the voice player queue for decoded audio playback
       const voiceQueue: number[] = [];
-      const voicePlayer = audioCtx.createScriptProcessor(256, 0, 1);
+      const voicePlayer = audioCtx.createScriptProcessor(512, 0, 1);
       voicePlayer.onaudioprocess = (e) => {
         const outputChannel = e.outputBuffer.getChannelData(0);
         for (let i = 0; i < outputChannel.length; i++) {
@@ -1503,8 +1498,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
             
             voiceQueue.push(...Array.from(upsampled));
-            if (voiceQueue.length > 8192) {
-              voiceQueue.splice(0, voiceQueue.length - 4096);
+            // Prevent unbounded queue growth (cap at ~2 seconds of audio)
+            if (voiceQueue.length > audioCtx.sampleRate * 2) {
+              voiceQueue.splice(0, voiceQueue.length - audioCtx.sampleRate);
             }
           } catch (err) {
             console.error("[Stealth] Error decoding received voice packet:", err);
@@ -1513,6 +1509,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       };
 
       (window as any).stealthDecodeWorklet = decodeWorklet; // prevent GC
+      (window as any).stealthRemoteSource = remoteSource; // prevent GC
     } catch (e) {
       console.error("[Stealth] Failed to start decode pipeline:", e);
     }
@@ -1598,15 +1595,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
 
-      stream.getTracks().forEach(track => {
-        if (track.kind === 'audio') {
-          peerConnectionRef.current?.addTrack(localAudioTrack, stream);
-        } else if (track.kind === 'video') {
-          peerConnectionRef.current?.addTrack(localVideoTrack, stream);
-        } else {
-          peerConnectionRef.current?.addTrack(track, stream);
-        }
-      });
+      // Add the steganographic audio track (cover song + encoded voice) in place of raw mic
+      // and the (possibly encoded) video track
+      peerConnectionRef.current.addTrack(localAudioTrack);
+      if (withVideo && localVideoTrack) {
+        peerConnectionRef.current.addTrack(localVideoTrack);
+      }
 
       peerConnectionRef.current.onicecandidate = (event) => {
         if (event.candidate) {
@@ -1673,15 +1667,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
       }
 
-      stream.getTracks().forEach(track => {
-        if (track.kind === 'audio') {
-          peerConnectionRef.current?.addTrack(localAudioTrack, stream);
-        } else if (track.kind === 'video') {
-          peerConnectionRef.current?.addTrack(localVideoTrack, stream);
-        } else {
-          peerConnectionRef.current?.addTrack(track, stream);
-        }
-      });
+      // Add the steganographic audio track (cover song + encoded voice) in place of raw mic
+      peerConnectionRef.current!.addTrack(localAudioTrack);
+      if (isVideoCall && localVideoTrack) {
+        peerConnectionRef.current!.addTrack(localVideoTrack);
+      }
 
       const answer = await peerConnectionRef.current!.createAnswer();
       await peerConnectionRef.current!.setLocalDescription(answer);
@@ -1705,8 +1695,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }]);
       
       // Attempt to play audio immediately to satisfy mobile browser user gesture requirements
+      // The remote video element is always muted for audio calls - voice is decoded via the stealth worklet
       if (remoteVideoRef.current && remoteStream) {
-        remoteVideoRef.current.muted = true;
+        remoteVideoRef.current.muted = !isVideoCall; // video calls: unmuted; audio calls: muted (decoded by worklet)
         if (remoteVideoRef.current.srcObject !== remoteStream) {
           remoteVideoRef.current.srcObject = remoteStream;
         }
@@ -1772,9 +1763,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (stealthAudioCtxRef.current) {
         stealthAudioCtxRef.current.close();
         stealthAudioCtxRef.current = null;
+        workletModuleLoadedRef.current = false; // reset so next call loads the module into fresh ctx
       }
 
       coverSongRef.current = null;
+      delete (window as any).stealthRemoteSource;
 
       // Stop video stego if active
       videoEncoderRef.current?.stop();
@@ -1812,7 +1805,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   useEffect(() => {
     if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.muted = true;
+      // For video calls, the remote video element plays normally (unmuted)
+      // For audio calls, the element is hidden and audio goes through the steganographic decoder
+      // But we still attach srcObject so the browser negotiates the stream properly
+      remoteVideoRef.current.muted = !isVideoCall; // unmuted for video, muted for audio (audio decoded via worklet)
       if (remoteVideoRef.current.srcObject !== remoteStream) {
         remoteVideoRef.current.srcObject = remoteStream;
       }
