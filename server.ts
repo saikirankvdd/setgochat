@@ -1,4 +1,3 @@
-// CodeRabbit test comment for PR verification
 import express from 'express';
 import dns from 'dns';
 dns.setDefaultResultOrder('ipv4first'); // Force IPv4 routing for Nodemailer since Render/Railway struggles with IPv6 outbound
