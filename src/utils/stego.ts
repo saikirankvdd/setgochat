@@ -746,21 +746,9 @@ export const createDynamicCarrier = (binaryLength: number): ArrayBuffer => {
   view.setUint32(40, dataSize, true);
 
   const stdDev = 1500;
-  for (let i = 0; i < numSamples; i += 2) {
-    let u1 = 0, u2 = 0;
-    while (u1 === 0) u1 = Math.random(); 
-    while (u2 === 0) u2 = Math.random();
-
-    const z0 = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-    const z1 = Math.sqrt(-2.0 * Math.log(u1)) * Math.sin(2.0 * Math.PI * u2);
-
-    const s0 = Math.max(-32768, Math.min(32767, Math.floor(z0 * stdDev)));
-    const s1 = Math.max(-32768, Math.min(32767, Math.floor(z1 * stdDev)));
-
-    view.setInt16(44 + i * 2, s0, true);
-    if (i + 1 < numSamples) {
-      view.setInt16(44 + (i + 1) * 2, s1, true);
-    }
+  for (let i = 0; i < numSamples; i++) {
+    const s = Math.max(-32768, Math.min(32767, Math.floor((Math.random() - 0.5) * 2 * stdDev)));
+    view.setInt16(44 + i * 2, s, true);
   }
 
   return buffer;

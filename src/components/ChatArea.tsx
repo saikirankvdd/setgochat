@@ -1612,11 +1612,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           console.log("[Stealth-RTP] voicePlayer playing active audio. Queue size:", queueLen);
         }
 
+        const chunkToPlay = voiceQueueRef.current.splice(0, outputChannel.length);
         for (let i = 0; i < outputChannel.length; i++) {
-          if (voiceQueueRef.current.length > 0) {
-            outputChannel[i] = voiceQueueRef.current.shift()!;
+          if (i < chunkToPlay.length) {
+            outputChannel[i] = chunkToPlay[i];
           } else {
-            // Queue underflow: drop back to buffering state to avoid clicks/static
+            // Queue underflow: fill remaining with silence and trigger buffering state
             outputChannel[i] = 0;
             isBuffering = true;
           }
