@@ -6,7 +6,7 @@ import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, S
 import { SharedMediaViewer } from './SharedMediaViewer';
 import { useModal } from '../contexts/ModalContext';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
-import { encryptData, decryptData, stringToBinary, binaryToString } from '../utils/crypto';
+import { encryptData, decryptData, stringToBinary, binaryToString, uint8ToBase64, base64ToUint8 } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createDynamicCarrier, encodeLSB4Bit, decodeLSB4Bit, createDynamicCarrier4Bit, generateMusicCarrier, encodeLSB1Bit, decodeLSB1Bit } from '../utils/stego';
 import { generateWallpaperCanvas, encodeImageLSB, decodeImageLSB } from '../utils/imageStego';
 import { strToU8, gzipSync, strFromU8, gunzipSync } from 'fflate';
@@ -342,11 +342,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
        log(`  ✅ Raw: ${(jsonString.length/1024).toFixed(1)} KB → Compressed: ${(compressed.byteLength/1024).toFixed(1)} KB`);
        
        log("[3/6] Encrypting with password...");
-       let binary = '';
-       for (let i = 0; i < compressed.byteLength; i++) {
-         binary += String.fromCharCode(compressed[i]);
-       }
-       const base64Data = window.btoa(binary);
+       const base64Data = uint8ToBase64(compressed);
        const encryptedData = encryptData(base64Data, password);
        const binaryEncryptedData = stringToBinary(encryptedData);
        log("  ✅ Encryption complete");
@@ -455,11 +451,7 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
          throw new Error("Invalid password or corrupted stego file.");
       }
       
-      const binaryStr = window.atob(base64Data);
-      const uint8 = new Uint8Array(binaryStr.length);
-      for(let i = 0; i < binaryStr.length; i++) {
-         uint8[i] = binaryStr.charCodeAt(i);
-      }
+      const uint8 = base64ToUint8(base64Data);
       
       const decompressed = gunzipSync(uint8);
       const jsonString = strFromU8(decompressed);
@@ -1012,11 +1004,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
       try {
         // 1. Receive Audio Carrier (base64)
-        const binaryString = atob(data.audioBase64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
+        const bytes = base64ToUint8(data.audioBase64);
         const audioData = bytes.buffer;
         
         // 2. Extract Hidden Binary — uses sequential LSB decoder to match encodeLSB in handleSendMessage
@@ -1038,11 +1026,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           // --- STEGANOGRAPHIC SIGNALING INTERCEPTION ---
           let decompressed = '';
           try {
-            const compressedStr = atob(decrypted);
-            const compressedBytes = new Uint8Array(compressedStr.length);
-            for (let i = 0; i < compressedStr.length; i++) {
-              compressedBytes[i] = compressedStr.charCodeAt(i);
-            }
+            const compressedBytes = base64ToUint8(decrypted);
             const decompressedBytes = gunzipSync(compressedBytes);
             decompressed = strFromU8(decompressedBytes);
           } catch (e) {
@@ -1268,11 +1252,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             return;
           }
 
-          const binStr = atob(decrypted);
-          const compressedBytes = new Uint8Array(binStr.length);
-          for (let i = 0; i < binStr.length; i++) {
-            compressedBytes[i] = binStr.charCodeAt(i);
-          }
+          const compressedBytes = base64ToUint8(decrypted);
 
           const decompressedBytes = gunzipSync(compressedBytes);
 
@@ -1408,11 +1388,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     try {
       const jsonStr = JSON.stringify(payloadObj);
       const compressed = gzipSync(strToU8(jsonStr), { level: 6 });
-      let compressedBin = '';
-      for (let i = 0; i < compressed.length; i++) {
-        compressedBin += String.fromCharCode(compressed[i]);
-      }
-      const compressedBase64 = btoa(compressedBin);
+      const compressedBase64 = uint8ToBase64(compressed);
       
       console.warn("[Stego-Signaling] Encrypting signaling payload with PIN:", sessionInfo.pin);
       const encrypted = encryptData(compressedBase64, sessionInfo.pin);
@@ -1420,12 +1396,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       const carrier = createDynamicCarrier(binary.length);
       const stegoAudio = encodeLSB(carrier, binary);
       
-      const bytes = new Uint8Array(stegoAudio);
-      let binaryStr = '';
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binaryStr += String.fromCharCode(bytes[i]);
-      }
-      const base64 = btoa(binaryStr);
+      const base64 = uint8ToBase64(stegoAudio);
 
       socket.emit('send_message', {
         sessionId: sessionInfo.sessionId,
@@ -1549,12 +1520,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           }
 
           const compressed = gzipSync(bytes, { level: 6 });
-          
-          let binStr = '';
-          for (let i = 0; i < compressed.length; i++) {
-            binStr += String.fromCharCode(compressed[i]);
-          }
-          const base64 = btoa(binStr);
+          const base64 = uint8ToBase64(compressed);
 
           const encrypted = encryptData(base64, sessionInfo.pin);
 
@@ -2285,12 +2251,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       const stegoAudio = encodeLSB(carrier, binary);
       
       // 5. Convert to Base64 for transmission
-      const bytes = new Uint8Array(stegoAudio);
-      let binaryStr = '';
-      for (let i = 0; i < bytes.byteLength; i++) {
-        binaryStr += String.fromCharCode(bytes[i]);
-      }
-      const base64 = btoa(binaryStr);
+      const base64 = uint8ToBase64(stegoAudio);
 
       // 6. Send via Socket
       socket.emit('send_message', {
@@ -2400,12 +2361,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     // 2. Process file download (using Blob handles large files without freezing UX)
     try {
       const parts = base64data.split(',');
-      const bstr = atob(parts[parts.length - 1]);
-      let n = bstr.length;
-      const u8arr = new Uint8Array(n);
-      while (n--) {
-        u8arr[n] = bstr.charCodeAt(n);
-      }
+      const u8arr = base64ToUint8(parts[parts.length - 1]);
       const blob = new Blob([u8arr], { type: parts[0].split(':')[1].split(';')[0] });
       const url = URL.createObjectURL(blob);
       

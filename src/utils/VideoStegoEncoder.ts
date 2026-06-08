@@ -104,6 +104,12 @@ export class VideoStegoEncoder {
       this.webcamVideoEl.pause();
       this.webcamVideoEl.srcObject = null;
     }
+    // Pause all cover videos to save CPU
+    this.videoEls.forEach(vid => {
+      try {
+        if (!vid.paused) vid.pause();
+      } catch (e) {}
+    });
   }
 
   private processFrame = (): void => {
@@ -117,8 +123,8 @@ export class VideoStegoEncoder {
 
       if (!webcam || !captureCanvas || !coverCanvas || !outputCanvas) return;
 
-      const capCtx = captureCanvas.getContext('2d', { willReadFrequently: true });
-      const outCtx = outputCanvas.getContext('2d', { willReadFrequently: true });
+      const capCtx = captureCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+      const outCtx = outputCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
       if (!capCtx || !outCtx) return;
 
       // 1. Draw webcam to capture canvas
@@ -134,6 +140,22 @@ export class VideoStegoEncoder {
 
       // 4. Get active cover clip and extract its frame
       const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
+      
+      // Pause all inactive cover videos, and play the active one
+      this.videoEls.forEach((vid, idx) => {
+        try {
+          if (idx === clipIdx) {
+            if (vid.paused) {
+              vid.play().catch(() => {});
+            }
+          } else {
+            if (!vid.paused) {
+              vid.pause();
+            }
+          }
+        } catch (vidErr) {}
+      });
+
       const coverVideo = this.videoEls[clipIdx];
       const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
       const pixels = coverImageData.data;

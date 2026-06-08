@@ -73,6 +73,12 @@ export class VideoStegoDecoder {
 
   stop(): void {
     this.isRunning = false;
+    // Pause all cover videos to save CPU
+    this.videoEls.forEach(vid => {
+      try {
+        if (!vid.paused) vid.pause();
+      } catch (e) {}
+    });
   }
 
   decodeFrame(base64Png: string, frameIndex: number): void {
@@ -88,7 +94,7 @@ export class VideoStegoDecoder {
       img.onload = () => {
         if (!this.isRunning) return;
         try {
-          const decCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
+          const decCtx = decodeCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
           if (!decCtx) return;
 
           decCtx.drawImage(img, 0, 0);
@@ -146,7 +152,7 @@ export class VideoStegoDecoder {
               innerImg.onload = () => {
                 if (!this.isRunning) return;
                 try {
-                  const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true });
+                  const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
                   displayCtx?.drawImage(innerImg, 0, 0, displayCanvas.width, displayCanvas.height);
                 } catch (innerErr) {
                   console.error("Error drawing innerImg in VideoStegoDecoder:", innerErr);
@@ -161,10 +167,26 @@ export class VideoStegoDecoder {
           } else {
             // Fallback: Draw the cover image frame
             const clipIdx = getCurrentClipIndex(frameIndex, this.clipSequence);
+            
+            // Pause all inactive cover videos, and play the active one
+            this.videoEls.forEach((vid, idx) => {
+              try {
+                if (idx === clipIdx) {
+                  if (vid.paused) {
+                    vid.play().catch(() => {});
+                  }
+                } else {
+                  if (!vid.paused) {
+                    vid.pause();
+                  }
+                }
+              } catch (vidErr) {}
+            });
+
             const coverVideo = this.videoEls[clipIdx];
             if (coverVideo) {
               const coverImageData = getFrameAtIndex(coverVideo, frameIndex, coverCanvas);
-              const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true });
+              const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
               displayCtx?.putImageData(coverImageData, 0, 0);
             }
           }

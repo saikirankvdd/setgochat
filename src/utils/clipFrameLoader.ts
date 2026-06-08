@@ -78,18 +78,9 @@ export function getFrameAtIndex(
   const width = canvas.width;
   const height = canvas.height;
 
-  // Ensure the video is paused to avoid background decoding CPU overhead on mobile
-  if (!videoEl.paused) {
-    videoEl.pause();
-  }
-
-  // Calculate target time within the 30-second clip loop
-  const duration = videoEl.duration || 5;
-  const targetTime = ((frameIndex % 900) / 30) % duration;
-  
-  // Sync playhead if it drifts by more than 0.5s
-  if (Math.abs(videoEl.currentTime - targetTime) > 0.5) {
-    videoEl.currentTime = targetTime;
+  // Ensure the video is playing to progress naturally
+  if (videoEl.paused) {
+    videoEl.play().catch(() => {});
   }
 
   ctx.drawImage(videoEl, 0, 0);
