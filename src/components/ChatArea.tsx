@@ -758,6 +758,103 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const decodedVideoCanvasRef = useRef<HTMLCanvasElement>(null);
   const voiceQueueRef = useRef<number[]>([]);
 
+  const [currentResolution, setCurrentResolution] = useState<'240p' | '480p'>('240p');
+  const [targetFps, setTargetFpsState] = useState<15 | 30>(30);
+  const currentResolutionRef = useRef<'240p' | '480p'>('240p');
+  const targetFpsRef = useRef<15 | 30>(30);
+  const consecutiveSlowFramesRef = useRef<number>(0);
+  const lastSettingsChangeTimeRef = useRef<number>(0);
+  const currentRttRef = useRef<number>(0);
+
+  const applyStegoSettings = (resolution: '240p' | '480p', fps: 15 | 30) => {
+    currentResolutionRef.current = resolution;
+    targetFpsRef.current = fps;
+    setCurrentResolution(resolution);
+    setTargetFpsState(fps);
+    lastSettingsChangeTimeRef.current = performance.now();
+
+    if (videoEncoderRef.current) {
+      videoEncoderRef.current.setResolution(resolution);
+      videoEncoderRef.current.setTargetFps(fps);
+    }
+    if (videoDecoderRef.current) {
+      videoDecoderRef.current.setResolution(resolution);
+    }
+  };
+
+  const checkAdaptiveStegoEngine = async (frameDurationMs: number, source: 'encode' | 'decode') => {
+    const rtt = currentRttRef.current;
+    let batteryLevel = 1.0;
+    let batteryCharging = true;
+    if (typeof navigator !== 'undefined' && 'getBattery' in navigator) {
+      try {
+        const battery = await (navigator as any).getBattery();
+        batteryLevel = battery.level;
+        batteryCharging = battery.charging;
+      } catch (e) {}
+    }
+
+    const isBatterySaver = !batteryCharging && batteryLevel < 0.3;
+    const now = performance.now();
+    const cooldownTime = 15000; // 15 seconds
+    const timeSinceLastChange = now - lastSettingsChangeTimeRef.current;
+
+    if (isBatterySaver) {
+      if (currentResolutionRef.current !== '240p' || targetFpsRef.current !== 15) {
+        console.warn(`[Stealth-Adaptive] Low battery (${Math.round(batteryLevel * 100)}%) and not charging. Forcing Battery Saver Mode (240p @ 15fps).`);
+        applyStegoSettings('240p', 15);
+      }
+      return;
+    }
+
+    const isCpuOverloaded = frameDurationMs > 18;
+    const isNetworkCongested = rtt > 150;
+
+    if (isCpuOverloaded || isNetworkCongested) {
+      consecutiveSlowFramesRef.current += 1;
+      if (consecutiveSlowFramesRef.current >= 5) {
+        consecutiveSlowFramesRef.current = 0;
+        if (timeSinceLastChange > cooldownTime) {
+          if (currentResolutionRef.current === '480p') {
+            console.warn(`[Stealth-Adaptive] Performance drop (Frame: ${frameDurationMs.toFixed(1)}ms, RTT: ${rtt.toFixed(1)}ms). Downgrading resolution to 240p.`);
+            applyStegoSettings('240p', targetFpsRef.current);
+          } else if (targetFpsRef.current === 30) {
+            console.warn(`[Stealth-Adaptive] Performance drop (Frame: ${frameDurationMs.toFixed(1)}ms, RTT: ${rtt.toFixed(1)}ms). Downgrading FPS to 15.`);
+            applyStegoSettings('240p', 15);
+          }
+        }
+      }
+    } else {
+      if (frameDurationMs < 10 && rtt < 100 && (batteryCharging || batteryLevel > 0.4)) {
+        consecutiveSlowFramesRef.current = 0;
+        if (timeSinceLastChange > cooldownTime) {
+          if (targetFpsRef.current === 15) {
+            console.log(`[Stealth-Adaptive] Performance healthy (Frame: ${frameDurationMs.toFixed(1)}ms, RTT: ${rtt.toFixed(1)}ms). Upgrading FPS to 30.`);
+            applyStegoSettings(currentResolutionRef.current, 30);
+          } else if (currentResolutionRef.current === '240p') {
+            console.log(`[Stealth-Adaptive] Performance healthy. Upgrading resolution to 480p.`);
+            applyStegoSettings('480p', 30);
+          }
+        }
+      }
+    }
+  };
+
+  useEffect(() => {
+    let intervalId: any;
+    if (callState === 'connected') {
+      console.log("[Stealth-RTP] Starting periodic RTT measurement pings...");
+      intervalId = setInterval(() => {
+        socket.emit('stealth_ping', { startTime: performance.now() });
+      }, 5000);
+    }
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [callState, socket]);
+
   const isDraggingRef = useRef(false);
   const offsetRef = useRef({ x: 0, y: 0 });
   const isInitialLoad = useRef(true);
@@ -1269,16 +1366,20 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           const upsampled = upsampleAudio(voice16kHz, 16000, audioCtx.sampleRate);
           
-          console.log("[Stealth-RTP] Decoded and upsampled", upsampled.length, "samples. Pushing to voice queue.");
-          voiceQueueRef.current.push(...Array.from(upsampled));
-          if (voiceQueueRef.current.length > audioCtx.sampleRate * 2) {
-            voiceQueueRef.current.splice(0, voiceQueueRef.current.length - audioCtx.sampleRate);
+          const voicePlayerNode = (window as any).stealthVoicePlayerNode;
+          if (voicePlayerNode) {
+            voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
           }
         } catch (err) {
           console.error("[Stealth] Error decoding received socket voice packet:", err);
         }
       } else if (packet.type === 'video_stego') {
         if (videoDecoderRef.current) {
+          if (packet.resolution && videoDecoderRef.current.getResolution() !== packet.resolution) {
+            videoDecoderRef.current.setResolution(packet.resolution);
+            currentResolutionRef.current = packet.resolution;
+            setCurrentResolution(packet.resolution);
+          }
           videoDecoderRef.current.decodeFrame(packet.videoBase64, packet.frameIndex);
         }
       }
@@ -1289,6 +1390,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (clearPendingCall) clearPendingCall();
     }
 
+    const handleStealthPong = (data: { startTime: number }) => {
+      const rtt = performance.now() - data.startTime;
+      currentRttRef.current = rtt;
+      console.log(`[Stealth-RTT] Measured network RTT: ${rtt.toFixed(1)}ms`);
+    };
+
+    socket.on('stealth_pong', handleStealthPong);
     socket.on('receive_message', handleReceive);
     socket.on('receive_file', handleReceiveFile);
     socket.on('call_offer', handleCallOffer);
@@ -1305,6 +1413,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     socket.on('stealth_rtp_receive', handleStealthRtpReceive);
 
     return () => {
+      socket.off('stealth_pong', handleStealthPong);
       socket.off('receive_message', handleReceive);
       socket.off('receive_file', handleReceiveFile);
       socket.off('call_offer', handleCallOffer);
@@ -1560,61 +1669,24 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       return;
     }
     try {
-      console.log("[Stealth] Initializing Audio Decode Pipeline...");
+      console.log("[Stealth] Initializing Audio Decode Pipeline via AudioWorklet...");
       const audioCtx = getOrCreateAudioContext();
       if (audioCtx.state === 'suspended') {
         await audioCtx.resume();
       }
 
-      // Set up the voice player queue for decoded audio playback
-      voiceQueueRef.current = [];
-      const voicePlayer = audioCtx.createScriptProcessor(512, 1, 1);
-      let onaudioprocessCallCount = 0;
-      let isBuffering = true;
-      const bufferThreshold = Math.round(audioCtx.sampleRate * 0.15); // 150ms of audio buffer cushion
+      // Ensure worklet module is loaded
+      if (!workletModuleLoadedRef.current) {
+        await audioCtx.audioWorklet.addModule('/stealth-worklet.js');
+        workletModuleLoadedRef.current = true;
+      }
 
-      voicePlayer.onaudioprocess = (e) => {
-        const outputChannel = e.outputBuffer.getChannelData(0);
-        const queueLen = voiceQueueRef.current.length;
-        
-        // Jitter buffering logic:
-        if (isBuffering) {
-          if (queueLen >= bufferThreshold) {
-            isBuffering = false;
-            console.log("[Stealth-RTP] Jitter buffer filled (", queueLen, "samples). Starting playback.");
-          } else {
-            // Fill with silence while buffering
-            for (let i = 0; i < outputChannel.length; i++) {
-              outputChannel[i] = 0;
-            }
-            return;
-          }
-        }
+      const voicePlayerNode = new AudioWorkletNode(audioCtx, 'stealth-processor');
+      voicePlayerNode.port.postMessage({ type: 'SET_MODE_PLAYBACK' });
+      voicePlayerNode.connect(audioCtx.destination);
 
-        // Print debug log occasionally
-        if (queueLen > 0 && onaudioprocessCallCount++ % 100 === 0) {
-          console.log("[Stealth-RTP] voicePlayer playing active audio. Queue size:", queueLen);
-        }
-
-        const chunkToPlay = voiceQueueRef.current.splice(0, outputChannel.length);
-        for (let i = 0; i < outputChannel.length; i++) {
-          if (i < chunkToPlay.length) {
-            outputChannel[i] = chunkToPlay[i];
-          } else {
-            // Queue underflow: fill remaining with silence and trigger buffering state
-            outputChannel[i] = 0;
-            isBuffering = true;
-          }
-        }
-
-        if (isBuffering && queueLen === 0) {
-          console.warn("[Stealth-RTP] Jitter buffer empty. Pausing playback to re-buffer.");
-        }
-      };
-
-      voicePlayer.connect(audioCtx.destination);
-      console.log("[Stealth-RTP] voicePlayer ScriptProcessorNode initialized and connected to AudioContext destination.");
-      (window as any).stealthVoicePlayer = voicePlayer; // prevent GC
+      console.log("[Stealth-RTP] voicePlayer AudioWorkletNode initialized and connected to AudioContext destination.");
+      (window as any).stealthVoicePlayerNode = voicePlayerNode; // prevent GC
       (window as any).stealthDecodePipelineActive = true;
     } catch (e) {
       console.error("[Stealth] Failed to start decode pipeline:", e);
@@ -1641,8 +1713,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             remoteVideoRef.current,
             sessionInfo.pin,
             decodedVideoCanvasRef.current,
-            '480p',
-            (pct) => {}
+            currentResolutionRef.current,
+            (pct) => {},
+            (durationMs) => {
+              checkAdaptiveStegoEngine(durationMs, 'decode');
+            }
           );
           await decoder.init();
           videoDecoderRef.current = decoder;
@@ -1673,7 +1748,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setIsVideoCall(withVideo);
       setIsMuted(false);
       setIsVideoOff(false);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: withVideo });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: withVideo ? { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 15 } } : false
+      });
       
       // --- V2 STEALTH ARCHITECTURE INJECTION ---
       let localAudioTrack = stream.getAudioTracks()[0];
@@ -1686,16 +1764,26 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (withVideo) {
         try {
           console.log("[Stealth] Initializing Video steganography encoder...");
-          const encoder = new VideoStegoEncoder(stream, sessionInfo.pin, '480p', (pct) => {}, (base64Png, frameIndex) => {
-            socket.emit('stealth_rtp_packet', {
-              toId: targetUser.id,
-              packet: {
-                type: 'video_stego',
-                videoBase64: base64Png,
-                frameIndex: frameIndex
-              }
-            });
-          });
+          const encoder = new VideoStegoEncoder(
+            stream,
+            sessionInfo.pin,
+            currentResolutionRef.current,
+            (pct) => {},
+            (base64Png, frameIndex) => {
+              socket.emit('stealth_rtp_packet', {
+                toId: targetUser.id,
+                packet: {
+                  type: 'video_stego',
+                  videoBase64: base64Png,
+                  frameIndex: frameIndex,
+                  resolution: currentResolutionRef.current
+                }
+              });
+            },
+            (durationMs) => {
+              checkAdaptiveStegoEngine(durationMs, 'encode');
+            }
+          );
           await encoder.init();
           videoEncoderRef.current = encoder;
           encoder.start();
@@ -1762,12 +1850,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         offer: offer,
         withVideo
       }, targetUser.id.toString());
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error starting call:', err);
       if (!navigator.mediaDevices) {
         alert('Microphone access requires a secure HTTPS connection. Please use the secure ngrok URL on your phone.');
       } else {
-        alert('Could not access microphone for call. Please check your browser permissions.');
+        alert(`Could not start video call: ${err.message || 'Unknown media error'}. Please check if the camera is already in use by another application.`);
       }
       endCall();
     }
@@ -1777,7 +1865,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     try {
       setIsMuted(false);
       setIsVideoOff(false);
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: isVideoCall });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: isVideoCall ? { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 15 } } : false
+      });
       setLocalStream(stream);
       localStreamRef.current = stream;
 
@@ -1791,16 +1882,26 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (isVideoCall) {
         try {
           console.log("[Stealth] Initializing Video steganography encoder...");
-          const encoder = new VideoStegoEncoder(stream, sessionInfo.pin, '480p', (pct) => {}, (base64Png, frameIndex) => {
-            socket.emit('stealth_rtp_packet', {
-              toId: callerId || targetUser.id,
-              packet: {
-                type: 'video_stego',
-                videoBase64: base64Png,
-                frameIndex: frameIndex
-              }
-            });
-          });
+          const encoder = new VideoStegoEncoder(
+            stream,
+            sessionInfo.pin,
+            currentResolutionRef.current,
+            (pct) => {},
+            (base64Png, frameIndex) => {
+              socket.emit('stealth_rtp_packet', {
+                toId: callerId || targetUser.id,
+                packet: {
+                  type: 'video_stego',
+                  videoBase64: base64Png,
+                  frameIndex: frameIndex,
+                  resolution: currentResolutionRef.current
+                }
+              });
+            },
+            (durationMs) => {
+              checkAdaptiveStegoEngine(durationMs, 'encode');
+            }
+          );
           await encoder.init();
           videoEncoderRef.current = encoder;
           encoder.start();
@@ -1854,12 +1955,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           }
         });
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error accepting call:', err);
       if (!navigator.mediaDevices) {
         alert('Media device access requires a secure HTTPS connection. Please use the secure ngrok URL on your phone.');
       } else {
-        alert('Could not access microphone/camera to accept call. Please check permissions.');
+        alert(`Could not access microphone/camera to accept call: ${err.message || 'Unknown media error'}. Please check permissions.`);
       }
       endCall();
     }
@@ -1896,6 +1997,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     setCallState('idle');
     setWebrtcConnected(false);
     pendingCandidates.current = [];
+
+    currentResolutionRef.current = '240p';
+    targetFpsRef.current = 30;
+    setCurrentResolution('240p');
+    setTargetFpsState(30);
+    consecutiveSlowFramesRef.current = 0;
+    lastSettingsChangeTimeRef.current = 0;
+    currentRttRef.current = 0;
     
     // --- V2 STEALTH CLEANUP ---
     try {
@@ -1926,7 +2035,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
       // Clean up processors and players
       delete (window as any).stealthMicProcessor;
-      delete (window as any).stealthVoicePlayer;
+      if ((window as any).stealthVoicePlayerNode) {
+        (window as any).stealthVoicePlayerNode.port.postMessage({ type: 'STOP' });
+        (window as any).stealthVoicePlayerNode.disconnect();
+        delete (window as any).stealthVoicePlayerNode;
+      }
 
       console.log("[Stealth] Steganography context and worklets cleaned up.");
     } catch (e) {

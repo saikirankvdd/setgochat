@@ -187,7 +187,7 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc:         ["'self'"],
-      scriptSrc:          ["'self'"],              // No unsafe-inline, no CDN scripts
+      scriptSrc:          ["'self'", "'wasm-unsafe-eval'"],              // No unsafe-inline, no CDN scripts, allow WASM compilation
       styleSrc:           isProduction ? ["'self'"] : ["'self'", "'unsafe-inline'"], // Tightened style CSP in production
       imgSrc:             ["'self'", "data:", "blob:", "https://picsum.photos", "https://fastly.picsum.photos"],
       mediaSrc:           ["'self'", "data:", "blob:"],
@@ -791,6 +791,10 @@ io.on('connection', (socket: any) => {
     // This acts as our WebTransport fallback for prototype testing.
     // In production, this would be a raw HTTP/3 WebTransport stream.
     io.to(`user_${data.toId}`).emit('stealth_rtp_receive', data.packet);
+  });
+
+  socket.on('stealth_ping', (data) => {
+    socket.emit('stealth_pong', data);
   });
 
   socket.on('start_chat', async ({ toId, pin1, pin2 }) => {

@@ -16,19 +16,30 @@ export class VideoStegoDecoder {
   private coverCanvas: HTMLCanvasElement | null;
   private isRunning: boolean;
   private wasmEngine: StealthEngine | null;
+  private onFrameProcessTime?: (durationMs: number) => void;
+
 
   constructor(
     remoteVideoEl: HTMLVideoElement,
     pin: string,
     displayCanvas: HTMLCanvasElement,
-    resolution: '480p' | '1080p',
-    onProgress: (pct: number) => void
+    resolution: '240p' | '480p' | '1080p',
+    onProgress: (pct: number) => void,
+    onFrameProcessTime?: (durationMs: number) => void
   ) {
     this.remoteVideoEl = remoteVideoEl;
     this.pin = pin;
     this.displayCanvas = displayCanvas;
-    this.width = resolution === '1080p' ? 1920 : 640;
-    this.height = resolution === '1080p' ? 1080 : 480;
+    if (resolution === '1080p') {
+      this.width = 1920;
+      this.height = 1080;
+    } else if (resolution === '240p') {
+      this.width = 320;
+      this.height = 240;
+    } else {
+      this.width = 640;
+      this.height = 480;
+    }
     this.onProgress = onProgress;
     this.frameIndex = 0;
     this.clipSequence = getClipSequence(pin);
@@ -37,6 +48,7 @@ export class VideoStegoDecoder {
     this.coverCanvas = null;
     this.isRunning = false;
     this.wasmEngine = null;
+    this.onFrameProcessTime = onFrameProcessTime;
   }
 
   async init(): Promise<void> {
@@ -47,7 +59,7 @@ export class VideoStegoDecoder {
     try {
       const response = await fetch('/stealth-engine/stealth_engine_bg.wasm');
       const wasmBuffer = await response.arrayBuffer();
-      await wasmInit(wasmBuffer);
+      await wasmInit({ module_or_path: wasmBuffer });
       this.wasmEngine = new StealthEngine();
       console.log("[Stealth-Video-Decoder] Rust WASM Engine active.");
     } catch (err) {
@@ -87,6 +99,7 @@ export class VideoStegoDecoder {
 
   decodeFrame(base64Png: string, frameIndex: number): void {
     if (!this.isRunning) return;
+    const startTime = performance.now();
     try {
       const decodeCanvas = this.decodeCanvas;
       const coverCanvas = this.coverCanvas;
@@ -111,7 +124,7 @@ export class VideoStegoDecoder {
 
           let bitString = '';
 
-          if (false && this.wasmEngine) {
+          if (this.wasmEngine) {
             const pixelBytes = new Uint8Array(pixels.buffer);
             bitString = this.wasmEngine.extract_video_frame(pixelBytes, this.pin, frameIndex);
           } else {
@@ -194,6 +207,12 @@ export class VideoStegoDecoder {
               displayCtx?.putImageData(coverImageData, 0, 0);
             }
           }
+
+          // Update callback with the time it took to load and decode the frame
+          const duration = performance.now() - startTime;
+          if (this.onFrameProcessTime) {
+            this.onFrameProcessTime(duration);
+          }
         } catch (onloadErr) {
           console.error("Error inside stego img.onload callback:", onloadErr);
         }
@@ -202,6 +221,33 @@ export class VideoStegoDecoder {
     } catch (e) {
       console.error("Error decoding video stego frame:", e);
     }
+  }
+
+  setResolution(resolution: '240p' | '480p'): void {
+    if (resolution === '240p') {
+      this.width = 320;
+      this.height = 240;
+    } else {
+      this.width = 640;
+      this.height = 480;
+    }
+    if (this.decodeCanvas) {
+      this.decodeCanvas.width = this.width;
+      this.decodeCanvas.height = this.height;
+    }
+    if (this.coverCanvas) {
+      this.coverCanvas.width = this.width;
+      this.coverCanvas.height = this.height;
+    }
+    if (this.displayCanvas) {
+      this.displayCanvas.width = this.width;
+      this.displayCanvas.height = this.height;
+    }
+    console.log(`[Stealth-Video-Decoder] Resolution dynamically adjusted to ${resolution} (${this.width}x${this.height})`);
+  }
+
+  getResolution(): '240p' | '480p' {
+    return this.width === 320 ? '240p' : '480p';
   }
 
   private processFrame = (): void => {

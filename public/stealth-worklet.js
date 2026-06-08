@@ -15,6 +15,9 @@ class StealthProcessor extends AudioWorkletProcessor {
     this.expectedBitsLength = 0;    // Expected length of the current packet being decoded
     this.pin = '';                  // Session PIN
     
+    // Playback buffer for incoming voice samples
+    this.playbackQueue = [];
+    
     // WASM Engine instance (to be initialized in Stage 9)
     this.wasmEngine = null;
   }
@@ -52,6 +55,14 @@ class StealthProcessor extends AudioWorkletProcessor {
       this.collectedBits = [];
       this.expectedBitsLength = 0;
       console.log("AudioWorklet: Mode set to DECODE.");
+    } else if (data.type === 'SET_MODE_PLAYBACK') {
+      this.mode = 'playback';
+      this.playbackQueue = [];
+      console.log("AudioWorklet: Mode set to PLAYBACK.");
+    } else if (data.type === 'PUSH_PLAYBACK') {
+      if (this.playbackQueue.length < 96000) { // Limit queue size to 2 seconds to prevent memory leaks
+        this.playbackQueue.push(...data.samples);
+      }
     } else if (data.type === 'PUSH_VOICE_BITS') {
       if (this.encryptedVoiceBits.length < 100000) { // Safety limit to avoid memory leaks
         this.encryptedVoiceBits.push(...data.bits);
@@ -62,6 +73,7 @@ class StealthProcessor extends AudioWorkletProcessor {
       this.encryptedVoiceBits = [];
       this.collectedBits = [];
       this.expectedBitsLength = 0;
+      this.playbackQueue = [];
       console.log("AudioWorklet: Stealth Mode Stopped.");
     }
   }
@@ -204,6 +216,22 @@ class StealthProcessor extends AudioWorkletProcessor {
           // If expected length is 0 (after reading a 0-length header), reset it
           this.expectedBitsLength = 0;
           break;
+        }
+      }
+
+    } else if (this.mode === 'playback') {
+      const outputChannel0 = output[0];
+      const chunkToPlay = this.playbackQueue.splice(0, outputLength);
+      
+      for (let i = 0; i < outputLength; i++) {
+        outputChannel0[i] = i < chunkToPlay.length ? chunkToPlay[i] : 0;
+      }
+      
+      // Copy to other channels
+      for (let channel = 1; channel < numChannels; channel++) {
+        const outputChannel = output[channel];
+        for (let i = 0; i < outputLength; i++) {
+          outputChannel[i] = outputChannel0[i];
         }
       }
 

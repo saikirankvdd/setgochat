@@ -19,18 +19,30 @@ export class VideoStegoEncoder {
   private isRunning: boolean;
   private wasmEngine: StealthEngine | null;
   private onStegoFrame?: (base64Png: string, frameIndex: number) => void;
+  private onFrameProcessTime?: (durationMs: number) => void;
+  private targetFps: number = 30; // Default to 30 FPS for smooth video
+
 
   constructor(
     localStream: MediaStream,
     pin: string,
-    resolution: '480p' | '1080p',
+    resolution: '240p' | '480p' | '1080p',
     onProgress: (pct: number) => void,
-    onStegoFrame?: (base64Png: string, frameIndex: number) => void
+    onStegoFrame?: (base64Png: string, frameIndex: number) => void,
+    onFrameProcessTime?: (durationMs: number) => void
   ) {
     this.localStream = localStream;
     this.pin = pin;
-    this.width = resolution === '1080p' ? 1920 : 640;
-    this.height = resolution === '1080p' ? 1080 : 480;
+    if (resolution === '1080p') {
+      this.width = 1920;
+      this.height = 1080;
+    } else if (resolution === '240p') {
+      this.width = 320;
+      this.height = 240;
+    } else {
+      this.width = 640;
+      this.height = 480;
+    }
     this.onProgress = onProgress;
     this.onStegoFrame = onStegoFrame;
     this.frameIndex = 0;
@@ -43,6 +55,7 @@ export class VideoStegoEncoder {
     this.stegoStream = null;
     this.isRunning = false;
     this.wasmEngine = null;
+    this.onFrameProcessTime = onFrameProcessTime;
   }
 
   async init(): Promise<void> {
@@ -53,7 +66,7 @@ export class VideoStegoEncoder {
     try {
       const response = await fetch('/stealth-engine/stealth_engine_bg.wasm');
       const wasmBuffer = await response.arrayBuffer();
-      await wasmInit(wasmBuffer);
+      await wasmInit({ module_or_path: wasmBuffer });
       this.wasmEngine = new StealthEngine();
       console.log("[Stealth-Video-Encoder] Rust WASM Engine active.");
     } catch (err) {
@@ -139,6 +152,7 @@ export class VideoStegoEncoder {
 
   private processFrame = (): void => {
     if (!this.isRunning) return;
+    const startTime = performance.now();
 
     try {
       const webcam = this.webcamVideoEl;
@@ -155,8 +169,8 @@ export class VideoStegoEncoder {
       // 1. Draw webcam to capture canvas
       capCtx.drawImage(webcam, 0, 0, this.width, this.height);
 
-      // 2. Compress webcam frame to JPEG base64
-      const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.80);
+      // 2. Compress webcam frame to JPEG base64 (reduced quality for 4x CPU boost)
+      const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.50);
       const base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
 
       // 3. Encrypt base64 with PIN + frameIndex
@@ -188,7 +202,7 @@ export class VideoStegoEncoder {
       const totalPixels = this.width * this.height;
       const totalChannels = totalPixels * 3; // Red, Green, Blue (skip Alpha)
 
-      if (false && this.wasmEngine) {
+      if (this.wasmEngine) {
         // Use high-performance Rust WASM LSB embedding
         const pixelBytes = new Uint8Array(pixels.buffer);
         this.wasmEngine.process_video_frame(pixelBytes, dataBits, this.pin, this.frameIndex);
@@ -255,13 +269,55 @@ export class VideoStegoEncoder {
 
       // 7. Advance frame index
       this.frameIndex++;
+
+      const duration = performance.now() - startTime;
+      if (this.onFrameProcessTime) {
+        this.onFrameProcessTime(duration);
+      }
     } catch (e) {
       console.error("Error encoding video stego frame:", e);
     }
 
-    // Loop at 5 fps (200ms)
-    setTimeout(this.processFrame, 200);
+    // Loop at dynamic target FPS (default 30 fps -> ~33ms delay)
+    const delay = Math.max(10, Math.floor(1000 / this.targetFps));
+    setTimeout(this.processFrame, delay);
   };
+
+  setResolution(resolution: '240p' | '480p'): void {
+    if (resolution === '240p') {
+      this.width = 320;
+      this.height = 240;
+    } else {
+      this.width = 640;
+      this.height = 480;
+    }
+    if (this.captureCanvas) {
+      this.captureCanvas.width = this.width;
+      this.captureCanvas.height = this.height;
+    }
+    if (this.coverCanvas) {
+      this.coverCanvas.width = this.width;
+      this.coverCanvas.height = this.height;
+    }
+    if (this.outputCanvas) {
+      this.outputCanvas.width = this.width;
+      this.outputCanvas.height = this.height;
+    }
+    console.log(`[Stealth-Video-Encoder] Resolution dynamically adjusted to ${resolution} (${this.width}x${this.height})`);
+  }
+
+  setTargetFps(fps: number): void {
+    this.targetFps = fps;
+    console.log(`[Stealth-Video-Encoder] Target FPS dynamically adjusted to ${fps}`);
+  }
+
+  getResolution(): '240p' | '480p' {
+    return this.width === 320 ? '240p' : '480p';
+  }
+
+  getTargetFps(): number {
+    return this.targetFps;
+  }
 
   private encryptLengthHeaderJS(length: number, pin: string): Uint8Array {
     const prng = new JS_PRNG('VID_HDR_' + pin);
