@@ -1312,6 +1312,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     const handleStealthRtpReceive = async (packet: any) => {
       console.log("[Stealth-RTP] Received socket packet type:", packet?.type);
       if (packet.type === 'audio_stego') {
+        if (packet.timestamp) {
+          const age = Date.now() - packet.timestamp;
+          if (age > 1500) {
+            console.warn(`[Stealth-RTP] Dropping stale audio packet (age: ${age}ms)`);
+            return;
+          }
+        }
         try {
           const audioCtx = stealthAudioCtxRef.current;
           if (!audioCtx) {
@@ -1374,6 +1381,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           console.error("[Stealth] Error decoding received socket voice packet:", err);
         }
       } else if (packet.type === 'video_stego') {
+        if (packet.timestamp) {
+          const age = Date.now() - packet.timestamp;
+          if (age > 1500) {
+            console.warn(`[Stealth-RTP] Dropping stale video frame (age: ${age}ms)`);
+            return;
+          }
+        }
         if (videoDecoderRef.current) {
           if (packet.resolution && videoDecoderRef.current.getResolution() !== packet.resolution) {
             videoDecoderRef.current.setResolution(packet.resolution);
@@ -1647,7 +1661,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             toId: toId,
             packet: {
               type: 'audio_stego',
-              audioBuffer: stegoAudio
+              audioBuffer: stegoAudio,
+              timestamp: Date.now()
             }
           });
         }
@@ -1776,7 +1791,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                   type: 'video_stego',
                   videoBase64: base64Png,
                   frameIndex: frameIndex,
-                  resolution: currentResolutionRef.current
+                  resolution: currentResolutionRef.current,
+                  timestamp: Date.now()
                 }
               });
             },
@@ -1894,7 +1910,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                   type: 'video_stego',
                   videoBase64: base64Png,
                   frameIndex: frameIndex,
-                  resolution: currentResolutionRef.current
+                  resolution: currentResolutionRef.current,
+                  timestamp: Date.now()
                 }
               });
             },
