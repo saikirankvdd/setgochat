@@ -65,6 +65,28 @@ export class VideoStegoEncoder {
     this.webcamVideoEl.srcObject = this.localStream;
     this.webcamVideoEl.muted = true;
     this.webcamVideoEl.playsInline = true;
+    
+    if (typeof document !== 'undefined') {
+      let container = document.getElementById('stealth-video-preload-container');
+      if (!container) {
+        container = document.createElement('div');
+        container.id = 'stealth-video-preload-container';
+        Object.assign(container.style, {
+          position: 'fixed',
+          width: '1px',
+          height: '1px',
+          opacity: '0.01',
+          overflow: 'hidden',
+          pointerEvents: 'none',
+          zIndex: '-9999',
+          top: '0',
+          left: '0'
+        });
+        document.body.appendChild(container);
+      }
+      container.appendChild(this.webcamVideoEl);
+    }
+
     await this.webcamVideoEl.play();
 
     // 4. Create helper canvases
@@ -103,6 +125,9 @@ export class VideoStegoEncoder {
     if (this.webcamVideoEl) {
       this.webcamVideoEl.pause();
       this.webcamVideoEl.srcObject = null;
+      if (this.webcamVideoEl.parentNode) {
+        this.webcamVideoEl.parentNode.removeChild(this.webcamVideoEl);
+      }
     }
     // Pause all cover videos to save CPU
     this.videoEls.forEach(vid => {

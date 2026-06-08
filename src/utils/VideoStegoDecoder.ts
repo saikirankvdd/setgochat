@@ -62,6 +62,10 @@ export class VideoStegoDecoder {
     this.coverCanvas = document.createElement('canvas');
     this.coverCanvas.width = this.width;
     this.coverCanvas.height = this.height;
+
+    // Size display canvas to ensure drawing scales correctly
+    this.displayCanvas.width = this.width;
+    this.displayCanvas.height = this.height;
   }
 
   start(): void {

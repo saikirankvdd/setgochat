@@ -27,6 +27,24 @@ export function getClipSequence(pin: string): number[] {
  * Preloads the 6 cover videos into off-screen video elements
  */
 export async function preloadClips(): Promise<HTMLVideoElement[]> {
+  let container = typeof document !== 'undefined' ? document.getElementById('stealth-video-preload-container') : null;
+  if (!container && typeof document !== 'undefined') {
+    container = document.createElement('div');
+    container.id = 'stealth-video-preload-container';
+    Object.assign(container.style, {
+      position: 'fixed',
+      width: '1px',
+      height: '1px',
+      opacity: '0.01',
+      overflow: 'hidden',
+      pointerEvents: 'none',
+      zIndex: '-9999',
+      top: '0',
+      left: '0'
+    });
+    document.body.appendChild(container);
+  }
+
   const promises = Array.from({ length: 6 }, (_, i) => {
     return new Promise<HTMLVideoElement>((resolve) => {
       const video = document.createElement('video');
@@ -36,6 +54,10 @@ export async function preloadClips(): Promise<HTMLVideoElement[]> {
       video.muted = true;
       video.playsInline = true;
       video.loop = true;
+      
+      if (container) {
+        container.appendChild(video);
+      }
       
       let resolved = false;
       const handleLoad = () => {
