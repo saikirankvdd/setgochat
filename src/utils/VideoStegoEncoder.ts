@@ -117,8 +117,8 @@ export class VideoStegoEncoder {
 
       if (!webcam || !captureCanvas || !coverCanvas || !outputCanvas) return;
 
-      const capCtx = captureCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
-      const outCtx = outputCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+      const capCtx = captureCanvas.getContext('2d', { willReadFrequently: true });
+      const outCtx = outputCanvas.getContext('2d', { willReadFrequently: true });
       if (!capCtx || !outCtx) return;
 
       // 1. Draw webcam to capture canvas

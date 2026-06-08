@@ -88,10 +88,10 @@ export class VideoStegoDecoder {
       img.onload = () => {
         if (!this.isRunning) return;
         try {
-          const decCtx = decodeCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+          const decCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
           if (!decCtx) return;
 
-          decCtx.drawImage(img, 0, 0, this.width, this.height);
+          decCtx.drawImage(img, 0, 0);
           const receivedImageData = decCtx.getImageData(0, 0, this.width, this.height);
           const pixels = receivedImageData.data;
 
@@ -120,6 +120,7 @@ export class VideoStegoDecoder {
             }
 
             const dataLength = this.decryptLengthHeaderJS(encBytes, this.pin + '_' + frameIndex);
+            console.log(`[Stealth-Video] Frame ${frameIndex} length header decrypted as: ${dataLength} (maxUsable: ${maxUsable})`);
 
             if (dataLength > 0 && dataLength <= maxUsable) {
               const stride = Math.floor(maxUsable / dataLength);
@@ -145,7 +146,7 @@ export class VideoStegoDecoder {
               innerImg.onload = () => {
                 if (!this.isRunning) return;
                 try {
-                  const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+                  const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true });
                   displayCtx?.drawImage(innerImg, 0, 0, displayCanvas.width, displayCanvas.height);
                 } catch (innerErr) {
                   console.error("Error drawing innerImg in VideoStegoDecoder:", innerErr);
@@ -163,7 +164,7 @@ export class VideoStegoDecoder {
             const coverVideo = this.videoEls[clipIdx];
             if (coverVideo) {
               const coverImageData = getFrameAtIndex(coverVideo, frameIndex, coverCanvas);
-              const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+              const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true });
               displayCtx?.putImageData(coverImageData, 0, 0);
             }
           }
