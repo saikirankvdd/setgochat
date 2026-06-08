@@ -117,8 +117,8 @@ export class VideoStegoEncoder {
 
       if (!webcam || !captureCanvas || !coverCanvas || !outputCanvas) return;
 
-      const capCtx = captureCanvas.getContext('2d');
-      const outCtx = outputCanvas.getContext('2d');
+      const capCtx = captureCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+      const outCtx = outputCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
       if (!capCtx || !outCtx) return;
 
       // 1. Draw webcam to capture canvas
@@ -141,7 +141,7 @@ export class VideoStegoEncoder {
       const totalPixels = this.width * this.height;
       const totalChannels = totalPixels * 3; // Red, Green, Blue (skip Alpha)
 
-      if (this.wasmEngine) {
+      if (false && this.wasmEngine) {
         // Use high-performance Rust WASM LSB embedding
         const pixelBytes = new Uint8Array(pixels.buffer);
         this.wasmEngine.process_video_frame(pixelBytes, dataBits, this.pin, this.frameIndex);
@@ -196,11 +196,9 @@ export class VideoStegoEncoder {
 
       // Send the stego frame losslessly as a PNG via callback
       if (this.onStegoFrame) {
-        if (this.frameIndex % 6 === 0) { // 5 fps (reduces socket overhead while keeping video smooth enough for stego)
-          const stegoDataUrl = outputCanvas.toDataURL('image/png');
-          const stegoBase64 = stegoDataUrl.substring(stegoDataUrl.indexOf(',') + 1);
-          this.onStegoFrame(stegoBase64, this.frameIndex);
-        }
+        const stegoDataUrl = outputCanvas.toDataURL('image/png');
+        const stegoBase64 = stegoDataUrl.substring(stegoDataUrl.indexOf(',') + 1);
+        this.onStegoFrame(stegoBase64, this.frameIndex);
       }
 
       // 6. Update progress percentage
@@ -214,8 +212,8 @@ export class VideoStegoEncoder {
       console.error("Error encoding video stego frame:", e);
     }
 
-    // Loop
-    requestAnimationFrame(this.processFrame);
+    // Loop at 5 fps (200ms)
+    setTimeout(this.processFrame, 200);
   };
 
   private encryptLengthHeaderJS(length: number, pin: string): Uint8Array {

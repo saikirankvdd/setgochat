@@ -72,7 +72,7 @@ export function getFrameAtIndex(
   frameIndex: number,
   canvas: HTMLCanvasElement
 ): ImageData {
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
   if (!ctx) throw new Error('No canvas 2D context');
 
   const width = canvas.width;

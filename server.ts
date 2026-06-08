@@ -1002,6 +1002,9 @@ io.on('connection', (socket: any) => {
     try {
       await assertParticipant(socket.userId, data.sessionId);
       socket.to(data.sessionId).emit('call_end', data);
+      if (data.toId) {
+        io.to(`user_${data.toId}`).emit('call_end', data);
+      }
       ack?.({ ok: true });
     } catch (err: any) {
       console.error('[Security] call_end rejected:', err.message);

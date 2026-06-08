@@ -88,7 +88,7 @@ export class VideoStegoDecoder {
       img.onload = () => {
         if (!this.isRunning) return;
         try {
-          const decCtx = decodeCanvas.getContext('2d');
+          const decCtx = decodeCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
           if (!decCtx) return;
 
           decCtx.drawImage(img, 0, 0, this.width, this.height);
@@ -101,7 +101,7 @@ export class VideoStegoDecoder {
 
           let bitString = '';
 
-          if (this.wasmEngine) {
+          if (false && this.wasmEngine) {
             const pixelBytes = new Uint8Array(pixels.buffer);
             bitString = this.wasmEngine.extract_video_frame(pixelBytes, this.pin, frameIndex);
           } else {
@@ -145,7 +145,7 @@ export class VideoStegoDecoder {
               innerImg.onload = () => {
                 if (!this.isRunning) return;
                 try {
-                  const displayCtx = displayCanvas.getContext('2d');
+                  const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
                   displayCtx?.drawImage(innerImg, 0, 0, displayCanvas.width, displayCanvas.height);
                 } catch (innerErr) {
                   console.error("Error drawing innerImg in VideoStegoDecoder:", innerErr);
@@ -163,7 +163,7 @@ export class VideoStegoDecoder {
             const coverVideo = this.videoEls[clipIdx];
             if (coverVideo) {
               const coverImageData = getFrameAtIndex(coverVideo, frameIndex, coverCanvas);
-              const displayCtx = displayCanvas.getContext('2d');
+              const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
               displayCtx?.putImageData(coverImageData, 0, 0);
             }
           }

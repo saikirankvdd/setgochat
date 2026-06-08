@@ -718,6 +718,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isVideoCall, setIsVideoCall] = useState(false);
+  const [webrtcConnected, setWebrtcConnected] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [scanningStatus, setScanningStatus] = useState<{ active: boolean, type: 'link' | 'document' | null, name: string }>({ active: false, type: null, name: '' });
@@ -772,6 +773,33 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   useEffect(() => {
     isInitialLoad.current = true;
   }, [sessionInfo.sessionId]);
+
+  const setupPeerConnectionListeners = (pc: RTCPeerConnection, isVideo: boolean) => {
+    pc.onconnectionstatechange = () => {
+      const state = pc.connectionState;
+      console.log("[Stealth-Call] WebRTC connection state changed to:", state);
+      if (state === 'connected') {
+        setWebrtcConnected(true);
+        setMessages(prev => {
+          const systemMsgText = isVideo ? '🔒 Secure video call established.' : '🔒 Secure audio call established.';
+          if (prev.some(m => m.fromId === 'system' && m.text === systemMsgText)) return prev;
+          return [...prev, {
+            id: Math.random().toString(36).substr(2, 9),
+            fromId: "system",
+            text: systemMsgText,
+            timestamp: Date.now(),
+            isSelfDestruct: false,
+            isOneTime: false,
+            timerSeconds: 0,
+            isRevealed: true,
+          }];
+        });
+      } else if (state === 'failed' || state === 'closed') {
+        console.warn("[Stealth-Call] WebRTC connection failed or closed. Ending call.");
+        endCall(true);
+      }
+    };
+  };
 
   useEffect(() => {
     if (!isActive) return;
@@ -1123,6 +1151,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       peerConnectionRef.current = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
+      setupPeerConnectionListeners(peerConnectionRef.current, data.withVideo || false);
       
       peerConnectionRef.current.onicecandidate = (event) => {
         if (event.candidate) {
@@ -1718,6 +1747,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       peerConnectionRef.current = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
+      setupPeerConnectionListeners(peerConnectionRef.current, withVideo);
 
       // Add the steganographic audio track (cover song + encoded voice) in place of raw mic
       // and the (possibly encoded) video track
@@ -1836,17 +1866,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setCallState('connected');
       callStateRef.current = 'connected';
       
-      setMessages(prev => [...prev, {
-        id: Math.random().toString(36).substr(2, 9),
-        fromId: "system",
-        text: '📞 Call connects safely.',
-        timestamp: Date.now(),
-        isSelfDestruct: false,
-        isOneTime: false,
-        timerSeconds: 0,
-        isRevealed: true,
-      }]);
-      
       // Start decoding the remote stream now that the call is accepted
       const rStream = remoteStreamRef.current;
       if (rStream) {
@@ -1909,6 +1928,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
 
     setCallState('idle');
+    setWebrtcConnected(false);
     pendingCandidates.current = [];
     
     // --- V2 STEALTH CLEANUP ---
@@ -2488,7 +2508,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 </div>
                 <div>
                   <p className="text-white font-medium text-sm leading-tight">{targetUser.username}</p>
-                  <p className="text-[#00a884] text-xs font-mono">{formatDuration(callDuration)}</p>
+                  <p className="text-[#00a884] text-xs font-mono">{!webrtcConnected ? '🔒 Securing...' : formatDuration(callDuration)}</p>
                 </div>
                 <div className="flex items-center gap-2 ml-2">
                   <button onClick={toggleMute} className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${isMuted ? 'bg-red-500/80 text-white' : 'bg-[#2a3942] hover:bg-[#3b4a54] text-white'}`}>
@@ -2519,7 +2539,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                     <p className="text-[#8696a0] mb-2 text-lg">
                       {callState === 'calling' && 'Calling...'}
                       {callState === 'receiving' && `Incoming ${isVideoCall ? 'Video ' : 'Audio '}Call`}
-                      {callState === 'connected' && formatDuration(callDuration)}
+                      {callState === 'connected' && (!webrtcConnected ? '🔒 Securing connection...' : formatDuration(callDuration))}
                     </p>
                   </div>
                 )}
