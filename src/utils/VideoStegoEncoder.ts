@@ -18,7 +18,7 @@ export class VideoStegoEncoder {
   private stegoStream: MediaStream | null;
   private isRunning: boolean;
   private wasmEngine: StealthEngine | null;
-  private onStegoFrame?: (base64Png: string, frameIndex: number) => void;
+  private onStegoFrame?: (pngBuffer: Uint8Array, frameIndex: number) => void;
   private onFrameProcessTime?: (durationMs: number) => void;
   private targetFps: number = 30; // Default to 30 FPS for smooth video
 
@@ -28,7 +28,7 @@ export class VideoStegoEncoder {
     pin: string,
     resolution: '240p' | '480p' | '1080p',
     onProgress: (pct: number) => void,
-    onStegoFrame?: (base64Png: string, frameIndex: number) => void,
+    onStegoFrame?: (pngBuffer: Uint8Array, frameIndex: number) => void,
     onFrameProcessTime?: (durationMs: number) => void
   ) {
     this.localStream = localStream;
@@ -277,11 +277,18 @@ export class VideoStegoEncoder {
       // 4. Draw modified cover pixels to output canvas
       outCtx.putImageData(coverImageData, 0, 0);
 
-      // Send the stego frame losslessly as a PNG via callback
+      // Send the stego frame losslessly as a PNG via callback asynchronously (prevents UI thread blocking)
+      const currentFrameIdx = this.frameIndex;
       if (this.onStegoFrame) {
-        const stegoDataUrl = outputCanvas.toDataURL('image/png');
-        const stegoBase64 = stegoDataUrl.substring(stegoDataUrl.indexOf(',') + 1);
-        this.onStegoFrame(stegoBase64, this.frameIndex);
+        outputCanvas.toBlob((blob) => {
+          if (blob && this.isRunning) {
+            blob.arrayBuffer().then((buffer) => {
+              if (this.isRunning && this.onStegoFrame) {
+                this.onStegoFrame(new Uint8Array(buffer), currentFrameIdx);
+              }
+            });
+          }
+        }, 'image/png');
       }
 
       // 5. Update progress percentage

@@ -60,8 +60,10 @@ class StealthProcessor extends AudioWorkletProcessor {
       this.playbackQueue = [];
       console.log("AudioWorklet: Mode set to PLAYBACK.");
     } else if (data.type === 'PUSH_PLAYBACK') {
-      if (this.playbackQueue.length < 96000) { // Limit queue size to 2 seconds to prevent memory leaks
-        this.playbackQueue.push(...data.samples);
+      this.playbackQueue.push(...data.samples);
+      const maxAllowed = Math.round(0.25 * sampleRate);
+      if (this.playbackQueue.length > maxAllowed) {
+        this.playbackQueue.splice(0, this.playbackQueue.length - maxAllowed);
       }
     } else if (data.type === 'PUSH_VOICE_BITS') {
       if (this.encryptedVoiceBits.length < 100000) { // Safety limit to avoid memory leaks

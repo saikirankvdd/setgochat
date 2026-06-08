@@ -97,7 +97,7 @@ export class VideoStegoDecoder {
     });
   }
 
-  async decodeFrame(base64Png: string, frameIndex: number): Promise<void> {
+  async decodeFrame(pngBuffer: Uint8Array, frameIndex: number): Promise<void> {
     if (!this.isRunning) return;
     const startTime = performance.now();
     try {
@@ -216,13 +216,7 @@ export class VideoStegoDecoder {
       };
 
       if (typeof createImageBitmap === 'function') {
-        const binaryStr = atob(base64Png);
-        const len = binaryStr.length;
-        const bytes = new Uint8Array(len);
-        for (let i = 0; i < len; i++) {
-          bytes[i] = binaryStr.charCodeAt(i);
-        }
-        const blob = new Blob([bytes], { type: 'image/png' });
+        const blob = new Blob([pngBuffer], { type: 'image/png' });
         
         try {
           const imageBitmap = await createImageBitmap(blob, { colorSpaceConversion: 'none' });
@@ -231,13 +225,22 @@ export class VideoStegoDecoder {
         } catch (bitmapErr) {
           console.warn("[Stealth-Decoder] createImageBitmap failed, falling back to Image element:", bitmapErr);
           const img = new Image();
-          img.onload = () => processImageData(img);
-          img.src = 'data:image/png;base64,' + base64Png;
+          const blobUrl = URL.createObjectURL(blob);
+          img.onload = () => {
+            processImageData(img);
+            URL.revokeObjectURL(blobUrl);
+          };
+          img.src = blobUrl;
         }
       } else {
+        const blob = new Blob([pngBuffer], { type: 'image/png' });
+        const blobUrl = URL.createObjectURL(blob);
         const img = new Image();
-        img.onload = () => processImageData(img);
-        img.src = 'data:image/png;base64,' + base64Png;
+        img.onload = () => {
+          processImageData(img);
+          URL.revokeObjectURL(blobUrl);
+        };
+        img.src = blobUrl;
       }
     } catch (e) {
       console.error("Error decoding video stego frame:", e);

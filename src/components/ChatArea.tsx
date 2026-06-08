@@ -712,6 +712,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isVideoCall, setIsVideoCall] = useState(false);
   const [webrtcConnected, setWebrtcConnected] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
+  const [speakerOn, setSpeakerOn] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [scanningStatus, setScanningStatus] = useState<{ active: boolean, type: 'link' | 'document' | null, name: string }>({ active: false, type: null, name: '' });
   const [showDropdown, setShowDropdown] = useState(false);
@@ -899,8 +900,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           }];
         });
       } else if (state === 'failed' || state === 'closed') {
-        console.warn("[Stealth-Call] WebRTC connection failed or closed. Ending call.");
-        endCall(true);
+        console.warn("[Stealth-Call] WebRTC connection failed or closed. Ending call. State:", state);
+        if (callStateRef.current === 'connected' || state === 'closed') {
+          endCall(true);
+        }
       }
     };
   };
@@ -1249,7 +1252,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (data.sessionId !== sessionInfo.sessionId) return;
       if (callStateRef.current !== 'idle') {
         console.warn("[Stealth-Call] Received call offer but call state is not idle:", callStateRef.current);
-        return;
+        if (!peerConnectionRef.current || peerConnectionRef.current.connectionState === 'closed' || peerConnectionRef.current.connectionState === 'failed') {
+          console.log("[Stealth-Call] Peer connection is closed/null. Force-clearing stale state to accept new offer.");
+          endCall(false);
+        } else {
+          return;
+        }
       }
       setCallState('receiving');
       setCallerId(data.fromId);
@@ -1281,13 +1289,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
         remoteStreamRef.current = rStream;
         setRemoteStream(rStream);
-        // Only decode if the call is officially active
-        if (callStateRef.current === 'connected' || callStateRef.current === 'calling') {
-          startStealthAudioDecode(rStream);
-          if (rStream && typeof rStream.getVideoTracks === 'function' && rStream.getVideoTracks().length > 0) {
-            startStealthVideoDecode(rStream);
-          }
-        }
       };
 
       try {
@@ -1395,18 +1396,18 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           const decompressedBytes = gunzipSync(compressedBytes);
 
-          const voice16kHz = new Float32Array(decompressedBytes.length / 2);
-          for (let i = 0; i < voice16kHz.length; i++) {
+          const voice8kHz = new Float32Array(decompressedBytes.length / 2);
+          for (let i = 0; i < voice8kHz.length; i++) {
             const low = decompressedBytes[i * 2];
             const high = decompressedBytes[i * 2 + 1];
             let s16 = low | (high << 8);
             if (s16 & 0x8000) {
               s16 |= ~0xFFFF;
             }
-            voice16kHz[i] = s16 / 32768.0;
+            voice8kHz[i] = s16 / 32768.0;
           }
 
-          const upsampled = upsampleAudio(voice16kHz, 16000, audioCtx.sampleRate);
+          const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
           
           const voicePlayerNode = (window as any).stealthVoicePlayerNode;
           if (voicePlayerNode) {
@@ -1429,7 +1430,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             currentResolutionRef.current = packet.resolution;
             setCurrentResolution(packet.resolution);
           }
-          videoDecoderRef.current.decodeFrame(packet.videoBase64, packet.frameIndex);
+          const pngBuffer = packet.videoPngBuffer instanceof Uint8Array 
+            ? packet.videoPngBuffer 
+            : new Uint8Array(packet.videoPngBuffer || []);
+          videoDecoderRef.current.decodeFrame(pngBuffer, packet.frameIndex);
         }
       }
     };
@@ -1535,6 +1539,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
     return () => clearInterval(interval);
   }, [callState]);
+
+  // Unified effect to start E2EE stego audio and video decoding on call connection
+  useEffect(() => {
+    if (callState === 'connected' && remoteStream) {
+      console.log("[Stealth] Unified-Decode: Call connected & remote stream active. Initializing decoding loops.");
+      startStealthAudioDecode(remoteStream);
+      if (isVideoCall && typeof remoteStream.getVideoTracks === 'function' && remoteStream.getVideoTracks().length > 0) {
+        startStealthVideoDecode(remoteStream);
+      }
+    }
+  }, [callState, remoteStream, isVideoCall]);
 
   const formatDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
@@ -1666,7 +1681,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const chunk = micAccumulator.splice(0, triggerLength);
           const rawFloats = Float32Array.from(chunk);
           
-          const downsampled = downsampleAudio(rawFloats, audioCtx.sampleRate, 16000);
+          const downsampled = downsampleAudio(rawFloats, audioCtx.sampleRate, 8000);
           
           const bytes = new Uint8Array(downsampled.length * 2);
           const micGain = 3.5; // Boost gain factor for voice clarity
@@ -1785,6 +1800,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const startCall = async (withVideo: boolean = false) => {
+    // Capture user gesture synchronously for mobile AudioContext activation
+    const gestureAudioCtx = getOrCreateAudioContext();
+    if (gestureAudioCtx && gestureAudioCtx.state === 'suspended') {
+      gestureAudioCtx.resume().catch(err => console.warn("[Stealth-Gesture] AudioContext resume failed:", err));
+    }
+
     if (sessionInfo.pin === 'DECRYPTION_FAILED') {
       showModal({
         title: 'Encryption Error',
@@ -1832,12 +1853,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             sessionInfo.pin,
             currentResolutionRef.current,
             (pct) => {},
-            (base64Png, frameIndex) => {
+            (pngBuffer, frameIndex) => {
               socket.emit('stealth_rtp_packet', {
                 toId: targetUser.id,
                 packet: {
                   type: 'video_stego',
-                  videoBase64: base64Png,
+                  videoPngBuffer: pngBuffer,
                   frameIndex: frameIndex,
                   resolution: currentResolutionRef.current,
                   timestamp: Date.now()
@@ -1895,13 +1916,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
         remoteStreamRef.current = rStream;
         setRemoteStream(rStream);
-        // Only decode if the call is officially active
-        if (callStateRef.current === 'connected' || callStateRef.current === 'calling') {
-          startStealthAudioDecode(rStream);
-          if (rStream && typeof rStream.getVideoTracks === 'function' && rStream.getVideoTracks().length > 0) {
-            startStealthVideoDecode(rStream);
-          }
-        }
       };
 
       const offer = await pc.createOffer();
@@ -1947,6 +1961,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const acceptCall = async () => {
+    // Capture user gesture synchronously for mobile AudioContext activation
+    const gestureAudioCtx = getOrCreateAudioContext();
+    if (gestureAudioCtx && gestureAudioCtx.state === 'suspended') {
+      gestureAudioCtx.resume().catch(err => console.warn("[Stealth-Gesture] AudioContext resume failed:", err));
+    }
+
     if (callStateRef.current !== 'receiving' || isCallAcceptingRef.current) {
       console.warn("[Stealth-Call] acceptCall ignored because state is not receiving or already accepting:", callStateRef.current);
       return;
@@ -1985,12 +2005,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             sessionInfo.pin,
             currentResolutionRef.current,
             (pct) => {},
-            (base64Png, frameIndex) => {
+            (pngBuffer, frameIndex) => {
               socket.emit('stealth_rtp_packet', {
                 toId: callerId || targetUser.id,
                 packet: {
                   type: 'video_stego',
-                  videoBase64: base64Png,
+                  videoPngBuffer: pngBuffer,
                   frameIndex: frameIndex,
                   resolution: currentResolutionRef.current,
                   timestamp: Date.now()
@@ -2060,15 +2080,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setCallState('connected');
       callStateRef.current = 'connected';
       
-      // Start decoding the remote stream now that the call is accepted
       const rStream = remoteStreamRef.current;
-      if (rStream) {
-        startStealthAudioDecode(rStream);
-        if (isVideoCall && typeof rStream.getVideoTracks === 'function' && rStream.getVideoTracks().length > 0) {
-          startStealthVideoDecode(rStream);
-        }
-      }
-      
       // Attempt to play audio immediately to satisfy mobile browser user gesture requirements
       // The remote video element is always muted - voice is decoded via the stealth worklet
       if (remoteVideoRef.current && rStream) {
@@ -2163,7 +2175,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       videoDecoderRef.current = null;
 
       // Clean up processors and players
-      delete (window as any).stealthMicProcessor;
+      const micProcessor = (window as any).stealthMicProcessor;
+      if (micProcessor) {
+        micProcessor.disconnect();
+        delete (window as any).stealthMicProcessor;
+      }
       if ((window as any).stealthVoicePlayerNode) {
         (window as any).stealthVoicePlayerNode.port.postMessage({ type: 'STOP' });
         (window as any).stealthVoicePlayerNode.disconnect();
@@ -2226,6 +2242,79 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         track.enabled = isMuted; // if previously muted, enable it
       });
       setIsMuted(!isMuted);
+    }
+  };
+
+  const toggleSpeaker = async () => {
+    try {
+      const audioCtx = stealthAudioCtxRef.current;
+      if (!audioCtx) {
+        console.warn("[Stealth-Speaker] AudioContext not active yet.");
+        return;
+      }
+      if (typeof (audioCtx as any).setSinkId !== 'function') {
+        alert("Your browser does not support choosing audio output devices (setSinkId).");
+        return;
+      }
+      if (typeof navigator.mediaDevices?.enumerateDevices !== 'function') {
+        alert("Media device enumeration is not supported in this browser.");
+        return;
+      }
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const outputs = devices.filter(d => d.kind === 'audiooutput');
+      if (outputs.length === 0) {
+        alert("No audio output devices detected.");
+        return;
+      }
+
+      // Find loudspeaker vs earpiece/default
+      const speakerDevice = outputs.find(d => 
+        d.label.toLowerCase().includes('speaker') || 
+        d.label.toLowerCase().includes('loudspeaker') ||
+        d.label.toLowerCase().includes('speakerphone')
+      );
+
+      const earpieceDevice = outputs.find(d => 
+        d.label.toLowerCase().includes('earpiece') || 
+        d.label.toLowerCase().includes('receiver') || 
+        d.label.toLowerCase().includes('handset')
+      );
+
+      const nextSpeakerState = !speakerOn;
+      
+      if (nextSpeakerState) {
+        // Enable loudspeaker
+        if (speakerDevice) {
+          await (audioCtx as any).setSinkId(speakerDevice.deviceId);
+          console.log("[Stealth-Speaker] Routed AudioContext to speaker:", speakerDevice.label);
+        } else {
+          // Fallback to the first output device
+          await (audioCtx as any).setSinkId(outputs[0].deviceId);
+        }
+        
+        if (remoteVideoRef.current && typeof (remoteVideoRef.current as any).setSinkId === 'function') {
+          const targetId = speakerDevice?.deviceId || outputs[0].deviceId;
+          await (remoteVideoRef.current as any).setSinkId(targetId).catch(() => {});
+        }
+      } else {
+        // Disable loudspeaker (route back to earpiece/default)
+        if (earpieceDevice) {
+          await (audioCtx as any).setSinkId(earpieceDevice.deviceId);
+          console.log("[Stealth-Speaker] Routed AudioContext to earpiece:", earpieceDevice.label);
+        } else {
+          await (audioCtx as any).setSinkId(''); // default sink ID
+        }
+        
+        if (remoteVideoRef.current && typeof (remoteVideoRef.current as any).setSinkId === 'function') {
+          const targetId = earpieceDevice?.deviceId || '';
+          await (remoteVideoRef.current as any).setSinkId(targetId).catch(() => {});
+        }
+      }
+      setSpeakerOn(nextSpeakerState);
+    } catch (err: any) {
+      console.error("[Stealth-Speaker] Error toggling speaker:", err);
+      alert(`Could not change audio output route: ${err.message || 'Unknown error'}`);
     }
   };
 
@@ -2715,6 +2804,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                   <button onClick={toggleMute} className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${isMuted ? 'bg-red-500/80 text-white' : 'bg-[#2a3942] hover:bg-[#3b4a54] text-white'}`}>
                     {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
                   </button>
+                  <button onClick={toggleSpeaker} className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${speakerOn ? 'bg-green-500 text-white' : 'bg-[#2a3942] hover:bg-[#3b4a54] text-white'}`}>
+                    <Volume2 className="w-4 h-4" />
+                  </button>
                   <button onClick={togglePiP} className="w-9 h-9 rounded-full flex items-center justify-center bg-[#2a3942] hover:bg-[#3b4a54] text-white transition-colors">
                     <ExternalLink className="w-4 h-4" />
                   </button>
@@ -2820,6 +2912,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                         {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
                       </button>
                       
+                      <button onClick={toggleSpeaker} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${speakerOn ? 'bg-green-500 hover:bg-green-600 text-white' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
+                        <Volume2 className="w-6 h-6" />
+                      </button>
+
                       {isVideoCall && (
                         <button onClick={toggleVideo} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isVideoOff ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
                           {isVideoOff ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
