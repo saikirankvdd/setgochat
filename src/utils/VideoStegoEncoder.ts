@@ -169,15 +169,38 @@ export class VideoStegoEncoder {
       // 1. Draw webcam to capture canvas
       capCtx.drawImage(webcam, 0, 0, this.width, this.height);
 
-      // 2. Compress webcam frame to JPEG base64 (reduced quality for 4x CPU boost)
-      const dataUrl = captureCanvas.toDataURL('image/jpeg', 0.50);
-      const base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+      // 2. Adaptively compress webcam frame. Start at 50% quality, drop further if
+      //    the encrypted payload overflows the LSB capacity of the cover frame.
+      const totalPixels = this.width * this.height;
+      const totalChannels = totalPixels * 3; // Red, Green, Blue (skip Alpha)
+      const maxPayloadBits = totalChannels - 32; // Reserve 32 bits for length header
 
-      // 3. Encrypt base64 with PIN + frameIndex
-      const encrypted = encryptData(base64, this.pin + '_' + this.frameIndex);
-      const dataBits = stringToBinary(encrypted);
+      let base64 = '';
+      let encrypted = '';
+      let dataBits = '';
+      let jpegQuality = 0.50;
 
-      // 4. Get active cover clip and extract its frame
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const dataUrl = captureCanvas.toDataURL('image/jpeg', jpegQuality);
+        base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+        encrypted = encryptData(base64, this.pin + '_' + this.frameIndex);
+        dataBits = stringToBinary(encrypted);
+
+        if (dataBits.length <= maxPayloadBits) {
+          break; // Payload fits — proceed
+        }
+
+        // Reduce quality by 10% and retry
+        jpegQuality = Math.max(0.10, jpegQuality - 0.10);
+        if (attempt === 3) {
+          // Still too large after 4 attempts — skip this frame entirely
+          console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large (${dataBits.length} bits > ${maxPayloadBits} max) even at ${jpegQuality * 100}% quality. Skipping.`);
+          this.frameIndex++;
+          return;
+        }
+      }
+
+      // 3. Get active cover clip and extract its frame
       const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
       
       // Pause all inactive cover videos, and play the active one
@@ -199,16 +222,18 @@ export class VideoStegoEncoder {
       const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
       const pixels = coverImageData.data;
 
-      const totalPixels = this.width * this.height;
-      const totalChannels = totalPixels * 3; // Red, Green, Blue (skip Alpha)
-
       if (this.wasmEngine) {
         // Use high-performance Rust WASM LSB embedding
         const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
         this.wasmEngine.process_video_frame(pixelBytes, dataBits, this.pin, this.frameIndex);
       } else {
         // Fallback: Use JS LSB embedding
-        const encLength = this.encryptLengthHeaderJS(dataBits.length, this.pin + '_' + this.frameIndex);
+        // IMPORTANT: use the actual dataLength (not dataBits.length) in the header
+        // to ensure the decoder reads exactly the number of bits that were embedded.
+        const usableChannels = totalChannels - 32;
+        const dataLength = Math.min(dataBits.length, usableChannels);
+
+        const encLength = this.encryptLengthHeaderJS(dataLength, this.pin + '_' + this.frameIndex);
         let channelIdx = 0;
         for (let i = 0; i < 32; i++) {
           if (channelIdx % 4 === 3) channelIdx++; // skip alpha
@@ -227,9 +252,6 @@ export class VideoStegoEncoder {
           channelIdx++;
         }
 
-        const usableChannels = totalChannels - 32;
-        const dataLength = Math.min(dataBits.length, usableChannels);
-        
         if (dataLength > 0) {
           const stride = Math.floor(usableChannels / dataLength);
           const prng = new JS_PRNG(this.pin + '_scatter_' + this.frameIndex);
@@ -252,7 +274,7 @@ export class VideoStegoEncoder {
         }
       }
 
-      // 5. Draw modified cover pixels to output canvas
+      // 4. Draw modified cover pixels to output canvas
       outCtx.putImageData(coverImageData, 0, 0);
 
       // Send the stego frame losslessly as a PNG via callback
@@ -262,12 +284,12 @@ export class VideoStegoEncoder {
         this.onStegoFrame(stegoBase64, this.frameIndex);
       }
 
-      // 6. Update progress percentage
+      // 5. Update progress percentage
       const totalBitsNeeded = 32 + dataBits.length;
       const usagePct = (totalBitsNeeded / totalChannels) * 100;
       this.onProgress(Math.min(100, Math.round(usagePct)));
 
-      // 7. Advance frame index
+      // 6. Advance frame index
       this.frameIndex++;
 
       const duration = performance.now() - startTime;
