@@ -733,7 +733,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isBlocking, setIsBlocking] = useState(false);
   
   const [pipVideoEl, setPipVideoEl] = useState<HTMLVideoElement | null>(null);
-  const [localVidPos, setLocalVidPos] = useState({ x: window.innerWidth > 768 ? window.innerWidth - 220 : window.innerWidth - 150, y: window.innerHeight - 300 });
+  const [localVidPos, setLocalVidPos] = useState<{ x: number | 'auto'; y: number | 'auto' }>({ x: 'auto', y: 'auto' });
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -743,6 +743,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const callOverlayRef = useRef<HTMLDivElement>(null);
   const pendingCandidates = useRef<RTCIceCandidateInit[]>([]);
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
@@ -2562,15 +2563,18 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       <div className="flex-1 flex flex-col relative">
         {/* Call UI Overlay */}
         {callState !== 'idle' && (
-          <div className={`absolute inset-0 z-50 flex flex-col items-center justify-center animate-fade-in
-            ${
-              callState === 'connected' && !isVideoCall
-                // Audio connected: compact floating card at top, chat visible + blurred behind
-                ? 'bg-black/40 backdrop-blur-sm'
-                // Calling/receiving/video: full blur overlay
-                : 'bg-black/60 backdrop-blur-md'
-            }
-          `}>
+          <div 
+            ref={callOverlayRef}
+            className={`absolute inset-0 z-50 flex flex-col items-center justify-center animate-fade-in
+              ${
+                callState === 'connected' && !isVideoCall
+                  // Audio connected: compact floating card at top, chat visible + blurred behind
+                  ? 'bg-black/40 backdrop-blur-sm'
+                  // Calling/receiving/video: full blur overlay
+                  : 'bg-black/60 backdrop-blur-md'
+              }
+            `}
+          >
             {/* Remote video — fullscreen behind for video calls */}
             <video 
               ref={remoteVideoRef} 
@@ -2633,29 +2637,50 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 {/* Local PiP feed (Draggable) */}
                 <div 
                   className={`absolute z-50 cursor-move rounded-2xl overflow-hidden shadow-2xl border-2 border-[#2a3942] bg-[#202c33] transition-opacity w-32 md:w-48 h-48 md:h-64 ${isVideoCall && !isVideoOff && callState === 'connected' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-                  style={{ left: localVidPos.x, top: localVidPos.y, touchAction: 'none' }}
+                  style={{ 
+                    left: localVidPos.x === 'auto' ? undefined : `${localVidPos.x}px`, 
+                    top: localVidPos.y === 'auto' ? '20px' : `${localVidPos.y}px`,
+                    right: localVidPos.x === 'auto' ? '20px' : undefined,
+                    touchAction: 'none'
+                  }}
                   onPointerDown={(e) => {
                     const target = e.currentTarget as HTMLElement;
+                    const container = callOverlayRef.current;
+                    if (!container) return;
+                    const rect = container.getBoundingClientRect();
+                    const targetRect = target.getBoundingClientRect();
+                    
                     isDraggingRef.current = true;
                     target.setPointerCapture(e.pointerId);
-                    offsetRef.current = { x: e.clientX - localVidPos.x, y: e.clientY - localVidPos.y };
+                    offsetRef.current = { 
+                      x: e.clientX - targetRect.left, 
+                      y: e.clientY - targetRect.top 
+                    };
                   }}
                   onPointerMove={(e) => {
                     if (!isDraggingRef.current) return;
-                    setLocalVidPos({ x: e.clientX - offsetRef.current.x, y: e.clientY - offsetRef.current.y });
+                    const container = callOverlayRef.current;
+                    if (!container) return;
+                    const rect = container.getBoundingClientRect();
+                    
+                    let newX = e.clientX - rect.left - offsetRef.current.x;
+                    let newY = e.clientY - rect.top - offsetRef.current.y;
+                    
+                    const isMD = window.innerWidth > 768;
+                    const targetWidth = isMD ? 192 : 128; // matching w-32 (128px) or md:w-48 (192px)
+                    const targetHeight = isMD ? 256 : 192; // matching h-48 (192px) or md:h-64 (256px)
+                    
+                    if (newX < 10) newX = 10;
+                    if (newX > rect.width - targetWidth - 10) newX = rect.width - targetWidth - 10;
+                    if (newY < 10) newY = 10;
+                    if (newY > rect.height - targetHeight - 10) newY = rect.height - targetHeight - 10;
+                    
+                    setLocalVidPos({ x: newX, y: newY });
                   }}
                   onPointerUp={(e) => {
                     isDraggingRef.current = false;
                     const target = e.currentTarget as HTMLElement;
                     target.releasePointerCapture(e.pointerId);
-                    const wX = window.innerWidth;
-                    const wY = window.innerHeight;
-                    const midX = wX / 2;
-                    const snapX = localVidPos.x > midX ? wX - (wX > 768 ? 220 : 150) : 20;
-                    let snapY = localVidPos.y;
-                    if (snapY < 20) snapY = 20;
-                    if (snapY > wY - 300) snapY = wY - 300;
-                    setLocalVidPos({ x: snapX, y: snapY });
                   }}
                 >
                   <video 

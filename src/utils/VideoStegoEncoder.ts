@@ -204,7 +204,7 @@ export class VideoStegoEncoder {
 
       if (this.wasmEngine) {
         // Use high-performance Rust WASM LSB embedding
-        const pixelBytes = new Uint8Array(pixels.buffer);
+        const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
         this.wasmEngine.process_video_frame(pixelBytes, dataBits, this.pin, this.frameIndex);
       } else {
         // Fallback: Use JS LSB embedding

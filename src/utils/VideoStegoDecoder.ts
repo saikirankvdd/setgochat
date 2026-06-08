@@ -97,7 +97,7 @@ export class VideoStegoDecoder {
     });
   }
 
-  decodeFrame(base64Png: string, frameIndex: number): void {
+  async decodeFrame(base64Png: string, frameIndex: number): Promise<void> {
     if (!this.isRunning) return;
     const startTime = performance.now();
     try {
@@ -107,14 +107,13 @@ export class VideoStegoDecoder {
 
       if (!decodeCanvas || !coverCanvas || !displayCanvas) return;
 
-      const img = new Image();
-      img.onload = () => {
+      const processImageData = (imgSource: CanvasImageSource) => {
         if (!this.isRunning) return;
         try {
           const decCtx = decodeCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
           if (!decCtx) return;
 
-          decCtx.drawImage(img, 0, 0);
+          decCtx.drawImage(imgSource, 0, 0);
           const receivedImageData = decCtx.getImageData(0, 0, this.width, this.height);
           const pixels = receivedImageData.data;
 
@@ -125,7 +124,7 @@ export class VideoStegoDecoder {
           let bitString = '';
 
           if (this.wasmEngine) {
-            const pixelBytes = new Uint8Array(pixels.buffer);
+            const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
             bitString = this.wasmEngine.extract_video_frame(pixelBytes, this.pin, frameIndex);
           } else {
             // Fallback: Use JS LSB extraction
@@ -214,10 +213,34 @@ export class VideoStegoDecoder {
             this.onFrameProcessTime(duration);
           }
         } catch (onloadErr) {
-          console.error("Error inside stego img.onload callback:", onloadErr);
+          console.error("Error inside stego processing callback:", onloadErr);
         }
       };
-      img.src = 'data:image/png;base64,' + base64Png;
+
+      if (typeof createImageBitmap === 'function') {
+        const binaryStr = atob(base64Png);
+        const len = binaryStr.length;
+        const bytes = new Uint8Array(len);
+        for (let i = 0; i < len; i++) {
+          bytes[i] = binaryStr.charCodeAt(i);
+        }
+        const blob = new Blob([bytes], { type: 'image/png' });
+        
+        try {
+          const imageBitmap = await createImageBitmap(blob, { colorSpaceConversion: 'none' });
+          processImageData(imageBitmap);
+          imageBitmap.close();
+        } catch (bitmapErr) {
+          console.warn("[Stealth-Decoder] createImageBitmap failed, falling back to Image element:", bitmapErr);
+          const img = new Image();
+          img.onload = () => processImageData(img);
+          img.src = 'data:image/png;base64,' + base64Png;
+        }
+      } else {
+        const img = new Image();
+        img.onload = () => processImageData(img);
+        img.src = 'data:image/png;base64,' + base64Png;
+      }
     } catch (e) {
       console.error("Error decoding video stego frame:", e);
     }
@@ -280,7 +303,7 @@ export class VideoStegoDecoder {
 
       if (this.wasmEngine) {
         // Use high-performance Rust WASM LSB extraction
-        const pixelBytes = new Uint8Array(pixels.buffer);
+        const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
         bitString = this.wasmEngine.extract_video_frame(pixelBytes, this.pin, this.frameIndex);
       } else {
         // Fallback: Use JS LSB extraction
