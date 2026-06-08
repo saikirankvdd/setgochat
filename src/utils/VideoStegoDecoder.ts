@@ -199,12 +199,10 @@ export class VideoStegoDecoder {
               } catch (vidErr) {}
             });
 
-            const coverVideo = this.videoEls[clipIdx];
-            if (coverVideo) {
-              const coverImageData = getFrameAtIndex(coverVideo, frameIndex, coverCanvas);
-              const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
-              displayCtx?.putImageData(coverImageData, 0, 0);
-            }
+            const coverVideo = this.videoEls[clipIdx] || null;
+            const coverImageData = getFrameAtIndex(coverVideo, frameIndex, coverCanvas);
+            const displayCtx = displayCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
+            displayCtx?.putImageData(coverImageData, 0, 0);
           }
 
           // Update callback with the time it took to load and decode the frame

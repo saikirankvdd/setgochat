@@ -769,6 +769,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const lastSettingsChangeTimeRef = useRef<number>(0);
   const currentRttRef = useRef<number>(0);
 
+  const isMobileDevice = () => {
+    if (typeof navigator === 'undefined') return false;
+    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  };
+
   const applyStegoSettings = (resolution: '240p' | '480p', fps: 15 | 30) => {
     currentResolutionRef.current = resolution;
     targetFpsRef.current = fps;
@@ -786,6 +791,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const checkAdaptiveStegoEngine = async (frameDurationMs: number, source: 'encode' | 'decode') => {
+    if (isMobileDevice()) {
+      return;
+    }
     const rtt = currentRttRef.current;
     let batteryLevel = 1.0;
     let batteryCharging = true;
@@ -1791,13 +1799,21 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
     isCallStartingRef.current = true;
     try {
+      const isMobile = isMobileDevice();
+      const initialResolution = '240p';
+      const initialFps = isMobile ? 5 : 30;
+      currentResolutionRef.current = initialResolution;
+      targetFpsRef.current = initialFps;
+      setCurrentResolution(initialResolution);
+      setTargetFpsState(initialFps);
+
       pendingCandidates.current = [];
       setIsVideoCall(withVideo);
       setIsMuted(false);
       setIsVideoOff(false);
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
-        video: withVideo ? { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 15 } } : false
+        video: withVideo ? { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: isMobile ? 5 : 15 } } : false
       });
       
       // --- V2 STEALTH ARCHITECTURE INJECTION ---
@@ -1834,6 +1850,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           );
           await encoder.init();
           videoEncoderRef.current = encoder;
+          encoder.setTargetFps(targetFpsRef.current);
           encoder.start();
           localVideoTrack = encoder.getStegoStream().getVideoTracks()[0];
         } catch (e) {
@@ -1936,11 +1953,19 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
     isCallAcceptingRef.current = true;
     try {
+      const isMobile = isMobileDevice();
+      const initialResolution = '240p';
+      const initialFps = isMobile ? 5 : 30;
+      currentResolutionRef.current = initialResolution;
+      targetFpsRef.current = initialFps;
+      setCurrentResolution(initialResolution);
+      setTargetFpsState(initialFps);
+
       setIsMuted(false);
       setIsVideoOff(false);
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
-        video: isVideoCall ? { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 15 } } : false
+        video: isVideoCall ? { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: isMobile ? 5 : 15 } } : false
       });
       setLocalStream(stream);
       localStreamRef.current = stream;
@@ -1978,6 +2003,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           );
           await encoder.init();
           videoEncoderRef.current = encoder;
+          encoder.setTargetFps(targetFpsRef.current);
           encoder.start();
           localVideoTrack = encoder.getStegoStream().getVideoTracks()[0];
         } catch (e) {

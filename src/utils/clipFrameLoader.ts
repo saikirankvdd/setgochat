@@ -90,7 +90,7 @@ export function getCurrentClipIndex(frameIndex: number, clipSequence: number[]):
  * Extracts the frame from the video element matching the current frameIndex
  */
 export function getFrameAtIndex(
-  videoEl: HTMLVideoElement,
+  videoEl: HTMLVideoElement | null | undefined,
   frameIndex: number,
   canvas: HTMLCanvasElement
 ): ImageData {
@@ -99,6 +99,35 @@ export function getFrameAtIndex(
 
   const width = canvas.width;
   const height = canvas.height;
+
+  // Fallback check: if the video is not ready, has an error, or is null/undefined (e.g. WebM on iOS)
+  if (!videoEl || videoEl.readyState < 2 || videoEl.error) {
+    // Draw a beautiful procedural fallback (moving ambient gradient)
+    const time = frameIndex * 0.04;
+    const r = Math.floor(128 + 127 * Math.sin(time));
+    const g = Math.floor(128 + 127 * Math.sin(time + 2.0));
+    const b = Math.floor(128 + 127 * Math.sin(time + 4.0));
+    
+    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+    ctx.fillRect(0, 0, width, height);
+
+    // Evolving ambient overlay shapes
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.1)';
+    const cx1 = width / 2 + Math.cos(time) * (width / 5);
+    const cy1 = height / 2 + Math.sin(time) * (height / 5);
+    ctx.beginPath();
+    ctx.arc(cx1, cy1, width / 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.08)';
+    const cx2 = width / 2 + Math.sin(time * 0.7) * (width / 4);
+    const cy2 = height / 2 + Math.cos(time * 0.7) * (height / 4);
+    ctx.beginPath();
+    ctx.arc(cx2, cy2, width / 8, 0, Math.PI * 2);
+    ctx.fill();
+    
+    return ctx.getImageData(0, 0, width, height);
+  }
 
   // Ensure the video is playing to progress naturally
   if (videoEl.paused) {
