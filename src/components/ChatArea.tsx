@@ -764,9 +764,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const clockOffsetRef = useRef<number | null>(null);
 
   const [currentResolution, setCurrentResolution] = useState<'240p' | '480p'>('240p');
-  const [targetFps, setTargetFpsState] = useState<15 | 30>(30);
+  const [targetFps, setTargetFpsState] = useState<5 | 10 | 15 | 30>(10);
   const currentResolutionRef = useRef<'240p' | '480p'>('240p');
-  const targetFpsRef = useRef<15 | 30>(30);
+  const targetFpsRef = useRef<5 | 10 | 15 | 30>(10);
   const consecutiveSlowFramesRef = useRef<number>(0);
   const lastSettingsChangeTimeRef = useRef<number>(0);
   const currentRttRef = useRef<number>(0);
@@ -776,7 +776,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
   };
 
-  const applyStegoSettings = (resolution: '240p' | '480p', fps: 15 | 30) => {
+  const applyStegoSettings = (resolution: '240p' | '480p', fps: 5 | 10 | 15 | 30) => {
     currentResolutionRef.current = resolution;
     targetFpsRef.current = fps;
     setCurrentResolution(resolution);
@@ -813,41 +813,44 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     const timeSinceLastChange = now - lastSettingsChangeTimeRef.current;
 
     if (isBatterySaver) {
-      if (currentResolutionRef.current !== '240p' || targetFpsRef.current !== 15) {
-        console.warn(`[Stealth-Adaptive] Low battery (${Math.round(batteryLevel * 100)}%) and not charging. Forcing Battery Saver Mode (240p @ 15fps).`);
-        applyStegoSettings('240p', 15);
+      if (currentResolutionRef.current !== '240p' || targetFpsRef.current !== 5) {
+        console.warn(`[Stealth-Adaptive] Low battery (${Math.round(batteryLevel * 100)}%) and not charging. Forcing Battery Saver Mode (240p @ 5fps).`);
+        applyStegoSettings('240p', 5);
       }
       return;
     }
 
-    const isCpuOverloaded = frameDurationMs > 18;
-    const isNetworkCongested = rtt > 150;
+    const profiles: { resolution: '240p' | '480p'; fps: 5 | 10 | 15 | 30 }[] = [
+      { resolution: '240p', fps: 5 },
+      { resolution: '240p', fps: 10 },
+      { resolution: '240p', fps: 15 },
+      { resolution: '240p', fps: 30 },
+      { resolution: '480p', fps: 15 },
+      { resolution: '480p', fps: 30 }
+    ];
+
+    const currentProfileIdx = profiles.findIndex(p => p.resolution === currentResolutionRef.current && p.fps === targetFpsRef.current);
+
+    const isCpuOverloaded = frameDurationMs > 25;
+    const isNetworkCongested = rtt > 180;
 
     if (isCpuOverloaded || isNetworkCongested) {
       consecutiveSlowFramesRef.current += 1;
       if (consecutiveSlowFramesRef.current >= 5) {
         consecutiveSlowFramesRef.current = 0;
-        if (timeSinceLastChange > cooldownTime) {
-          if (currentResolutionRef.current === '480p') {
-            console.warn(`[Stealth-Adaptive] Performance drop (Frame: ${frameDurationMs.toFixed(1)}ms, RTT: ${rtt.toFixed(1)}ms). Downgrading resolution to 240p.`);
-            applyStegoSettings('240p', targetFpsRef.current);
-          } else if (targetFpsRef.current === 30) {
-            console.warn(`[Stealth-Adaptive] Performance drop (Frame: ${frameDurationMs.toFixed(1)}ms, RTT: ${rtt.toFixed(1)}ms). Downgrading FPS to 15.`);
-            applyStegoSettings('240p', 15);
-          }
+        if (timeSinceLastChange > cooldownTime && currentProfileIdx > 0) {
+          const nextProfile = profiles[currentProfileIdx - 1];
+          console.warn(`[Stealth-Adaptive] Performance drop (Frame: ${frameDurationMs.toFixed(1)}ms, RTT: ${rtt.toFixed(1)}ms). Downgrading to ${nextProfile.resolution} @ ${nextProfile.fps}fps.`);
+          applyStegoSettings(nextProfile.resolution, nextProfile.fps);
         }
       }
     } else {
-      if (frameDurationMs < 10 && rtt < 100 && (batteryCharging || batteryLevel > 0.4)) {
+      if (frameDurationMs < 12 && rtt < 100 && (batteryCharging || batteryLevel > 0.4)) {
         consecutiveSlowFramesRef.current = 0;
-        if (timeSinceLastChange > cooldownTime) {
-          if (targetFpsRef.current === 15) {
-            console.log(`[Stealth-Adaptive] Performance healthy (Frame: ${frameDurationMs.toFixed(1)}ms, RTT: ${rtt.toFixed(1)}ms). Upgrading FPS to 30.`);
-            applyStegoSettings(currentResolutionRef.current, 30);
-          } else if (currentResolutionRef.current === '240p') {
-            console.log(`[Stealth-Adaptive] Performance healthy. Upgrading resolution to 480p.`);
-            applyStegoSettings('480p', 30);
-          }
+        if (timeSinceLastChange > cooldownTime && currentProfileIdx >= 0 && currentProfileIdx < profiles.length - 1) {
+          const nextProfile = profiles[currentProfileIdx + 1];
+          console.log(`[Stealth-Adaptive] Performance healthy (Frame: ${frameDurationMs.toFixed(1)}ms, RTT: ${rtt.toFixed(1)}ms). Upgrading to ${nextProfile.resolution} @ ${nextProfile.fps}fps.`);
+          applyStegoSettings(nextProfile.resolution, nextProfile.fps);
         }
       }
     }
@@ -1288,6 +1291,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rStream = new MediaStream();
           rStream.addTrack(event.track);
         }
+        // Disable cover audio track from WebRTC so user doesn't hear it
+        rStream.getAudioTracks().forEach(track => {
+          track.enabled = false;
+          console.log("[Stealth-RTP] Disabled remote WebRTC audio track to mute cover song.");
+        });
         remoteStreamRef.current = rStream;
         setRemoteStream(rStream);
       };
@@ -1433,10 +1441,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             currentResolutionRef.current = packet.resolution;
             setCurrentResolution(packet.resolution);
           }
-          const pngBuffer = packet.videoPngBuffer instanceof Uint8Array 
-            ? packet.videoPngBuffer 
-            : new Uint8Array(packet.videoPngBuffer || []);
-          videoDecoderRef.current.decodeFrame(pngBuffer, packet.frameIndex);
+          if (packet.encryptedFrame) {
+            videoDecoderRef.current.decodeDirectFrame(packet.encryptedFrame, packet.frameIndex);
+          } else {
+            const pngBuffer = packet.videoPngBuffer instanceof Uint8Array 
+              ? packet.videoPngBuffer 
+              : new Uint8Array(packet.videoPngBuffer || []);
+            videoDecoderRef.current.decodeFrame(pngBuffer, packet.frameIndex);
+          }
         }
       }
     };
@@ -1825,7 +1837,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     try {
       const isMobile = isMobileDevice();
       const initialResolution = '240p';
-      const initialFps = isMobile ? 5 : 30;
+      const initialFps = isMobile ? 5 : 10;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);
@@ -1856,20 +1868,21 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             sessionInfo.pin,
             currentResolutionRef.current,
             (pct) => {},
-            (pngBuffer, frameIndex) => {
+            undefined, // Bypass PNG LSB encoding for socket
+            (durationMs) => {
+              checkAdaptiveStegoEngine(durationMs, 'encode');
+            },
+            (encryptedFrame, frameIndex) => {
               socket.emit('stealth_rtp_packet', {
                 toId: targetUser.id,
                 packet: {
                   type: 'video_stego',
-                  videoPngBuffer: pngBuffer,
+                  encryptedFrame: encryptedFrame,
                   frameIndex: frameIndex,
                   resolution: currentResolutionRef.current,
                   timestamp: Date.now()
                 }
               });
-            },
-            (durationMs) => {
-              checkAdaptiveStegoEngine(durationMs, 'encode');
             }
           );
           await encoder.init();
@@ -1917,6 +1930,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rStream = new MediaStream();
           rStream.addTrack(event.track);
         }
+        // Disable cover audio track from WebRTC so user doesn't hear it
+        rStream.getAudioTracks().forEach(track => {
+          track.enabled = false;
+          console.log("[Stealth-RTP] Disabled remote WebRTC audio track to mute cover song.");
+        });
         remoteStreamRef.current = rStream;
         setRemoteStream(rStream);
       };
@@ -1978,7 +1996,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     try {
       const isMobile = isMobileDevice();
       const initialResolution = '240p';
-      const initialFps = isMobile ? 5 : 30;
+      const initialFps = isMobile ? 5 : 10;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);
@@ -2008,20 +2026,21 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             sessionInfo.pin,
             currentResolutionRef.current,
             (pct) => {},
-            (pngBuffer, frameIndex) => {
+            undefined, // Bypass PNG LSB encoding for socket
+            (durationMs) => {
+              checkAdaptiveStegoEngine(durationMs, 'encode');
+            },
+            (encryptedFrame, frameIndex) => {
               socket.emit('stealth_rtp_packet', {
                 toId: callerId || targetUser.id,
                 packet: {
                   type: 'video_stego',
-                  videoPngBuffer: pngBuffer,
+                  encryptedFrame: encryptedFrame,
                   frameIndex: frameIndex,
                   resolution: currentResolutionRef.current,
                   timestamp: Date.now()
                 }
               });
-            },
-            (durationMs) => {
-              checkAdaptiveStegoEngine(durationMs, 'encode');
             }
           );
           await encoder.init();
@@ -2143,9 +2162,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     pendingCandidates.current = [];
 
     currentResolutionRef.current = '240p';
-    targetFpsRef.current = 30;
+    targetFpsRef.current = 10;
     setCurrentResolution('240p');
-    setTargetFpsState(30);
+    setTargetFpsState(10);
     consecutiveSlowFramesRef.current = 0;
     lastSettingsChangeTimeRef.current = 0;
     currentRttRef.current = 0;

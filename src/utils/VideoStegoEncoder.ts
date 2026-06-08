@@ -20,6 +20,7 @@ export class VideoStegoEncoder {
   private wasmEngine: StealthEngine | null;
   private onStegoFrame?: (pngBuffer: Uint8Array, frameIndex: number) => void;
   private onFrameProcessTime?: (durationMs: number) => void;
+  private onDirectFrame?: (encryptedFrame: string, frameIndex: number) => void;
   private targetFps: number = 30; // Default to 30 FPS for smooth video
 
 
@@ -29,7 +30,8 @@ export class VideoStegoEncoder {
     resolution: '240p' | '480p' | '1080p',
     onProgress: (pct: number) => void,
     onStegoFrame?: (pngBuffer: Uint8Array, frameIndex: number) => void,
-    onFrameProcessTime?: (durationMs: number) => void
+    onFrameProcessTime?: (durationMs: number) => void,
+    onDirectFrame?: (encryptedFrame: string, frameIndex: number) => void
   ) {
     this.localStream = localStream;
     this.pin = pin;
@@ -56,6 +58,7 @@ export class VideoStegoEncoder {
     this.isRunning = false;
     this.wasmEngine = null;
     this.onFrameProcessTime = onFrameProcessTime;
+    this.onDirectFrame = onDirectFrame;
   }
 
   async init(): Promise<void> {
@@ -277,8 +280,13 @@ export class VideoStegoEncoder {
       // 4. Draw modified cover pixels to output canvas
       outCtx.putImageData(coverImageData, 0, 0);
 
-      // Send the stego frame losslessly as a PNG via callback asynchronously (prevents UI thread blocking)
+      // Send the direct encrypted frame via callback (much lighter and 100% reliable)
       const currentFrameIdx = this.frameIndex;
+      if (this.onDirectFrame && this.isRunning) {
+        this.onDirectFrame(encrypted, currentFrameIdx);
+      }
+
+      // Send the stego frame losslessly as a PNG via callback asynchronously (prevents UI thread blocking)
       if (this.onStegoFrame) {
         outputCanvas.toBlob((blob) => {
           if (blob && this.isRunning) {

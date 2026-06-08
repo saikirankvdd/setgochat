@@ -54,6 +54,8 @@ export async function preloadClips(): Promise<HTMLVideoElement[]> {
       video.muted = true;
       video.playsInline = true;
       video.loop = true;
+      video.width = 160;
+      video.height = 120;
       
       if (container) {
         container.appendChild(video);

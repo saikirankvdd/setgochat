@@ -99,6 +99,41 @@ export class VideoStegoDecoder {
     });
   }
 
+  async decodeDirectFrame(encryptedFrame: string, frameIndex: number): Promise<void> {
+    if (!this.isRunning) return;
+    if (frameIndex <= this.lastDecodedFrameIndex) {
+      return;
+    }
+    this.lastDecodedFrameIndex = frameIndex;
+    const startTime = performance.now();
+    try {
+      const displayCanvas = this.displayCanvas;
+      if (!displayCanvas) return;
+
+      const base64 = decryptData(encryptedFrame, this.pin + '_' + frameIndex);
+      if (base64) {
+        const img = new Image();
+        img.onload = () => {
+          if (!this.isRunning) return;
+          try {
+            const displayCtx = displayCanvas.getContext('2d');
+            displayCtx?.drawImage(img, 0, 0, displayCanvas.width, displayCanvas.height);
+          } catch (innerErr) {
+            console.error("Error drawing direct frame in VideoStegoDecoder:", innerErr);
+          }
+        };
+        img.src = 'data:image/jpeg;base64,' + base64;
+      }
+      
+      const duration = performance.now() - startTime;
+      if (this.onFrameProcessTime) {
+        this.onFrameProcessTime(duration);
+      }
+    } catch (e) {
+      console.error("Error decoding direct frame:", e);
+    }
+  }
+
   async decodeFrame(pngBuffer: Uint8Array, frameIndex: number): Promise<void> {
     if (!this.isRunning) return;
     if (frameIndex <= this.lastDecodedFrameIndex) {
