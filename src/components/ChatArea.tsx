@@ -758,6 +758,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const videoDecoderRef = useRef<VideoStegoDecoder | null>(null);
   const decodedVideoCanvasRef = useRef<HTMLCanvasElement>(null);
   const voiceQueueRef = useRef<number[]>([]);
+  const isCallAcceptingRef = useRef<boolean>(false);
+  const isCallStartingRef = useRef<boolean>(false);
 
   const [currentResolution, setCurrentResolution] = useState<'240p' | '480p'>('240p');
   const [targetFps, setTargetFpsState] = useState<15 | 30>(30);
@@ -866,6 +868,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   const setupPeerConnectionListeners = (pc: RTCPeerConnection, isVideo: boolean) => {
     pc.onconnectionstatechange = () => {
+      if (pc !== peerConnectionRef.current) {
+        console.warn("[Stealth-Call] Connection state change event from obsolete PeerConnection ignored.");
+        return;
+      }
       const state = pc.connectionState;
       console.log("[Stealth-Call] WebRTC connection state changed to:", state);
       if (state === 'connected') {
@@ -1089,6 +1095,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const handleReceive = async (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
+      if (data.fromId === user.id || data.fromId === user.id.toString() || data.fromId === hashedMyId) {
+        if (data.isStegoSignaling) {
+          console.log("[Stealth-Signaling] Ignoring self-sent signaling packet.");
+          return;
+        }
+      }
       if (sessionInfo.pin === 'DECRYPTION_FAILED') {
         console.warn('[E2EE] Discarding incoming message/signal: PIN decryption failed state');
         return;
@@ -1227,15 +1239,21 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const handleCallOffer = async (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
+      if (callStateRef.current !== 'idle') {
+        console.warn("[Stealth-Call] Received call offer but call state is not idle:", callStateRef.current);
+        return;
+      }
       setCallState('receiving');
       setCallerId(data.fromId);
       setIsVideoCall(data.withVideo || false);
-      peerConnectionRef.current = new RTCPeerConnection({
+      const pc = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
-      setupPeerConnectionListeners(peerConnectionRef.current, data.withVideo || false);
+      peerConnectionRef.current = pc;
+      setupPeerConnectionListeners(pc, data.withVideo || false);
       
-      peerConnectionRef.current.onicecandidate = (event) => {
+      pc.onicecandidate = (event) => {
+        if (peerConnectionRef.current !== pc) return;
         if (event.candidate) {
           socket.emit('call_ice_candidate', {
             sessionId: sessionInfo.sessionId,
@@ -1245,7 +1263,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
       };
 
-      peerConnectionRef.current.ontrack = (event) => {
+      pc.ontrack = (event) => {
+        if (peerConnectionRef.current !== pc) return;
         let rStream = event.streams[0];
         if (!rStream) {
           console.warn("[Stealth] No stream found in handleCallOffer ontrack. Creating fallback MediaStream.");
@@ -1263,13 +1282,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
       };
 
-      await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.offer));
-      
-      while (pendingCandidates.current.length > 0) {
-        const candidate = pendingCandidates.current.shift();
-        if (candidate) {
-          await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+      try {
+        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+        while (pendingCandidates.current.length > 0) {
+          const candidate = pendingCandidates.current.shift();
+          if (candidate) {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(console.error);
+          }
         }
+      } catch (err) {
+        console.error("[Stealth-Call] Failed to set remote description on offer:", err);
+        endCall(false);
       }
     };
 
@@ -1311,6 +1334,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     };
 
     const handleStealthRtpReceive = async (packet: any) => {
+      if (callStateRef.current !== 'connected') {
+        return;
+      }
       console.log("[Stealth-RTP] Received socket packet type:", packet?.type);
       if (packet.type === 'audio_stego') {
         if (packet.timestamp) {
@@ -1759,6 +1785,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       });
       return;
     }
+    if (callStateRef.current !== 'idle' || isCallStartingRef.current) {
+      console.warn("[Stealth-Call] startCall ignored because state is not idle or already starting:", callStateRef.current);
+      return;
+    }
+    isCallStartingRef.current = true;
     try {
       pendingCandidates.current = [];
       setIsVideoCall(withVideo);
@@ -1815,10 +1846,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       localStreamRef.current = stream;
       setCallState('calling');
 
-      peerConnectionRef.current = new RTCPeerConnection({
+      const pc = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
-      setupPeerConnectionListeners(peerConnectionRef.current, withVideo);
+      peerConnectionRef.current = pc;
+      setupPeerConnectionListeners(pc, withVideo);
 
       // Add the steganographic audio track (cover song + encoded voice) in place of raw mic
       // and the (possibly encoded) video track
@@ -1827,21 +1859,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (withVideo && localVideoTrack) {
         stegoStream.addTrack(localVideoTrack);
       }
-      peerConnectionRef.current.addTrack(localAudioTrack, stegoStream);
+      pc.addTrack(localAudioTrack, stegoStream);
       if (withVideo && localVideoTrack) {
-        peerConnectionRef.current.addTrack(localVideoTrack, stegoStream);
+        pc.addTrack(localVideoTrack, stegoStream);
       }
 
-      peerConnectionRef.current.onicecandidate = (event) => {
-        if (event.candidate) {
-          sendStegoSignaling({
-            type: 'stego_call_ice_candidate',
-            candidate: event.candidate
-          }, targetUser.id.toString());
-        }
+      pc.onicecandidate = (event) => {
+        // Vanilla ICE gathers all candidates upfront; no separate transmission needed
       };
 
-      peerConnectionRef.current.ontrack = (event) => {
+      pc.ontrack = (event) => {
+        if (peerConnectionRef.current !== pc) return;
         let rStream = event.streams[0];
         if (!rStream) {
           console.warn("[Stealth] No stream found in startCall ontrack. Creating fallback MediaStream.");
@@ -1859,12 +1887,33 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
       };
 
-      const offer = await peerConnectionRef.current.createOffer();
-      await peerConnectionRef.current.setLocalDescription(offer);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      // Wait for ICE gathering to complete (Vanilla ICE)
+      await new Promise<void>((resolve) => {
+        let resolved = false;
+        const complete = () => {
+          if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        };
+        if (pc.iceGatheringState === 'complete') {
+          complete();
+        } else {
+          pc.onicegatheringstatechange = () => {
+            if (pc.iceGatheringState === 'complete') {
+              complete();
+            }
+          };
+          setTimeout(complete, 1500); // 1.5s safety timeout
+        }
+      });
 
       sendStegoSignaling({
         type: 'stego_call_offer',
-        offer: offer,
+        offer: pc.localDescription || offer,
         withVideo
       }, targetUser.id.toString());
     } catch (err: any) {
@@ -1875,10 +1924,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         alert(`Could not start video call: ${err.message || 'Unknown media error'}. Please check if the camera is already in use by another application.`);
       }
       endCall();
+    } finally {
+      isCallStartingRef.current = false;
     }
   };
 
   const acceptCall = async () => {
+    if (callStateRef.current !== 'receiving' || isCallAcceptingRef.current) {
+      console.warn("[Stealth-Call] acceptCall ignored because state is not receiving or already accepting:", callStateRef.current);
+      return;
+    }
+    isCallAcceptingRef.current = true;
     try {
       setIsMuted(false);
       setIsVideoOff(false);
@@ -1935,17 +1991,44 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (isVideoCall && localVideoTrack) {
         stegoStream.addTrack(localVideoTrack);
       }
-      peerConnectionRef.current!.addTrack(localAudioTrack, stegoStream);
-      if (isVideoCall && localVideoTrack) {
-        peerConnectionRef.current!.addTrack(localVideoTrack, stegoStream);
+      
+      const pc = peerConnectionRef.current;
+      if (!pc) {
+        throw new Error("PeerConnection is null when accepting call.");
       }
 
-      const answer = await peerConnectionRef.current!.createAnswer();
-      await peerConnectionRef.current!.setLocalDescription(answer);
+      pc.addTrack(localAudioTrack, stegoStream);
+      if (isVideoCall && localVideoTrack) {
+        pc.addTrack(localVideoTrack, stegoStream);
+      }
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      // Wait for ICE gathering to complete (Vanilla ICE)
+      await new Promise<void>((resolve) => {
+        let resolved = false;
+        const complete = () => {
+          if (!resolved) {
+            resolved = true;
+            resolve();
+          }
+        };
+        if (pc.iceGatheringState === 'complete') {
+          complete();
+        } else {
+          pc.onicegatheringstatechange = () => {
+            if (pc.iceGatheringState === 'complete') {
+              complete();
+            }
+          };
+          setTimeout(complete, 1500); // 1.5s safety timeout
+        }
+      });
 
       sendStegoSignaling({
         type: 'stego_call_answer',
-        answer: answer
+        answer: pc.localDescription || answer
       }, callerId || targetUser.id);
 
       setCallState('connected');
@@ -1981,6 +2064,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         alert(`Could not access microphone/camera to accept call: ${err.message || 'Unknown media error'}. Please check permissions.`);
       }
       endCall();
+    } finally {
+      isCallAcceptingRef.current = false;
     }
   };
 
@@ -2762,8 +2847,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         <div className="flex items-center space-x-5 text-[#aebac1]">
           
           
-          <Phone className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(false)} />
-          <Video className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(true)} />
+          {callState === 'idle' ? (
+            <>
+              <Phone className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(false)} />
+              <Video className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => startCall(true)} />
+            </>
+          ) : (
+            <>
+              <Phone className="w-5 h-5 opacity-40 cursor-not-allowed" title="Call in progress" />
+              <Video className="w-5 h-5 opacity-40 cursor-not-allowed" title="Call in progress" />
+            </>
+          )}
           <div className="relative">
              <MoreVertical className="w-5 h-5 cursor-pointer hover:text-[#d1d7db]" onClick={() => { setShowDropdown(!showDropdown); setDropdownView('main'); }} />
              {showDropdown && (

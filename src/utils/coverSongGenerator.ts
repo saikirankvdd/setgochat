@@ -51,7 +51,7 @@ export function selectGenreOrder(pin: string): MusicGenre[] {
  */
 export async function generateCoverSong(pin: string, sampleRate: number = 48000): Promise<Float32Array> {
   const genres = selectGenreOrder(pin);
-  const segmentDuration = 30; // 30 seconds
+  const segmentDuration = 10; // 10 seconds
   const segmentSamples = sampleRate * segmentDuration;
   const totalSamples = segmentSamples * 4;
   const coverSong = new Float32Array(totalSamples);
