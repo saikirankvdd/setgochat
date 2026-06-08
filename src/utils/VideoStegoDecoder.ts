@@ -68,9 +68,7 @@ export class VideoStegoDecoder {
     if (this.isRunning) return;
     this.isRunning = true;
     this.frameIndex = 0;
-    if (this.remoteVideoEl && this.remoteVideoEl.srcObject) {
-      this.processFrame();
-    }
+    console.log("[Stealth-Video-Decoder] Started decoder. Relying on lossless WebSocket channel.");
   }
 
   stop(): void {
