@@ -761,6 +761,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const voiceQueueRef = useRef<number[]>([]);
   const isCallAcceptingRef = useRef<boolean>(false);
   const isCallStartingRef = useRef<boolean>(false);
+  const clockOffsetRef = useRef<number | null>(null);
 
   const [currentResolution, setCurrentResolution] = useState<'240p' | '480p'>('240p');
   const [targetFps, setTargetFpsState] = useState<15 | 30>(30);
@@ -1347,14 +1348,23 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         return;
       }
       console.log("[Stealth-RTP] Received socket packet type:", packet?.type);
-      if (packet.type === 'audio_stego') {
-        if (packet.timestamp) {
-          const age = Date.now() - packet.timestamp;
-          if (age > 1500) {
-            console.warn(`[Stealth-RTP] Dropping stale audio packet (age: ${age}ms)`);
-            return;
-          }
+
+      if (packet.timestamp) {
+        if (clockOffsetRef.current === null) {
+          clockOffsetRef.current = Date.now() - packet.timestamp;
+          console.log("[Stealth-RTP] Established baseline clock offset:", clockOffsetRef.current);
         }
+        const relativeAge = (Date.now() - packet.timestamp) - clockOffsetRef.current;
+        if (Math.abs(relativeAge) > 5000) {
+          clockOffsetRef.current = Date.now() - packet.timestamp;
+          console.log("[Stealth-RTP] Clock shift detected. Reset baseline offset:", clockOffsetRef.current);
+        } else if (relativeAge > 1500) {
+          console.warn(`[Stealth-RTP] Dropping stale packet (type: ${packet.type}, relative age: ${relativeAge}ms)`);
+          return;
+        }
+      }
+
+      if (packet.type === 'audio_stego') {
         try {
           const audioCtx = stealthAudioCtxRef.current;
           if (!audioCtx) {
@@ -1417,13 +1427,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           console.error("[Stealth] Error decoding received socket voice packet:", err);
         }
       } else if (packet.type === 'video_stego') {
-        if (packet.timestamp) {
-          const age = Date.now() - packet.timestamp;
-          if (age > 1500) {
-            console.warn(`[Stealth-RTP] Dropping stale video frame (age: ${age}ms)`);
-            return;
-          }
-        }
         if (videoDecoderRef.current) {
           if (packet.resolution && videoDecoderRef.current.getResolution() !== packet.resolution) {
             videoDecoderRef.current.setResolution(packet.resolution);
@@ -2166,6 +2169,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
 
       coverSongRef.current = null;
+      clockOffsetRef.current = null;
       delete (window as any).stealthRemoteSource;
 
       // Stop video stego if active

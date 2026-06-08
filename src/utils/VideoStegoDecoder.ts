@@ -17,6 +17,7 @@ export class VideoStegoDecoder {
   private isRunning: boolean;
   private wasmEngine: StealthEngine | null;
   private onFrameProcessTime?: (durationMs: number) => void;
+  private lastDecodedFrameIndex: number;
 
 
   constructor(
@@ -49,6 +50,7 @@ export class VideoStegoDecoder {
     this.isRunning = false;
     this.wasmEngine = null;
     this.onFrameProcessTime = onFrameProcessTime;
+    this.lastDecodedFrameIndex = -1;
   }
 
   async init(): Promise<void> {
@@ -99,6 +101,11 @@ export class VideoStegoDecoder {
 
   async decodeFrame(pngBuffer: Uint8Array, frameIndex: number): Promise<void> {
     if (!this.isRunning) return;
+    if (frameIndex <= this.lastDecodedFrameIndex) {
+      console.warn(`[Stealth-Video] Dropping out-of-order frame ${frameIndex} (last decoded: ${this.lastDecodedFrameIndex})`);
+      return;
+    }
+    this.lastDecodedFrameIndex = frameIndex;
     const startTime = performance.now();
     try {
       const decodeCanvas = this.decodeCanvas;
