@@ -1470,47 +1470,25 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             return;
           }
 
-          // Convert remaining bytes to Int16Array samples (Int16 format reduces bandwidth by 50%)
-          const alignedBuffer = payloadBytes.buffer.slice(payloadBytes.byteOffset, payloadBytes.byteOffset + payloadBytes.byteLength);
-          const pcm16Samples = new Int16Array(alignedBuffer);
+          // payloadBytes contains the UTF-8 bytes of the encrypted string directly (low-bandwidth mode)
+          const encryptedText = strFromU8(payloadBytes);
+          const decrypted = decryptData(encryptedText, sessionInfo.pin);
           
-          // Extract LSB directly from Int16 samples of this specific self-contained packet
-          const packetBits: number[] = [];
-          for (let i = 0; i < pcm16Samples.length; i++) {
-            packetBits.push(pcm16Samples[i] & 1);
-          }
-
-          // Read 32-bit length header from the beginning of this packet
-          if (packetBits.length >= 32) {
-            let len = 0;
-            for (let i = 0; i < 32; i++) {
-              len = (len << 1) | packetBits[i];
+          if (decrypted) {
+            const compressedBytes = base64ToUint8(decrypted);
+            const decompressedBytes = gunzipSync(compressedBytes);
+            const voice8kHz = new Float32Array(decompressedBytes.length / 2);
+            for (let i = 0; i < voice8kHz.length; i++) {
+              const low = decompressedBytes[i * 2];
+              const high = decompressedBytes[i * 2 + 1];
+              let s16 = low | (high << 8);
+              if (s16 & 0x8000) s16 |= ~0xFFFF;
+              voice8kHz[i] = s16 / 32768.0;
             }
-
-            // Verify the length is valid for this packet
-            if (len > 0 && len <= packetBits.length - 32) {
-              const chunkBits = packetBits.slice(32, 32 + len);
-              const bitString = chunkBits.join('');
-              const encryptedText = binaryToString(bitString);
-              const decrypted = decryptData(encryptedText, sessionInfo.pin);
-              
-              if (decrypted) {
-                const compressedBytes = base64ToUint8(decrypted);
-                const decompressedBytes = gunzipSync(compressedBytes);
-                const voice8kHz = new Float32Array(decompressedBytes.length / 2);
-                for (let i = 0; i < voice8kHz.length; i++) {
-                  const low = decompressedBytes[i * 2];
-                  const high = decompressedBytes[i * 2 + 1];
-                  let s16 = low | (high << 8);
-                  if (s16 & 0x8000) s16 |= ~0xFFFF;
-                  voice8kHz[i] = s16 / 32768.0;
-                }
-                const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
-                const voicePlayerNode = (window as any).stealthVoicePlayerNode;
-                if (voicePlayerNode) {
-                  voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
-                }
-              }
+            const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+            const voicePlayerNode = (window as any).stealthVoicePlayerNode;
+            if (voicePlayerNode) {
+              voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
             }
           }
         } catch (err) {
@@ -1821,33 +1799,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: bitsArray });
 
           // --- MAIN THREAD AUDIO PACKAGING FOR SOCKET CHANNEL ---
-          // Extract a matching length of samples from the cover song
-          const coverChunk = new Float32Array(triggerLength);
-          for (let i = 0; i < triggerLength; i++) {
-            let sample = song[mainCoverIndexRef.current];
-            mainCoverIndexRef.current = (mainCoverIndexRef.current + 1) % song.length;
-            coverChunk[i] = sample;
-          }
-
-          // Embed the bits into the coverChunk's LSBs directly in JS
-          const usableLength = Math.min(bitsArray.length, triggerLength);
-          for (let i = 0; i < usableLength; i++) {
-            const bit = bitsArray[i];
-            let sample = coverChunk[i];
-            let s16 = Math.round(sample * 32767);
-            s16 = bit === 1 ? (s16 | 1) : (s16 & ~1);
-            coverChunk[i] = s16 / 32767;
-          }
-
-          // Convert coverChunk to 16-bit PCM (Int16) to reduce bandwidth by 50%
-          const pcm16 = new Int16Array(triggerLength);
-          for (let i = 0; i < triggerLength; i++) {
-            pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(coverChunk[i] * 32767)));
-          }
-          const pcmBytes = new Uint8Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength);
+          // Send the encrypted base64 payload directly to reduce bandwidth by 95% (preventing TCP bufferbloat & lag)
+          const payloadBytes = strToU8(encrypted);
 
           // Wrap stego audio in a fake RTP packet (12-byte header + payload)
-          const rtpPacket = new Uint8Array(12 + pcmBytes.length);
+          const rtpPacket = new Uint8Array(12 + payloadBytes.length);
           rtpPacket[0] = 0x80; // Version 2
           rtpPacket[1] = 0x78; // Payload type 120
 
@@ -1869,7 +1825,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rtpPacket[8] = 0x12; rtpPacket[9] = 0x34; rtpPacket[10] = 0x56; rtpPacket[11] = 0x78;
 
           // Copy stego payload
-          rtpPacket.set(pcmBytes, 12);
+          rtpPacket.set(payloadBytes, 12);
 
           // Apply natural human-like jitter variation (0-15ms)
           const jitter = Math.floor(Math.random() * 16);
