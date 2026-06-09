@@ -1438,59 +1438,43 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const alignedBuffer = payloadBytes.buffer.slice(payloadBytes.byteOffset, payloadBytes.byteOffset + payloadBytes.byteLength);
           const pcm16Samples = new Int16Array(alignedBuffer);
           
-          // Extract LSB directly from Int16 samples
+          // Extract LSB directly from Int16 samples of this specific self-contained packet
+          const packetBits: number[] = [];
           for (let i = 0; i < pcm16Samples.length; i++) {
-            collectedAudioBitsRef.current.push(pcm16Samples[i] & 1);
+            packetBits.push(pcm16Samples[i] & 1);
           }
 
-          // Process bit stream using 32-bit length header framing
-          while (true) {
-            if (expectedAudioBitsLengthRef.current === 0) {
-              if (collectedAudioBitsRef.current.length >= 32) {
-                let len = 0;
-                for (let i = 0; i < 32; i++) {
-                  const bit = collectedAudioBitsRef.current[i];
-                  len = (len << 1) | bit;
-                }
-                expectedAudioBitsLengthRef.current = len;
-                collectedAudioBitsRef.current.splice(0, 32);
-              } else {
-                break;
-              }
+          // Read 32-bit length header from the beginning of this packet
+          if (packetBits.length >= 32) {
+            let len = 0;
+            for (let i = 0; i < 32; i++) {
+              len = (len << 1) | packetBits[i];
             }
 
-            if (expectedAudioBitsLengthRef.current > 0) {
-              if (collectedAudioBitsRef.current.length >= expectedAudioBitsLengthRef.current) {
-                const chunk = collectedAudioBitsRef.current.splice(0, expectedAudioBitsLengthRef.current);
-                expectedAudioBitsLengthRef.current = 0; // Reset expected length
-
-                const bitString = chunk.join('');
-                const encryptedText = binaryToString(bitString);
-                const decrypted = decryptData(encryptedText, sessionInfo.pin);
-                
-                if (decrypted) {
-                  const compressedBytes = base64ToUint8(decrypted);
-                  const decompressedBytes = gunzipSync(compressedBytes);
-                  const voice8kHz = new Float32Array(decompressedBytes.length / 2);
-                  for (let i = 0; i < voice8kHz.length; i++) {
-                    const low = decompressedBytes[i * 2];
-                    const high = decompressedBytes[i * 2 + 1];
-                    let s16 = low | (high << 8);
-                    if (s16 & 0x8000) s16 |= ~0xFFFF;
-                    voice8kHz[i] = s16 / 32768.0;
-                  }
-                  const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
-                  const voicePlayerNode = (window as any).stealthVoicePlayerNode;
-                  if (voicePlayerNode) {
-                    voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
-                  }
+            // Verify the length is valid for this packet
+            if (len > 0 && len <= packetBits.length - 32) {
+              const chunkBits = packetBits.slice(32, 32 + len);
+              const bitString = chunkBits.join('');
+              const encryptedText = binaryToString(bitString);
+              const decrypted = decryptData(encryptedText, sessionInfo.pin);
+              
+              if (decrypted) {
+                const compressedBytes = base64ToUint8(decrypted);
+                const decompressedBytes = gunzipSync(compressedBytes);
+                const voice8kHz = new Float32Array(decompressedBytes.length / 2);
+                for (let i = 0; i < voice8kHz.length; i++) {
+                  const low = decompressedBytes[i * 2];
+                  const high = decompressedBytes[i * 2 + 1];
+                  let s16 = low | (high << 8);
+                  if (s16 & 0x8000) s16 |= ~0xFFFF;
+                  voice8kHz[i] = s16 / 32768.0;
                 }
-              } else {
-                break;
+                const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+                const voicePlayerNode = (window as any).stealthVoicePlayerNode;
+                if (voicePlayerNode) {
+                  voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
+                }
               }
-            } else {
-              expectedAudioBitsLengthRef.current = 0;
-              break;
             }
           }
         } catch (err) {
