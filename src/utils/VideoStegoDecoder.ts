@@ -159,7 +159,7 @@ export class VideoStegoDecoder {
         this.setResolution(res);
       }
 
-      const decCtx = decodeCanvas.getContext('2d');
+      const decCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
       if (!decCtx) return;
 
       // 1. Draw received stego video to decode canvas
