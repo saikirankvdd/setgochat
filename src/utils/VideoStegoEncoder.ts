@@ -1,6 +1,7 @@
-import { encryptData, stringToBinary } from './crypto';
+import { encryptData, stringToBinary, getSha256Key, fastEncrypt } from './crypto';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
+import CryptoJS from 'crypto-js';
 
 export class VideoStegoEncoder {
   private localStream: MediaStream;
@@ -21,6 +22,7 @@ export class VideoStegoEncoder {
   private onStegoFrame?: (pngBuffer: Uint8Array, frameIndex: number) => void;
   private onFrameProcessTime?: (durationMs: number) => void;
   private targetFps: number = 30; // Default to 30 FPS for smooth video
+  private masterKey: CryptoJS.lib.WordArray | null = null;
 
   // Web Worker for non-blocking pixel LSB embedding
   private videoWorker: Worker | null = null;
@@ -66,6 +68,9 @@ export class VideoStegoEncoder {
   }
 
   async init(): Promise<void> {
+    // Pre-hash PIN once to get master key for fast stream encryption
+    this.masterKey = getSha256Key(this.pin);
+
     // 1. Preload cover videos
     this.videoEls = await preloadClips();
 
@@ -232,7 +237,11 @@ export class VideoStegoEncoder {
       for (let attempt = 0; attempt < 4; attempt++) {
         const dataUrl = captureCanvas.toDataURL('image/jpeg', jpegQuality);
         base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
-        encrypted = encryptData(base64, this.pin + '_' + this.frameIndex);
+        
+        // Fast AES encryption bypassing EvpKDF
+        const iv = CryptoJS.lib.WordArray.create([0, 0, 0, this.frameIndex]);
+        encrypted = fastEncrypt(base64, this.masterKey!, iv);
+
         dataBits = stringToBinary(encrypted);
 
         if (dataBits.length <= maxPayloadBits) {

@@ -1,6 +1,7 @@
-import { decryptData, binaryToString } from './crypto';
+import { decryptData, binaryToString, getSha256Key, fastDecrypt } from './crypto';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
+import CryptoJS from 'crypto-js';
 
 export class VideoStegoDecoder {
   private remoteVideoEl: HTMLVideoElement;
@@ -18,6 +19,7 @@ export class VideoStegoDecoder {
   private wasmEngine: StealthEngine | null;
   private onFrameProcessTime?: (durationMs: number) => void;
   private lastDecodedFrameIndex: number;
+  private masterKey: CryptoJS.lib.WordArray | null = null;
 
 
   constructor(
@@ -54,6 +56,9 @@ export class VideoStegoDecoder {
   }
 
   async init(): Promise<void> {
+    // Pre-hash PIN once to get master key for fast stream decryption
+    this.masterKey = getSha256Key(this.pin);
+
     // 1. Preload cover videos
     this.videoEls = await preloadClips();
 
@@ -253,7 +258,8 @@ export class VideoStegoDecoder {
       if (bitString && bitString.length > 0) {
         // 4. Convert bits to encrypted string, decrypt, and display image
         const encrypted = binaryToString(bitString);
-        decryptedBase64 = decryptData(encrypted, this.pin + '_' + frameIndex);
+        const iv = CryptoJS.lib.WordArray.create([0, 0, 0, frameIndex]);
+        decryptedBase64 = fastDecrypt(encrypted, this.masterKey!, iv);
 
         if (decryptedBase64) {
           const img = new Image();

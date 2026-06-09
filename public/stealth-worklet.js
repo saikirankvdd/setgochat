@@ -61,7 +61,7 @@ class StealthProcessor extends AudioWorkletProcessor {
       console.log("AudioWorklet: Mode set to PLAYBACK.");
     } else if (data.type === 'PUSH_PLAYBACK') {
       this.playbackQueue.push(...data.samples);
-      const maxAllowed = Math.round(0.25 * sampleRate);
+      const maxAllowed = Math.round(0.08 * sampleRate); // 80ms max buffer to prevent lag accumulation
       if (this.playbackQueue.length > maxAllowed) {
         this.playbackQueue.splice(0, this.playbackQueue.length - maxAllowed);
       }

@@ -97,3 +97,35 @@ export const base64ToUint8 = (base64: string): Uint8Array => {
   }
   return arr;
 };
+
+// Cache for derived CryptoJS keys to prevent expensive EvpKDF on every frame/chunk
+const keyCache = new Map<string, CryptoJS.lib.WordArray>();
+
+export const getSha256Key = (pin: string): CryptoJS.lib.WordArray => {
+  let cached = keyCache.get(pin);
+  if (!cached) {
+    cached = CryptoJS.SHA256(pin);
+    keyCache.set(pin, cached);
+  }
+  return cached;
+};
+
+/**
+ * Fast synchronous AES-256 encryption using a pre-hashed key and explicit IV
+ */
+export const fastEncrypt = (data: string, key: CryptoJS.lib.WordArray, iv: CryptoJS.lib.WordArray): string => {
+  return CryptoJS.AES.encrypt(data, key, { iv: iv }).toString();
+};
+
+/**
+ * Fast synchronous AES-256 decryption using a pre-hashed key and explicit IV
+ */
+export const fastDecrypt = (ciphertext: string, key: CryptoJS.lib.WordArray, iv: CryptoJS.lib.WordArray): string => {
+  try {
+    const bytes = CryptoJS.AES.decrypt(ciphertext, key, { iv: iv });
+    return bytes.toString(CryptoJS.enc.Utf8);
+  } catch (e) {
+    return '';
+  }
+};
+

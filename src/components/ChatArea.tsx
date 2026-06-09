@@ -6,7 +6,7 @@ import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, S
 import { SharedMediaViewer } from './SharedMediaViewer';
 import { useModal } from '../contexts/ModalContext';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
-import { encryptData, decryptData, stringToBinary, binaryToString, uint8ToBase64, base64ToUint8 } from '../utils/crypto';
+import { encryptData, decryptData, stringToBinary, binaryToString, uint8ToBase64, base64ToUint8, getSha256Key, fastEncrypt, fastDecrypt } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createDynamicCarrier, encodeLSB4Bit, decodeLSB4Bit, createDynamicCarrier4Bit, generateMusicCarrier, encodeLSB1Bit, decodeLSB1Bit } from '../utils/stego';
 import { generateWallpaperCanvas, encodeImageLSB, decodeImageLSB } from '../utils/imageStego';
 import { strToU8, gzipSync, strFromU8, gunzipSync } from 'fflate';
@@ -763,6 +763,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const voiceQueueRef = useRef<number[]>([]);
   const isCallAcceptingRef = useRef<boolean>(false);
   const isCallStartingRef = useRef<boolean>(false);
+  const derivedKeysRef = useRef<{ key: CryptoJS.lib.WordArray; iv: CryptoJS.lib.WordArray; pin: string } | null>(null);
+  const getDerivedKeys = (pin: string) => {
+    if (derivedKeysRef.current && derivedKeysRef.current.pin === pin) {
+      return derivedKeysRef.current;
+    }
+    const key = getSha256Key(pin);
+    const iv = CryptoJS.lib.WordArray.create([0, 0, 0, 0]);
+    derivedKeysRef.current = { key, iv, pin };
+    return derivedKeysRef.current;
+  };
   const callIdRef = useRef<string | null>(null);
   const endedCallIdsRef = useRef<Set<string>>(new Set());
   const clockOffsetRef = useRef<number | null>(null);
@@ -1472,7 +1482,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           // payloadBytes contains the UTF-8 bytes of the encrypted string directly (low-bandwidth mode)
           const encryptedText = strFromU8(payloadBytes);
-          const decrypted = decryptData(encryptedText, sessionInfo.pin);
+          
+          const keys = getDerivedKeys(sessionInfo.pin);
+          const iv = CryptoJS.lib.WordArray.create([0, 0, 0, seq]);
+          const decrypted = fastDecrypt(encryptedText, keys.key, iv);
           
           if (decrypted) {
             const compressedBytes = base64ToUint8(decrypted);
@@ -1763,7 +1776,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         const inputData = e.inputBuffer.getChannelData(0);
         micAccumulator.push(...(Array.from(inputData) as number[]));
 
-        const triggerLength = audioCtx.sampleRate === 48000 ? 4460 : 4096;
+        const triggerLength = audioCtx.sampleRate === 48000 ? 2040 : 2048;
         if (micAccumulator.length >= triggerLength) {
           const chunk = micAccumulator.splice(0, triggerLength);
           const rawFloats = Float32Array.from(chunk);
@@ -1779,10 +1792,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             bytes[i * 2 + 1] = (s16 >> 8) & 0xFF; // High byte
           }
 
-          const compressed = gzipSync(bytes, { level: 6 });
+          // Use compression level 1 for ultra-low latency & CPU savings
+          const compressed = gzipSync(bytes, { level: 1 });
           const base64 = uint8ToBase64(compressed);
 
-          const encrypted = encryptData(base64, sessionInfo.pin);
+          // Use fastEncrypt with sequence number as IV to run under 1ms
+          const seq = audioSeqRef.current;
+          const keys = getDerivedKeys(sessionInfo.pin);
+          const iv = CryptoJS.lib.WordArray.create([0, 0, 0, seq]);
+          const encrypted = fastEncrypt(base64, keys.key, iv);
 
           const bits = stringToBinary(encrypted);
 
@@ -1808,7 +1826,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rtpPacket[1] = 0x78; // Payload type 120
 
           // Sequence number
-          const seq = audioSeqRef.current;
           rtpPacket[2] = (seq >> 8) & 0xFF;
           rtpPacket[3] = seq & 0xFF;
           audioSeqRef.current = (seq + 1) & 0xFFFF;
@@ -1951,8 +1968,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     isCallStartingRef.current = true;
     try {
       const isMobile = isMobileDevice();
-      const initialResolution = '240p';
-      const initialFps = isMobile ? 5 : 10;
+      const initialResolution = '480p';
+      const initialFps = 30;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);
@@ -1964,7 +1981,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setIsVideoOff(false);
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
-        video: withVideo ? { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: isMobile ? 5 : 15 } } : false
+        video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false
       });
       
       // --- V2 STEALTH ARCHITECTURE INJECTION ---
@@ -2102,8 +2119,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     isCallAcceptingRef.current = true;
     try {
       const isMobile = isMobileDevice();
-      const initialResolution = '240p';
-      const initialFps = isMobile ? 5 : 10;
+      const initialResolution = '480p';
+      const initialFps = 30;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);
@@ -2113,7 +2130,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setIsVideoOff(false);
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
-        video: isVideoCall ? { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: isMobile ? 5 : 15 } } : false
+        video: isVideoCall ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false
       });
       setLocalStream(stream);
       localStreamRef.current = stream;
