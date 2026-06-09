@@ -71,6 +71,7 @@ export async function preloadClips(): Promise<HTMLVideoElement[]> {
       video.oncanplay = handleLoad;
       video.onloadeddata = handleLoad;
       video.load();
+      video.play().catch(() => {}); // Warm up video element to avoid delay in readyState transition
       
       // Fallback timeout of 3 seconds to avoid blocking the call in case of network issues
       setTimeout(handleLoad, 3000);
@@ -101,6 +102,11 @@ export function getFrameAtIndex(
   const width = canvas.width;
   const height = canvas.height;
 
+  // Ensure the video is playing to progress naturally and transition to readyState >= 2
+  if (videoEl && videoEl.paused && !videoEl.error) {
+    videoEl.play().catch(() => {});
+  }
+
   // Fallback check: if the video is not ready, has an error, or is null/undefined (e.g. WebM on iOS)
   if (!videoEl || videoEl.readyState < 2 || videoEl.error) {
     // Draw a beautiful procedural fallback (moving ambient gradient)
@@ -128,11 +134,6 @@ export function getFrameAtIndex(
     ctx.fill();
     
     return ctx.getImageData(0, 0, width, height);
-  }
-
-  // Ensure the video is playing to progress naturally
-  if (videoEl.paused) {
-    videoEl.play().catch(() => {});
   }
 
   ctx.drawImage(videoEl, 0, 0);

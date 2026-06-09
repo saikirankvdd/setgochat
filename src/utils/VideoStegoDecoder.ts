@@ -141,6 +141,24 @@ export class VideoStegoDecoder {
         return;
       }
 
+      // Check if resolution is ramping up / too low
+      if (video.videoWidth < 320 || video.videoHeight < 240) {
+        const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
+        const coverVideo = this.videoEls[clipIdx];
+        const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
+        const displayCtx = displayCanvas.getContext('2d');
+        displayCtx?.putImageData(coverImageData, 0, 0);
+        this.frameIndex++;
+        requestAnimationFrame(this.processFrame);
+        return;
+      }
+
+      // Check if incoming resolution changed/mismatches decoder resolution
+      if (video.videoWidth !== this.width || video.videoHeight !== this.height) {
+        const res = video.videoWidth === 320 ? '240p' : '480p';
+        this.setResolution(res);
+      }
+
       const decCtx = decodeCanvas.getContext('2d');
       if (!decCtx) return;
 

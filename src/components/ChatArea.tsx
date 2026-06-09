@@ -763,6 +763,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const voiceQueueRef = useRef<number[]>([]);
   const isCallAcceptingRef = useRef<boolean>(false);
   const isCallStartingRef = useRef<boolean>(false);
+  const callIdRef = useRef<string | null>(null);
+  const endedCallIdsRef = useRef<Set<string>>(new Set());
   const clockOffsetRef = useRef<number | null>(null);
   const mainCoverIndexRef = useRef<number>(0);
   const audioSeqRef = useRef<number>(0);
@@ -1164,21 +1166,27 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           }
 
           try {
-            if (decompressed.includes('"type":"stego_call_offer"')) {
+            if (decompressed.includes('"type":"stego_call_')) {
               const parsed = JSON.parse(decompressed);
+              
+              // Verify callId is not already ended
+              if (parsed.callId && endedCallIdsRef.current.has(parsed.callId)) {
+                console.warn("[Stealth-Call] Discarding stale stego signaling from already ended call:", parsed.callId);
+                return;
+              }
+              // Verify timestamp is not too old (e.g. > 15s)
+              if (parsed.timestamp && Date.now() - parsed.timestamp > 15000) {
+                console.warn("[Stealth-Call] Discarding stale stego signaling payload (age > 15s):", Date.now() - parsed.timestamp);
+                return;
+              }
+
               if (parsed.type === 'stego_call_offer') {
                 handleCallOffer({ ...parsed, fromId: data.fromId, sessionId: sessionInfo.sessionId });
                 return; // Do not show in UI
-              }
-            } else if (decompressed.includes('"type":"stego_call_answer"')) {
-              const parsed = JSON.parse(decompressed);
-              if (parsed.type === 'stego_call_answer') {
+              } else if (parsed.type === 'stego_call_answer') {
                 handleCallAnswer({ ...parsed, fromId: data.fromId, sessionId: sessionInfo.sessionId });
                 return; // Do not show in UI
-              }
-            } else if (decompressed.includes('"type":"stego_call_ice_candidate"')) {
-              const parsed = JSON.parse(decompressed);
-              if (parsed.type === 'stego_call_ice_candidate') {
+              } else if (parsed.type === 'stego_call_ice_candidate') {
                 handleIceCandidate({ ...parsed, fromId: data.fromId, sessionId: sessionInfo.sessionId });
                 return; // Do not show in UI
               }
@@ -1259,6 +1267,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const handleCallOffer = async (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
+      
+      // Verify callId is not already ended
+      if (data.callId && endedCallIdsRef.current.has(data.callId)) {
+        console.warn("[Stealth-Call] Ignored stale stego_call_offer with already ended callId:", data.callId);
+        return;
+      }
+      if (data.timestamp && Date.now() - data.timestamp > 15000) {
+        console.warn("[Stealth-Call] Ignored stale stego_call_offer (age > 15s):", Date.now() - data.timestamp);
+        return;
+      }
+      
       if (callStateRef.current !== 'idle') {
         console.warn("[Stealth-Call] Received call offer but call state is not idle:", callStateRef.current);
         if (!peerConnectionRef.current || peerConnectionRef.current.connectionState === 'closed' || peerConnectionRef.current.connectionState === 'failed') {
@@ -1267,6 +1286,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         } else {
           return;
         }
+      }
+      
+      if (data.callId) {
+        callIdRef.current = data.callId;
       }
       setCallState('receiving');
       setCallerId(data.fromId);
@@ -1283,7 +1306,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           socket.emit('call_ice_candidate', {
             sessionId: sessionInfo.sessionId,
             candidate: event.candidate,
-            toId: data.fromId
+            toId: data.fromId,
+            callId: callIdRef.current
           });
         }
       };
@@ -1322,6 +1346,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const handleCallAnswer = async (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
+      if (data.callId && data.callId !== callIdRef.current) {
+        console.warn("[Stealth-Call] Mismatched callId in stego_call_answer. Expected:", callIdRef.current, "Got:", data.callId);
+        return;
+      }
+      if (data.timestamp && Date.now() - data.timestamp > 15000) {
+        console.warn("[Stealth-Call] Ignored stale stego_call_answer (age > 15s)");
+        return;
+      }
       if (peerConnectionRef.current) {
         await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
         setCallState('connected');
@@ -1337,6 +1369,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const handleIceCandidate = async (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
+      if (data.callId && data.callId !== callIdRef.current) {
+        console.warn("[Stealth-Call] Ignored ICE candidate for mismatched callId:", data.callId);
+        return;
+      }
       if (peerConnectionRef.current) {
         if (peerConnectionRef.current.remoteDescription) {
           try {
@@ -1608,7 +1644,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   const sendStegoSignaling = (payloadObj: any, toId: string) => {
     try {
-      const jsonStr = JSON.stringify(payloadObj);
+      const jsonStr = JSON.stringify({
+        ...payloadObj,
+        timestamp: Date.now(),
+        callId: callIdRef.current
+      });
       const compressed = gzipSync(strToU8(jsonStr), { level: 6 });
       const compressedBase64 = uint8ToBase64(compressed);
       
@@ -1731,6 +1771,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
       const micSource = audioCtx.createMediaStreamSource(rawStream);
       const micProcessor = audioCtx.createScriptProcessor(512, 1, 1);
+      (window as any).stealthMicSource = micSource;
       micSource.connect(micProcessor);
 
       const silentGain = audioCtx.createGain();
@@ -1933,6 +1974,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       gestureAudioCtx.resume().catch(err => console.warn("[Stealth-Gesture] AudioContext resume failed:", err));
     }
 
+    // Initialize decode pipeline immediately in user gesture to ensure it's allowed to play audio
+    await startStealthAudioDecode(null as any);
+
+    const callId = Math.random().toString(36).substr(2, 9);
+    callIdRef.current = callId;
+
     if (sessionInfo.pin === 'DECRYPTION_FAILED') {
       showModal({
         title: 'Encryption Error',
@@ -2089,6 +2136,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       gestureAudioCtx.resume().catch(err => console.warn("[Stealth-Gesture] AudioContext resume failed:", err));
     }
 
+    // Initialize decode pipeline immediately in user gesture to ensure it's allowed to play audio
+    await startStealthAudioDecode(null as any);
+
     if (callStateRef.current !== 'receiving' || isCallAcceptingRef.current) {
       console.warn("[Stealth-Call] acceptCall ignored because state is not receiving or already accepting:", callStateRef.current);
       return;
@@ -2219,6 +2269,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const endCall = (emit = true) => {
+    if (callIdRef.current) {
+      endedCallIdsRef.current.add(callIdRef.current);
+    }
+    callIdRef.current = null;
+
     if (emit && callState === 'calling') {
       socket.emit('log_call', { toId: targetUser.id, status: 'missed' });
       socket.emit('send_message', { sessionId: sessionInfo.sessionId, fromId: user.id, toId: targetUser.id, type: 'missed_call' });
@@ -2289,8 +2344,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       // Clean up processors and players
       const micProcessor = (window as any).stealthMicProcessor;
       if (micProcessor) {
+        micProcessor.onaudioprocess = null;
         micProcessor.disconnect();
         delete (window as any).stealthMicProcessor;
+      }
+      const micSource = (window as any).stealthMicSource;
+      if (micSource) {
+        micSource.disconnect();
+        delete (window as any).stealthMicSource;
       }
       if ((window as any).stealthVoicePlayerNode) {
         (window as any).stealthVoicePlayerNode.port.postMessage({ type: 'STOP' });
