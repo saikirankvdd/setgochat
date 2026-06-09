@@ -1980,7 +1980,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setIsMuted(false);
       setIsVideoOff(false);
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
         video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false
       });
       
@@ -2129,7 +2133,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setIsMuted(false);
       setIsVideoOff(false);
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
         video: isVideoCall ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false
       });
       setLocalStream(stream);
