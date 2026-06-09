@@ -151,7 +151,19 @@ export class VideoStegoDecoder {
 
       const totalPixels = this.width * this.height;
       const totalChannels = totalPixels * 3;
-      const maxUsable = totalChannels - 32;
+      
+      // 1. Extract frame index in JS from first 32 channels (logical channels 0-31)
+      const encFrameBytes = new Uint8Array(4);
+      let channelIdxIdx = 0;
+      for (let i = 0; i < 32; i++) {
+        if (channelIdxIdx % 4 === 3) channelIdxIdx++; // skip alpha
+        const bit = pixels[channelIdxIdx] & 1;
+        const byteIdx = Math.floor(i / 8);
+        const bitIdx = 7 - (i % 8);
+        encFrameBytes[byteIdx] |= (bit << bitIdx);
+        channelIdxIdx++;
+      }
+      const frameIndex = this.decryptFrameIndexJS(encFrameBytes, this.pin);
 
       let bitString = '';
 
@@ -161,28 +173,33 @@ export class VideoStegoDecoder {
         bitString = this.wasmEngine.extract_video_frame(pixelBytes, this.pin, this.frameIndex);
       } else {
         // Fallback: Use JS LSB extraction
-        const encBytes = new Uint8Array(4);
+        const maxUsable = totalChannels - 64;
         let channelIdx = 0;
+        // Skip first 32 channels (frame index already extracted)
         for (let i = 0; i < 32; i++) {
-          if (channelIdx % 4 === 3) channelIdx++; // skip alpha
-          
-          const bit = pixels[channelIdx] & 1;
-          const byteIdx = Math.floor(i / 8);
-          const bitIdx = 7 - (i % 8);
-          encBytes[byteIdx] |= (bit << bitIdx);
-          
+          if (channelIdx % 4 === 3) channelIdx++;
           channelIdx++;
         }
 
-        const dataLength = this.decryptLengthHeaderJS(encBytes, this.pin + '_' + this.frameIndex);
+        // Read length header from next 32 channels (logical index 32-63)
+        const encLenBytes = new Uint8Array(4);
+        for (let i = 0; i < 32; i++) {
+          if (channelIdx % 4 === 3) channelIdx++; // skip alpha
+          const bit = pixels[channelIdx] & 1;
+          const byteIdx = Math.floor(i / 8);
+          const bitIdx = 7 - (i % 8);
+          encLenBytes[byteIdx] |= (bit << bitIdx);
+          channelIdx++;
+        }
+        const dataLength = this.decryptLengthHeaderJS(encLenBytes, this.pin + '_' + frameIndex);
 
         if (dataLength > 0 && dataLength <= maxUsable) {
           const stride = Math.floor(maxUsable / dataLength);
-          const prng = new JS_PRNG(this.pin + '_scatter_' + this.frameIndex);
+          const prng = new JS_PRNG(this.pin + '_scatter_' + frameIndex);
 
           for (let i = 0; i < dataLength; i++) {
             const relativeLogicalIdx = i * stride + Math.floor(prng.next() * stride);
-            const targetLogicalIdx = 32 + relativeLogicalIdx;
+            const targetLogicalIdx = 64 + relativeLogicalIdx;
             const actualIdx = targetLogicalIdx + Math.floor(targetLogicalIdx / 3);
 
             const bit = pixels[actualIdx] & 1;
@@ -194,7 +211,7 @@ export class VideoStegoDecoder {
       if (bitString && bitString.length > 0) {
         // 4. Convert bits to encrypted string, decrypt, and display image
         const encrypted = binaryToString(bitString);
-        const base64 = decryptData(encrypted, this.pin + '_' + this.frameIndex);
+        const base64 = decryptData(encrypted, this.pin + '_' + frameIndex);
 
         if (base64) {
           const img = new Image();
@@ -206,7 +223,7 @@ export class VideoStegoDecoder {
         }
 
         // Update progress percentage
-        const usagePct = ((32 + bitString.length) / totalChannels) * 100;
+        const usagePct = ((64 + bitString.length) / totalChannels) * 100;
         this.onProgress(Math.min(100, Math.round(usagePct)));
       } else {
         // If decryption failed or is corrupted, clear local display or show cover frame
@@ -224,6 +241,15 @@ export class VideoStegoDecoder {
 
     requestAnimationFrame(this.processFrame);
   };
+
+  private decryptFrameIndexJS(encBytes: Uint8Array, pin: string): number {
+    const prng = new JS_PRNG('VID_IDX_' + pin);
+    const decrypted = new Uint8Array(4);
+    for (let i = 0; i < 4; i++) {
+      decrypted[i] = encBytes[i] ^ Math.floor(prng.next() * 256);
+    }
+    return (decrypted[0] << 24) | (decrypted[1] << 16) | (decrypted[2] << 8) | decrypted[3];
+  }
 
   private decryptLengthHeaderJS(encBytes: Uint8Array, pin: string): number {
     const prng = new JS_PRNG('VID_HDR_' + pin);

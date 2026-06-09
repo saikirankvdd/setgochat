@@ -764,6 +764,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const isCallAcceptingRef = useRef<boolean>(false);
   const isCallStartingRef = useRef<boolean>(false);
   const clockOffsetRef = useRef<number | null>(null);
+  const mainCoverIndexRef = useRef<number>(0);
+  const audioSeqRef = useRef<number>(0);
+  const audioTsRef = useRef<number>(0);
 
   const [currentResolution, setCurrentResolution] = useState<'240p' | '480p'>('240p');
   const [targetFps, setTargetFpsState] = useState<5 | 10 | 15 | 30>(10);
@@ -1289,8 +1292,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         if (peerConnectionRef.current !== pc) return;
         let rStream = event.streams[0];
         if (!rStream) {
-          console.warn("[Stealth] No stream found in handleCallOffer ontrack. Creating fallback MediaStream.");
-          rStream = new MediaStream();
+          console.warn("[Stealth] No stream found in handleCallOffer ontrack. Using fallback MediaStream.");
+          rStream = remoteStreamRef.current || new MediaStream();
           rStream.addTrack(event.track);
         }
         // Disable cover audio track from WebRTC so user doesn't hear it
@@ -1299,7 +1302,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           console.log("[Stealth-RTP] Disabled remote WebRTC audio track to mute cover song.");
         });
         remoteStreamRef.current = rStream;
-        setRemoteStream(rStream);
+        const freshStream = new MediaStream(rStream.getTracks());
+        setRemoteStream(freshStream);
       };
 
       try {
@@ -1792,6 +1796,66 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           // Push bits to the worklet to be embedded
           workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: bitsArray });
+
+          // --- MAIN THREAD AUDIO PACKAGING FOR SOCKET CHANNEL ---
+          // Extract a matching length of samples from the cover song
+          const coverChunk = new Float32Array(triggerLength);
+          for (let i = 0; i < triggerLength; i++) {
+            let sample = song[mainCoverIndexRef.current];
+            mainCoverIndexRef.current = (mainCoverIndexRef.current + 1) % song.length;
+            coverChunk[i] = sample;
+          }
+
+          // Embed the bits into the coverChunk's LSBs directly in JS
+          const usableLength = Math.min(bitsArray.length, triggerLength);
+          for (let i = 0; i < usableLength; i++) {
+            const bit = bitsArray[i];
+            let sample = coverChunk[i];
+            let s16 = Math.round(sample * 32767);
+            s16 = bit === 1 ? (s16 | 1) : (s16 & ~1);
+            coverChunk[i] = s16 / 32767;
+          }
+
+          // Convert coverChunk to byte array
+          const floatBytes = new Uint8Array(coverChunk.buffer, coverChunk.byteOffset, coverChunk.byteLength);
+
+          // Wrap stego audio in a fake RTP packet (12-byte header + payload)
+          const rtpPacket = new Uint8Array(12 + floatBytes.length);
+          rtpPacket[0] = 0x80; // Version 2
+          rtpPacket[1] = 0x78; // Payload type 120
+
+          // Sequence number
+          const seq = audioSeqRef.current;
+          rtpPacket[2] = (seq >> 8) & 0xFF;
+          rtpPacket[3] = seq & 0xFF;
+          audioSeqRef.current = (seq + 1) & 0xFFFF;
+
+          // Timestamp
+          const ts = audioTsRef.current;
+          rtpPacket[4] = (ts >> 24) & 0xFF;
+          rtpPacket[5] = (ts >> 16) & 0xFF;
+          rtpPacket[6] = (ts >> 8) & 0xFF;
+          rtpPacket[7] = ts & 0xFF;
+          audioTsRef.current = ts + triggerLength;
+
+          // SSRC
+          rtpPacket[8] = 0x12; rtpPacket[9] = 0x34; rtpPacket[10] = 0x56; rtpPacket[11] = 0x78;
+
+          // Copy stego payload
+          rtpPacket.set(floatBytes, 12);
+
+          // Apply natural human-like jitter variation (0-15ms)
+          const jitter = Math.floor(Math.random() * 16);
+          setTimeout(() => {
+            socket.emit('stealth_rtp_packet', {
+              toId: toId,
+              packet: {
+                type: 'audio_stego',
+                rtpPacket: Array.from(rtpPacket),
+                timestamp: Date.now()
+              }
+            });
+          }, jitter);
         }
       };
 
@@ -1976,8 +2040,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         if (peerConnectionRef.current !== pc) return;
         let rStream = event.streams[0];
         if (!rStream) {
-          console.warn("[Stealth] No stream found in startCall ontrack. Creating fallback MediaStream.");
-          rStream = new MediaStream();
+          console.warn("[Stealth] No stream found in startCall ontrack. Using fallback MediaStream.");
+          rStream = remoteStreamRef.current || new MediaStream();
           rStream.addTrack(event.track);
         }
         // Disable cover audio track from WebRTC so user doesn't hear it
@@ -1986,7 +2050,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           console.log("[Stealth-RTP] Disabled remote WebRTC audio track to mute cover song.");
         });
         remoteStreamRef.current = rStream;
-        setRemoteStream(rStream);
+        const freshStream = new MediaStream(rStream.getTracks());
+        setRemoteStream(freshStream);
       };
 
       const offer = await pc.createOffer();

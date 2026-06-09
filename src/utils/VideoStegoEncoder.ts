@@ -336,10 +336,29 @@ export class VideoStegoEncoder {
           this.wasmEngine.process_video_frame(pixelBytes, dataBits, this.pin, currentFrameIdx);
         } else {
           // JS Fallback
-          const usableChannels = totalChannels - 32;
+          const usableChannels = totalChannels - 64;
           const dataLength = Math.min(dataBits.length, usableChannels);
-          const encLength = this.encryptLengthHeaderJS(dataLength, this.pin + '_' + currentFrameIdx);
+
+          // 1. Embed frame index in first 32 channels (logical index 0-31)
+          const encFrameIndex = this.encryptFrameIndexJS(currentFrameIdx, this.pin);
           let channelIdx = 0;
+          for (let i = 0; i < 32; i++) {
+            if (channelIdx % 4 === 3) channelIdx++; // skip alpha
+            const byteIdx = Math.floor(i / 8);
+            const bitIdx = 7 - (i % 8);
+            const bit = (encFrameIndex[byteIdx] >>> bitIdx) & 1;
+            let val = pixels[channelIdx];
+            if ((val & 1) !== bit) {
+              if (val === 255) val -= 1;
+              else if (val === 0) val += 1;
+              else val += (Math.random() < 0.5 ? 1 : -1);
+            }
+            pixels[channelIdx] = val;
+            channelIdx++;
+          }
+
+          // 2. Embed length header in next 32 channels (logical index 32-63)
+          const encLength = this.encryptLengthHeaderJS(dataLength, this.pin + '_' + currentFrameIdx);
           for (let i = 0; i < 32; i++) {
             if (channelIdx % 4 === 3) channelIdx++; // skip alpha
             const byteIdx = Math.floor(i / 8);
@@ -354,12 +373,14 @@ export class VideoStegoEncoder {
             pixels[channelIdx] = val;
             channelIdx++;
           }
+
+          // 3. Embed payload bits scattered starting at logical channel 64
           if (dataLength > 0) {
             const stride = Math.floor(usableChannels / dataLength);
             const prng = new JS_PRNG(this.pin + '_scatter_' + currentFrameIdx);
             for (let i = 0; i < dataLength; i++) {
               const relativeLogicalIdx = i * stride + Math.floor(prng.next() * stride);
-              const targetLogicalIdx = 32 + relativeLogicalIdx;
+              const targetLogicalIdx = 64 + relativeLogicalIdx;
               const actualIdx = targetLogicalIdx + Math.floor(targetLogicalIdx / 3);
               const bitToEmbed = parseInt(dataBits[i]);
               let val = pixels[actualIdx];
@@ -434,6 +455,20 @@ export class VideoStegoEncoder {
 
   getTargetFps(): number {
     return this.targetFps;
+  }
+
+  private encryptFrameIndexJS(frameIndex: number, pin: string): Uint8Array {
+    const prng = new JS_PRNG('VID_IDX_' + pin);
+    const indexBytes = new Uint8Array(4);
+    indexBytes[0] = (frameIndex >>> 24) & 0xFF;
+    indexBytes[1] = (frameIndex >>> 16) & 0xFF;
+    indexBytes[2] = (frameIndex >>> 8) & 0xFF;
+    indexBytes[3] = frameIndex & 0xFF;
+    
+    for (let i = 0; i < 4; i++) {
+      indexBytes[i] ^= Math.floor(prng.next() * 256);
+    }
+    return indexBytes;
   }
 
   private encryptLengthHeaderJS(length: number, pin: string): Uint8Array {

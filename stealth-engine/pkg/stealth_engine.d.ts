@@ -11,7 +11,7 @@ export class StealthEngine {
     /**
      * Extracts the encrypted webcam frame bit string from received stego video pixels
      */
-    extract_video_frame(pixels: Uint8Array, pin: string, frame_index: number): string;
+    extract_video_frame(pixels: Uint8Array, pin: string, _frame_index: number): string;
     /**
      * Generates a Fake RTP (WebRTC) Packet Header wrapped around the steganographic data
      */
@@ -23,7 +23,7 @@ export class StealthEngine {
      */
     process_audio_chunk(audio_chunk: Float32Array): void;
     /**
-     * Embeds the encrypted webcam frame bit string into cover frame pixel channel LSBs
+     * Embeds the encrypted webcam frame bit string and frame index into cover frame pixel channel LSBs
      */
     process_video_frame(pixels: Uint8Array, payload_bits: string, pin: string, frame_index: number): void;
     set_payload(payload: Uint8Array): void;

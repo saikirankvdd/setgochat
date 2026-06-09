@@ -23,6 +23,34 @@ impl RustPRNG {
     }
 }
 
+fn encrypt_frame_index(frame_index: u32, pin: &str) -> [u8; 4] {
+    let seed_str = format!("VID_IDX_{}", pin);
+    let mut prng = RustPRNG::new(&seed_str);
+    let mut index_bytes = [0u8; 4];
+    index_bytes[0] = ((frame_index >> 24) & 0xFF) as u8;
+    index_bytes[1] = ((frame_index >> 16) & 0xFF) as u8;
+    index_bytes[2] = ((frame_index >> 8) & 0xFF) as u8;
+    index_bytes[3] = (frame_index & 0xFF) as u8;
+    
+    for i in 0..4 {
+        index_bytes[i] ^= (prng.next() * 256.0).floor() as u8;
+    }
+    index_bytes
+}
+
+fn decrypt_frame_index(enc_bytes: &[u8], pin: &str) -> u32 {
+    let seed_str = format!("VID_IDX_{}", pin);
+    let mut prng = RustPRNG::new(&seed_str);
+    let mut decrypted = [0u8; 4];
+    for i in 0..4 {
+        decrypted[i] = enc_bytes[i] ^ (prng.next() * 256.0).floor() as u8;
+    }
+    ((decrypted[0] as u32) << 24)
+        | ((decrypted[1] as u32) << 16)
+        | ((decrypted[2] as u32) << 8)
+        | (decrypted[3] as u32)
+}
+
 fn encrypt_length_header(length: u32, pin: &str, frame_index: u32) -> [u8; 4] {
     let seed_str = format!("VID_HDR_{}_{}", pin, frame_index);
     let mut prng = RustPRNG::new(&seed_str);
@@ -153,7 +181,7 @@ impl StealthEngine {
         }
     }
 
-    /// Embeds the encrypted webcam frame bit string into cover frame pixel channel LSBs
+    /// Embeds the encrypted webcam frame bit string and frame index into cover frame pixel channel LSBs
     pub fn process_video_frame(
         &self,
         pixels: &mut [u8],
@@ -165,17 +193,41 @@ impl StealthEngine {
         let total_pixels = total_channels / 4;
         let total_usable_channels = total_pixels * 3;
 
-        let header_bits_count = 32;
+        let header_bits_count = 64; // 32 bits for index, 32 bits for length
         let total_bits_needed = header_bits_count + payload_bits.len();
         if total_bits_needed > total_usable_channels {
             return;
         }
 
-        // 1. Embed length header in the first 32 channels
-        let enc_length = encrypt_length_header(payload_bits.len() as u32, pin, frame_index);
+        // 1. Embed frame index in the first 32 channels (logical index 0-31)
+        let enc_frame_idx = encrypt_frame_index(frame_index, pin);
         let mut channel_idx = 0;
         for i in 0..32 {
-            if channel_idx % 4 == 3 {
+            if (channel_idx % 4) == 3 {
+                channel_idx += 1; // skip alpha
+            }
+            let byte_idx = i / 8;
+            let bit_idx = 7 - (i % 8);
+            let bit = (enc_frame_idx[byte_idx] >> bit_idx) & 1;
+
+            let mut val = pixels[channel_idx];
+            if (val & 1) != bit {
+                if val == 255 {
+                    val -= 1;
+                } else if val == 0 {
+                    val += 1;
+                } else {
+                    val = val.wrapping_add(1);
+                }
+            }
+            pixels[channel_idx] = val;
+            channel_idx += 1;
+        }
+
+        // 2. Embed length header in next 32 channels (logical index 32-63)
+        let enc_length = encrypt_length_header(payload_bits.len() as u32, pin, frame_index);
+        for i in 0..32 {
+            if (channel_idx % 4) == 3 {
                 channel_idx += 1; // skip alpha
             }
             let byte_idx = i / 8;
@@ -196,8 +248,8 @@ impl StealthEngine {
             channel_idx += 1;
         }
 
-        // 2. Embed payload bits using matching scatter pattern
-        let usable_channels = total_usable_channels - 32;
+        // 3. Embed payload bits using matching scatter pattern starting at logical channel 64
+        let usable_channels = total_usable_channels - 64;
         let data_length = payload_bits.len();
         if data_length > 0 {
             let stride = usable_channels / data_length;
@@ -208,7 +260,7 @@ impl StealthEngine {
             for i in 0..data_length {
                 let relative_logical_idx = (i as u64 * stride as u64)
                     + (prng.next() * stride as f64).floor() as u64;
-                let target_logical_idx = 32 + relative_logical_idx;
+                let target_logical_idx = 64 + relative_logical_idx;
                 let actual_idx = target_logical_idx + (target_logical_idx / 3);
 
                 let bit_to_embed = if bits_bytes[i] == b'1' { 1 } else { 0 };
@@ -233,33 +285,47 @@ impl StealthEngine {
         &self,
         pixels: &[u8],
         pin: &str,
-        frame_index: u32,
+        _frame_index: u32,
     ) -> String {
         let total_channels = pixels.len();
         let total_pixels = total_channels / 4;
         let total_usable_channels = total_pixels * 3;
-        let max_usable = total_usable_channels - 32;
+        let max_usable = total_usable_channels - 64;
 
-        // 1. Read length header
-        let mut enc_bytes = [0u8; 4];
+        // 1. Read frame index from first 32 channels (logical index 0-31)
+        let mut enc_frame_bytes = [0u8; 4];
         let mut channel_idx = 0;
         for i in 0..32 {
-            if channel_idx % 4 == 3 {
+            if (channel_idx % 4) == 3 {
                 channel_idx += 1; // skip alpha
             }
             let bit = pixels[channel_idx] & 1;
             let byte_idx = i / 8;
             let bit_idx = 7 - (i % 8);
-            enc_bytes[byte_idx] |= bit << bit_idx;
+            enc_frame_bytes[byte_idx] |= bit << bit_idx;
+            channel_idx += 1;
+        }
+        let frame_index = decrypt_frame_index(&enc_frame_bytes, pin);
+
+        // 2. Read length header from next 32 channels (logical index 32-63)
+        let mut enc_len_bytes = [0u8; 4];
+        for i in 0..32 {
+            if (channel_idx % 4) == 3 {
+                channel_idx += 1; // skip alpha
+            }
+            let bit = pixels[channel_idx] & 1;
+            let byte_idx = i / 8;
+            let bit_idx = 7 - (i % 8);
+            enc_len_bytes[byte_idx] |= bit << bit_idx;
             channel_idx += 1;
         }
 
-        let data_length = decrypt_length_header(&enc_bytes, pin, frame_index) as usize;
+        let data_length = decrypt_length_header(&enc_len_bytes, pin, frame_index) as usize;
         if data_length == 0 || data_length > max_usable {
             return String::new();
         }
 
-        // 2. Extract payload bits
+        // 3. Extract payload bits starting at logical channel 64
         let stride = max_usable / data_length;
         let seed_str = format!("{}_scatter_{}", pin, frame_index);
         let mut prng = RustPRNG::new(&seed_str);
@@ -268,7 +334,7 @@ impl StealthEngine {
         for i in 0..data_length {
             let relative_logical_idx = (i as u64 * stride as u64)
                 + (prng.next() * stride as f64).floor() as u64;
-            let target_logical_idx = 32 + relative_logical_idx;
+            let target_logical_idx = 64 + relative_logical_idx;
             let actual_idx = target_logical_idx + (target_logical_idx / 3);
 
             let bit = pixels[actual_idx as usize] & 1;

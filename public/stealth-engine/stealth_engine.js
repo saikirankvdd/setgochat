@@ -23,10 +23,10 @@ export class StealthEngine {
      * Extracts the encrypted webcam frame bit string from received stego video pixels
      * @param {Uint8Array} pixels
      * @param {string} pin
-     * @param {number} frame_index
+     * @param {number} _frame_index
      * @returns {string}
      */
-    extract_video_frame(pixels, pin, frame_index) {
+    extract_video_frame(pixels, pin, _frame_index) {
         let deferred3_0;
         let deferred3_1;
         try {
@@ -34,7 +34,7 @@ export class StealthEngine {
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(pin, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
-            const ret = wasm.stealthengine_extract_video_frame(this.__wbg_ptr, ptr0, len0, ptr1, len1, frame_index);
+            const ret = wasm.stealthengine_extract_video_frame(this.__wbg_ptr, ptr0, len0, ptr1, len1, _frame_index);
             deferred3_0 = ret[0];
             deferred3_1 = ret[1];
             return getStringFromWasm0(ret[0], ret[1]);
@@ -72,7 +72,7 @@ export class StealthEngine {
         wasm.stealthengine_process_audio_chunk(this.__wbg_ptr, ptr0, len0, audio_chunk);
     }
     /**
-     * Embeds the encrypted webcam frame bit string into cover frame pixel channel LSBs
+     * Embeds the encrypted webcam frame bit string and frame index into cover frame pixel channel LSBs
      * @param {Uint8Array} pixels
      * @param {string} payload_bits
      * @param {string} pin
