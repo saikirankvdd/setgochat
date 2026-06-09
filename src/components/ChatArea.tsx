@@ -1373,8 +1373,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           clockOffsetRef.current = Date.now() - packet.timestamp;
           console.log("[Stealth-RTP] Clock shift detected. Reset baseline offset:", clockOffsetRef.current);
         } else if (relativeAge > 1500) {
-          console.warn(`[Stealth-RTP] Dropping stale packet (type: ${packet.type}, relative age: ${relativeAge}ms)`);
-          return;
+          // Log a warning but NEVER drop the packet (steganographic bitstream requires all sequential packets)
+          console.warn(`[Stealth-RTP] Late packet received (type: ${packet.type}, relative age: ${relativeAge}ms) - processing to keep LSB bitstream in sync.`);
         }
       }
 
@@ -1434,15 +1434,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             return;
           }
 
-          // Convert remaining bytes to Float32Array samples
-          // Ensure we copy or slice to get a memory aligned buffer for Float32Array
+          // Convert remaining bytes to Int16Array samples (Int16 format reduces bandwidth by 50%)
           const alignedBuffer = payloadBytes.buffer.slice(payloadBytes.byteOffset, payloadBytes.byteOffset + payloadBytes.byteLength);
-          const floatSamples = new Float32Array(alignedBuffer);
+          const pcm16Samples = new Int16Array(alignedBuffer);
           
-          // Extract LSB from Float32 samples
-          for (let i = 0; i < floatSamples.length; i++) {
-            const s16 = Math.max(-32768, Math.min(32767, Math.floor(floatSamples[i] * 32767)));
-            collectedAudioBitsRef.current.push(s16 & 1);
+          // Extract LSB directly from Int16 samples
+          for (let i = 0; i < pcm16Samples.length; i++) {
+            collectedAudioBitsRef.current.push(pcm16Samples[i] & 1);
           }
 
           // Process bit stream using 32-bit length header framing
@@ -1816,11 +1814,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             coverChunk[i] = s16 / 32767;
           }
 
-          // Convert coverChunk to byte array
-          const floatBytes = new Uint8Array(coverChunk.buffer, coverChunk.byteOffset, coverChunk.byteLength);
+          // Convert coverChunk to 16-bit PCM (Int16) to reduce bandwidth by 50%
+          const pcm16 = new Int16Array(triggerLength);
+          for (let i = 0; i < triggerLength; i++) {
+            pcm16[i] = Math.max(-32768, Math.min(32767, Math.round(coverChunk[i] * 32767)));
+          }
+          const pcmBytes = new Uint8Array(pcm16.buffer, pcm16.byteOffset, pcm16.byteLength);
 
           // Wrap stego audio in a fake RTP packet (12-byte header + payload)
-          const rtpPacket = new Uint8Array(12 + floatBytes.length);
+          const rtpPacket = new Uint8Array(12 + pcmBytes.length);
           rtpPacket[0] = 0x80; // Version 2
           rtpPacket[1] = 0x78; // Payload type 120
 
@@ -1842,7 +1844,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rtpPacket[8] = 0x12; rtpPacket[9] = 0x34; rtpPacket[10] = 0x56; rtpPacket[11] = 0x78;
 
           // Copy stego payload
-          rtpPacket.set(floatBytes, 12);
+          rtpPacket.set(pcmBytes, 12);
 
           // Apply natural human-like jitter variation (0-15ms)
           const jitter = Math.floor(Math.random() * 16);

@@ -33,14 +33,13 @@ export async function preloadClips(): Promise<HTMLVideoElement[]> {
     container.id = 'stealth-video-preload-container';
     Object.assign(container.style, {
       position: 'fixed',
-      width: '1px',
-      height: '1px',
-      opacity: '0.01',
+      width: '160px',
+      height: '120px',
       overflow: 'hidden',
       pointerEvents: 'none',
       zIndex: '-9999',
-      top: '0',
-      left: '0'
+      top: '-2000px',
+      left: '-2000px'
     });
     document.body.appendChild(container);
   }
