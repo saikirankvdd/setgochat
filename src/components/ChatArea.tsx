@@ -757,6 +757,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const callStartTimeRef = useRef<number>(0);
   const videoEncoderRef = useRef<VideoStegoEncoder | null>(null);
   const videoDecoderRef = useRef<VideoStegoDecoder | null>(null);
+  const collectedAudioBitsRef = useRef<number[]>([]);
+  const expectedAudioBitsLengthRef = useRef<number>(0);
   const decodedVideoCanvasRef = useRef<HTMLCanvasElement>(null);
   const voiceQueueRef = useRef<number[]>([]);
   const isCallAcceptingRef = useRef<boolean>(false);
@@ -1380,76 +1382,122 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             return;
           }
 
-          // Coerce binary payload to native ArrayBuffer (Socket.io often delivers Uint8Array/Buffer in browser)
-          let audioBuffer = packet.audioBuffer;
-          if (audioBuffer && !(audioBuffer instanceof ArrayBuffer)) {
-            console.log("[Stealth-RTP] Coercing non-ArrayBuffer payload:", audioBuffer.constructor?.name);
-            if (audioBuffer.buffer instanceof ArrayBuffer) {
-              audioBuffer = audioBuffer.buffer.slice(audioBuffer.byteOffset, audioBuffer.byteOffset + audioBuffer.byteLength);
-            } else if (typeof audioBuffer === 'object' && audioBuffer.type === 'Buffer' && Array.isArray(audioBuffer.data)) {
-              audioBuffer = new Uint8Array(audioBuffer.data).buffer;
+          // Handle incoming audio stego wrapped in fake RTP
+          let rtpBytes: Uint8Array;
+          if (packet.rtpPacket) {
+            rtpBytes = new Uint8Array(packet.rtpPacket);
+          } else if (packet.audioBuffer) {
+            // Coerce if sent over older audioBuffer format
+            const buffer = packet.audioBuffer;
+            if (buffer instanceof ArrayBuffer) {
+              rtpBytes = new Uint8Array(buffer);
+            } else if (buffer.buffer instanceof ArrayBuffer) {
+              rtpBytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+            } else {
+              rtpBytes = new Uint8Array(buffer);
             }
-          }
-
-          if (!audioBuffer || !(audioBuffer instanceof ArrayBuffer)) {
-            console.error("[Stealth-RTP] Failed to resolve binary ArrayBuffer from payload!");
+          } else {
+            console.error("[Stealth-RTP] No audio payload found in socket packet!");
             return;
           }
 
-          const headerBytes = new Uint8Array(audioBuffer.slice(0, 12));
-          console.log("[Stealth-RTP] Received audioBuffer size:", audioBuffer.byteLength, "WAV Header bytes:", Array.from(headerBytes));
-          console.log("[Stealth-RTP] Received audioBuffer SHA-256:", hashBufferHex(audioBuffer));
-
-           const binary = decodeLSB(audioBuffer);
-          const encryptedText = binaryToString(binary);
-          console.log("[Stealth-RTP] Extracted ciphertext:", encryptedText);
-          const decrypted = decryptData(encryptedText, sessionInfo.pin);
-          console.log("[Stealth-RTP] Decrypted payload:", decrypted ? decrypted.substring(0, 30) + "..." : "null");
-          if (!decrypted) {
-            console.warn("[Stealth-RTP] Decryption failed for incoming voice packet!");
+          // Strip 12-byte RTP header
+          let payloadBytes: Uint8Array;
+          if (rtpBytes.length > 12 && rtpBytes[0] === 0x80 && rtpBytes[1] === 0x78) {
+            payloadBytes = rtpBytes.subarray(12);
+          } else {
+            // Fallback for legacy WAV carrier
+            const binary = decodeLSB(rtpBytes.buffer);
+            const encryptedText = binaryToString(binary);
+            const decrypted = decryptData(encryptedText, sessionInfo.pin);
+            if (decrypted) {
+              const compressedBytes = base64ToUint8(decrypted);
+              const decompressedBytes = gunzipSync(compressedBytes);
+              const voice8kHz = new Float32Array(decompressedBytes.length / 2);
+              for (let i = 0; i < voice8kHz.length; i++) {
+                const low = decompressedBytes[i * 2];
+                const high = decompressedBytes[i * 2 + 1];
+                let s16 = low | (high << 8);
+                if (s16 & 0x8000) s16 |= ~0xFFFF;
+                voice8kHz[i] = s16 / 32768.0;
+              }
+              const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+              const voicePlayerNode = (window as any).stealthVoicePlayerNode;
+              if (voicePlayerNode) {
+                voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
+              }
+            }
             return;
           }
 
-          const compressedBytes = base64ToUint8(decrypted);
-
-          const decompressedBytes = gunzipSync(compressedBytes);
-
-          const voice8kHz = new Float32Array(decompressedBytes.length / 2);
-          for (let i = 0; i < voice8kHz.length; i++) {
-            const low = decompressedBytes[i * 2];
-            const high = decompressedBytes[i * 2 + 1];
-            let s16 = low | (high << 8);
-            if (s16 & 0x8000) {
-              s16 |= ~0xFFFF;
-            }
-            voice8kHz[i] = s16 / 32768.0;
-          }
-
-          const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+          // Convert remaining bytes to Float32Array samples
+          // Ensure we copy or slice to get a memory aligned buffer for Float32Array
+          const alignedBuffer = payloadBytes.buffer.slice(payloadBytes.byteOffset, payloadBytes.byteOffset + payloadBytes.byteLength);
+          const floatSamples = new Float32Array(alignedBuffer);
           
-          const voicePlayerNode = (window as any).stealthVoicePlayerNode;
-          if (voicePlayerNode) {
-            voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
+          // Extract LSB from Float32 samples
+          for (let i = 0; i < floatSamples.length; i++) {
+            const s16 = Math.max(-32768, Math.min(32767, Math.floor(floatSamples[i] * 32767)));
+            collectedAudioBitsRef.current.push(s16 & 1);
+          }
+
+          // Process bit stream using 32-bit length header framing
+          while (true) {
+            if (expectedAudioBitsLengthRef.current === 0) {
+              if (collectedAudioBitsRef.current.length >= 32) {
+                let len = 0;
+                for (let i = 0; i < 32; i++) {
+                  const bit = collectedAudioBitsRef.current[i];
+                  len = (len << 1) | bit;
+                }
+                expectedAudioBitsLengthRef.current = len;
+                collectedAudioBitsRef.current.splice(0, 32);
+              } else {
+                break;
+              }
+            }
+
+            if (expectedAudioBitsLengthRef.current > 0) {
+              if (collectedAudioBitsRef.current.length >= expectedAudioBitsLengthRef.current) {
+                const chunk = collectedAudioBitsRef.current.splice(0, expectedAudioBitsLengthRef.current);
+                expectedAudioBitsLengthRef.current = 0; // Reset expected length
+
+                const bitString = chunk.join('');
+                const encryptedText = binaryToString(bitString);
+                const decrypted = decryptData(encryptedText, sessionInfo.pin);
+                
+                if (decrypted) {
+                  const compressedBytes = base64ToUint8(decrypted);
+                  const decompressedBytes = gunzipSync(compressedBytes);
+                  const voice8kHz = new Float32Array(decompressedBytes.length / 2);
+                  for (let i = 0; i < voice8kHz.length; i++) {
+                    const low = decompressedBytes[i * 2];
+                    const high = decompressedBytes[i * 2 + 1];
+                    let s16 = low | (high << 8);
+                    if (s16 & 0x8000) s16 |= ~0xFFFF;
+                    voice8kHz[i] = s16 / 32768.0;
+                  }
+                  const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+                  const voicePlayerNode = (window as any).stealthVoicePlayerNode;
+                  if (voicePlayerNode) {
+                    voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
+                  }
+                }
+              } else {
+                break;
+              }
+            } else {
+              expectedAudioBitsLengthRef.current = 0;
+              break;
+            }
           }
         } catch (err) {
           console.error("[Stealth] Error decoding received socket voice packet:", err);
         }
       } else if (packet.type === 'video_stego') {
-        if (videoDecoderRef.current) {
-          if (packet.resolution && videoDecoderRef.current.getResolution() !== packet.resolution) {
-            videoDecoderRef.current.setResolution(packet.resolution);
-            currentResolutionRef.current = packet.resolution;
-            setCurrentResolution(packet.resolution);
-          }
-          if (packet.encryptedFrame) {
-            videoDecoderRef.current.decodeDirectFrame(packet.encryptedFrame, packet.frameIndex);
-          } else {
-            const pngBuffer = packet.videoPngBuffer instanceof Uint8Array 
-              ? packet.videoPngBuffer 
-              : new Uint8Array(packet.videoPngBuffer || []);
-            videoDecoderRef.current.decodeFrame(pngBuffer, packet.frameIndex);
-          }
-        }
+        // Video stego socket bypass completely removed.
+        // All video stego data flows exclusively via WebRTC track.
+        console.warn("[Stealth-RTP] Received video_stego packet over socket. Bypassing/ignoring.");
       }
     };
 
@@ -1673,6 +1721,25 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       workletNode.port.postMessage({ type: 'SET_PIN', pin: sessionInfo.pin });
       workletNode.port.postMessage({ type: 'SET_MODE_ENCODE' });
 
+      // Handle fake RTP chunks generated by the worklet
+      workletNode.port.onmessage = (event) => {
+        if (event.data.type === 'RTP_CHUNK_READY') {
+          const { rtp, jitter } = event.data;
+          
+          // Wait jitterMs before sending — makes packet timing look like real Wi-Fi
+          setTimeout(() => {
+            socket.emit('stealth_rtp_packet', {
+              toId: toId,
+              packet: {
+                type: 'audio_stego',
+                rtpPacket: Array.from(rtp), // Full fake-RTP-wrapped audio chunk
+                timestamp: Date.now()
+              }
+            });
+          }, jitter); // 0–15ms natural variation
+        }
+      };
+
       const dest = audioCtx.createMediaStreamDestination();
       workletNode.connect(dest);
 
@@ -1714,22 +1781,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           const bits = stringToBinary(encrypted);
 
-          // Rather than sending over WebRTC (which Opus corrupts), we use the lossless socket fallback channel.
-          // To keep it 100% steganographic, we embed the payload bits into a small dynamic WAV carrier:
-          const carrier = createDynamicCarrier(bits.length);
-          const stegoAudio = encodeLSB(carrier, bits);
-          
-          console.log("[Stealth-RTP] Encrypted voice payload to send:", encrypted);
-          console.log("[Stealth-RTP] Emitting audio stego packet over socket, byte size:", stegoAudio.byteLength);
-          console.log("[Stealth-RTP] Emitted audio stego packet SHA-256:", hashBufferHex(stegoAudio));
-          socket.emit('stealth_rtp_packet', {
-            toId: toId,
-            packet: {
-              type: 'audio_stego',
-              audioBuffer: stegoAudio,
-              timestamp: Date.now()
-            }
-          });
+          // Prefix with a 32-bit length header (Big Endian)
+          const len = bits.length;
+          let headerBits = "";
+          for (let i = 0; i < 32; i++) {
+            headerBits += ((len >>> (31 - i)) & 1).toString();
+          }
+          const fullBits = headerBits + bits;
+          const bitsArray = fullBits.split('').map(Number);
+
+          // Push bits to the worklet to be embedded
+          workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: bitsArray });
         }
       };
 
@@ -1871,18 +1933,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             undefined, // Bypass PNG LSB encoding for socket
             (durationMs) => {
               checkAdaptiveStegoEngine(durationMs, 'encode');
-            },
-            (encryptedFrame, frameIndex) => {
-              socket.emit('stealth_rtp_packet', {
-                toId: targetUser.id,
-                packet: {
-                  type: 'video_stego',
-                  encryptedFrame: encryptedFrame,
-                  frameIndex: frameIndex,
-                  resolution: currentResolutionRef.current,
-                  timestamp: Date.now()
-                }
-              });
             }
           );
           await encoder.init();
@@ -2029,18 +2079,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             undefined, // Bypass PNG LSB encoding for socket
             (durationMs) => {
               checkAdaptiveStegoEngine(durationMs, 'encode');
-            },
-            (encryptedFrame, frameIndex) => {
-              socket.emit('stealth_rtp_packet', {
-                toId: callerId || targetUser.id,
-                packet: {
-                  type: 'video_stego',
-                  encryptedFrame: encryptedFrame,
-                  frameIndex: frameIndex,
-                  resolution: currentResolutionRef.current,
-                  timestamp: Date.now()
-                }
-              });
             }
           );
           await encoder.init();

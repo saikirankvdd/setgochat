@@ -20,9 +20,15 @@ export class VideoStegoEncoder {
   private wasmEngine: StealthEngine | null;
   private onStegoFrame?: (pngBuffer: Uint8Array, frameIndex: number) => void;
   private onFrameProcessTime?: (durationMs: number) => void;
-  private onDirectFrame?: (encryptedFrame: string, frameIndex: number) => void;
   private targetFps: number = 30; // Default to 30 FPS for smooth video
 
+  // Web Worker for non-blocking pixel LSB embedding
+  private videoWorker: Worker | null = null;
+  private workerReady: boolean = false;
+
+  // Frame diff skipping to optimize CPU on static frames
+  private lastFrameHash: string = '';
+  private frameSkipCounter: number = 0;
 
   constructor(
     localStream: MediaStream,
@@ -30,8 +36,7 @@ export class VideoStegoEncoder {
     resolution: '240p' | '480p' | '1080p',
     onProgress: (pct: number) => void,
     onStegoFrame?: (pngBuffer: Uint8Array, frameIndex: number) => void,
-    onFrameProcessTime?: (durationMs: number) => void,
-    onDirectFrame?: (encryptedFrame: string, frameIndex: number) => void
+    onFrameProcessTime?: (durationMs: number) => void
   ) {
     this.localStream = localStream;
     this.pin = pin;
@@ -58,25 +63,39 @@ export class VideoStegoEncoder {
     this.isRunning = false;
     this.wasmEngine = null;
     this.onFrameProcessTime = onFrameProcessTime;
-    this.onDirectFrame = onDirectFrame;
   }
 
   async init(): Promise<void> {
     // 1. Preload cover videos
     this.videoEls = await preloadClips();
 
-    // 2. Initialize WASM Engine
+    // 2. Initialize WASM Engine (fallback)
     try {
       const response = await fetch('/stealth-engine/stealth_engine_bg.wasm');
       const wasmBuffer = await response.arrayBuffer();
       await wasmInit({ module_or_path: wasmBuffer });
       this.wasmEngine = new StealthEngine();
-      console.log("[Stealth-Video-Encoder] Rust WASM Engine active.");
+      console.log("[Stealth-Video-Encoder] Rust WASM Engine active (fallback).");
     } catch (err) {
       console.warn("[Stealth-Video-Encoder] Rust WASM Engine failed, falling back to JS:", err);
     }
+
+    // 3. Initialize Web Worker
+    try {
+      this.videoWorker = new Worker('/stego-video-worker.js', { type: 'module' });
+      this.videoWorker.onmessage = (e) => {
+        if (e.data.type === 'WORKER_READY') {
+          this.workerReady = true;
+          console.log("[Stealth-Video-Encoder] Web Worker ready.");
+        } else if (e.data.type === 'WORKER_ERROR') {
+          console.error("[Stealth-Video-Encoder] Web Worker initialization failed:", e.data.error);
+        }
+      };
+    } catch (workerErr) {
+      console.error("[Stealth-Video-Encoder] Failed to spawn Web Worker:", workerErr);
+    }
     
-    // 3. Create hidden video element to read localStream (webcam)
+    // 4. Create hidden video element to read localStream (webcam)
     this.webcamVideoEl = document.createElement('video');
     this.webcamVideoEl.srcObject = this.localStream;
     this.webcamVideoEl.muted = true;
@@ -105,7 +124,7 @@ export class VideoStegoEncoder {
 
     await this.webcamVideoEl.play();
 
-    // 4. Create helper canvases
+    // 5. Create helper canvases
     this.captureCanvas = document.createElement('canvas');
     this.captureCanvas.width = this.width;
     this.captureCanvas.height = this.height;
@@ -118,7 +137,7 @@ export class VideoStegoEncoder {
     this.outputCanvas.width = this.width;
     this.outputCanvas.height = this.height;
 
-    // 5. Capture output stream at 30 fps
+    // 6. Capture output stream at 30 fps
     this.stegoStream = (this.outputCanvas as any).captureStream(30);
   }
 
@@ -151,6 +170,12 @@ export class VideoStegoEncoder {
         if (!vid.paused) vid.pause();
       } catch (e) {}
     });
+    // Terminate worker to free up resources
+    if (this.videoWorker) {
+      this.videoWorker.terminate();
+      this.videoWorker = null;
+      this.workerReady = false;
+    }
   }
 
   private processFrame = (): void => {
@@ -172,8 +197,29 @@ export class VideoStegoEncoder {
       // 1. Draw webcam to capture canvas
       capCtx.drawImage(webcam, 0, 0, this.width, this.height);
 
-      // 2. Adaptively compress webcam frame. Start at 50% quality, drop further if
-      //    the encrypted payload overflows the LSB capacity of the cover frame.
+      // --- 1a. Frame Diff Skipping ---
+      const cx = Math.floor(this.width / 2) - 16;
+      const cy = Math.floor(this.height / 2) - 16;
+      const sampleData = capCtx.getImageData(cx, cy, 32, 32);
+      let quickHash = 0;
+      for (let i = 0; i < sampleData.data.length; i += 16) {
+        quickHash = ((quickHash << 5) + quickHash) ^ sampleData.data[i];
+        quickHash |= 0;
+      }
+      const hashStr = quickHash.toString(16);
+
+      if (hashStr === this.lastFrameHash) {
+        this.frameSkipCounter++;
+        if (this.frameSkipCounter < 3) {
+          // Skip frame: schedule next frame quickly
+          setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
+          return;
+        }
+      }
+      this.lastFrameHash = hashStr;
+      this.frameSkipCounter = 0;
+
+      // 2. Adaptively compress webcam frame. Start at 20% quality, hard cap at 35%.
       const totalPixels = this.width * this.height;
       const totalChannels = totalPixels * 3; // Red, Green, Blue (skip Alpha)
       const maxPayloadBits = totalChannels - 32; // Reserve 32 bits for length header
@@ -181,7 +227,7 @@ export class VideoStegoEncoder {
       let base64 = '';
       let encrypted = '';
       let dataBits = '';
-      let jpegQuality = 0.50;
+      let jpegQuality = 0.20; // Tight starting quality
 
       for (let attempt = 0; attempt < 4; attempt++) {
         const dataUrl = captureCanvas.toDataURL('image/jpeg', jpegQuality);
@@ -193,12 +239,12 @@ export class VideoStegoEncoder {
           break; // Payload fits — proceed
         }
 
-        // Reduce quality by 10% and retry
-        jpegQuality = Math.max(0.10, jpegQuality - 0.10);
+        // Reduce quality slightly and retry (unlikely to need this, but good safety)
+        jpegQuality = Math.max(0.10, jpegQuality - 0.05);
         if (attempt === 3) {
-          // Still too large after 4 attempts — skip this frame entirely
-          console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large (${dataBits.length} bits > ${maxPayloadBits} max) even at ${jpegQuality * 100}% quality. Skipping.`);
+          console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large even at ${jpegQuality * 100}% quality. Skipping.`);
           this.frameIndex++;
+          setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
           return;
         }
       }
@@ -225,99 +271,133 @@ export class VideoStegoEncoder {
       const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
       const pixels = coverImageData.data;
 
-      if (this.wasmEngine) {
-        // Use high-performance Rust WASM LSB embedding
-        const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
-        this.wasmEngine.process_video_frame(pixelBytes, dataBits, this.pin, this.frameIndex);
-      } else {
-        // Fallback: Use JS LSB embedding
-        // IMPORTANT: use the actual dataLength (not dataBits.length) in the header
-        // to ensure the decoder reads exactly the number of bits that were embedded.
-        const usableChannels = totalChannels - 32;
-        const dataLength = Math.min(dataBits.length, usableChannels);
-
-        const encLength = this.encryptLengthHeaderJS(dataLength, this.pin + '_' + this.frameIndex);
-        let channelIdx = 0;
-        for (let i = 0; i < 32; i++) {
-          if (channelIdx % 4 === 3) channelIdx++; // skip alpha
-          
-          const byteIdx = Math.floor(i / 8);
-          const bitIdx = 7 - (i % 8);
-          const bit = (encLength[byteIdx] >>> bitIdx) & 1;
-
-          let val = pixels[channelIdx];
-          if ((val & 1) !== bit) {
-            if (val === 255) val -= 1;
-            else if (val === 0) val += 1;
-            else val += (Math.random() < 0.5 ? 1 : -1);
-          }
-          pixels[channelIdx] = val;
-          channelIdx++;
+      // Send the stego frame losslessly as a PNG via callback asynchronously (if enabled)
+      const currentFrameIdx = this.frameIndex;
+      const triggerStegoFrameCallback = () => {
+        if (this.onStegoFrame) {
+          outputCanvas.toBlob((blob) => {
+            if (blob && this.isRunning) {
+              blob.arrayBuffer().then((buffer) => {
+                if (this.isRunning && this.onStegoFrame) {
+                  this.onStegoFrame(new Uint8Array(buffer), currentFrameIdx);
+                }
+              });
+            }
+          }, 'image/png');
         }
+      };
 
-        if (dataLength > 0) {
-          const stride = Math.floor(usableChannels / dataLength);
-          const prng = new JS_PRNG(this.pin + '_scatter_' + this.frameIndex);
+      if (this.videoWorker && this.workerReady) {
+        // Use high-performance Web Worker LSB embedding
+        const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+        
+        this.videoWorker.onmessage = (e) => {
+          if (!this.isRunning) return;
+          if (e.data.type === 'EMBED_DONE') {
+            if (e.data.pixels) {
+              const modifiedPixels = new Uint8Array(e.data.pixels);
+              outCtx.putImageData(
+                new ImageData(new Uint8ClampedArray(modifiedPixels.buffer), this.width, this.height),
+                0, 0
+              );
+              triggerStegoFrameCallback();
+            } else {
+              // Fail-safe pass-through if worker embedding failed
+              outCtx.putImageData(coverImageData, 0, 0);
+            }
 
-          for (let i = 0; i < dataLength; i++) {
-            const relativeLogicalIdx = i * stride + Math.floor(prng.next() * stride);
-            const targetLogicalIdx = 32 + relativeLogicalIdx;
-            const actualIdx = targetLogicalIdx + Math.floor(targetLogicalIdx / 3);
+            // Update progress percentage
+            const totalBitsNeeded = 32 + dataBits.length;
+            const usagePct = (totalBitsNeeded / totalChannels) * 100;
+            this.onProgress(Math.min(100, Math.round(usagePct)));
 
-            const bitToEmbed = parseInt(dataBits[i]);
-            let val = pixels[actualIdx];
+            // Advance frame index
+            this.frameIndex++;
 
-            if ((val & 1) !== bitToEmbed) {
+            const duration = performance.now() - startTime;
+            if (this.onFrameProcessTime) {
+              this.onFrameProcessTime(duration);
+            }
+
+            // Loop at dynamic target FPS
+            setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
+          }
+        };
+
+        this.videoWorker.postMessage(
+          { type: 'EMBED_FRAME', pixels: pixelBytes.buffer, dataBits, pin: this.pin, frameIndex: currentFrameIdx },
+          [pixelBytes.buffer] // Transfer ownership (zero-copy)
+        );
+
+      } else {
+        // Fallback: Use Main Thread JS or WASM embedding if worker is not initialized
+        if (this.wasmEngine) {
+          const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+          this.wasmEngine.process_video_frame(pixelBytes, dataBits, this.pin, currentFrameIdx);
+        } else {
+          // JS Fallback
+          const usableChannels = totalChannels - 32;
+          const dataLength = Math.min(dataBits.length, usableChannels);
+          const encLength = this.encryptLengthHeaderJS(dataLength, this.pin + '_' + currentFrameIdx);
+          let channelIdx = 0;
+          for (let i = 0; i < 32; i++) {
+            if (channelIdx % 4 === 3) channelIdx++; // skip alpha
+            const byteIdx = Math.floor(i / 8);
+            const bitIdx = 7 - (i % 8);
+            const bit = (encLength[byteIdx] >>> bitIdx) & 1;
+            let val = pixels[channelIdx];
+            if ((val & 1) !== bit) {
               if (val === 255) val -= 1;
               else if (val === 0) val += 1;
               else val += (Math.random() < 0.5 ? 1 : -1);
             }
-            pixels[actualIdx] = val;
+            pixels[channelIdx] = val;
+            channelIdx++;
+          }
+          if (dataLength > 0) {
+            const stride = Math.floor(usableChannels / dataLength);
+            const prng = new JS_PRNG(this.pin + '_scatter_' + currentFrameIdx);
+            for (let i = 0; i < dataLength; i++) {
+              const relativeLogicalIdx = i * stride + Math.floor(prng.next() * stride);
+              const targetLogicalIdx = 32 + relativeLogicalIdx;
+              const actualIdx = targetLogicalIdx + Math.floor(targetLogicalIdx / 3);
+              const bitToEmbed = parseInt(dataBits[i]);
+              let val = pixels[actualIdx];
+              if ((val & 1) !== bitToEmbed) {
+                if (val === 255) val -= 1;
+                else if (val === 0) val += 1;
+                else val += (Math.random() < 0.5 ? 1 : -1);
+              }
+              pixels[actualIdx] = val;
+            }
           }
         }
-      }
 
-      // 4. Draw modified cover pixels to output canvas
-      outCtx.putImageData(coverImageData, 0, 0);
+        // Draw modified cover pixels to output canvas
+        outCtx.putImageData(coverImageData, 0, 0);
+        triggerStegoFrameCallback();
 
-      // Send the direct encrypted frame via callback (much lighter and 100% reliable)
-      const currentFrameIdx = this.frameIndex;
-      if (this.onDirectFrame && this.isRunning) {
-        this.onDirectFrame(encrypted, currentFrameIdx);
-      }
+        // Update progress percentage
+        const totalBitsNeeded = 32 + dataBits.length;
+        const usagePct = (totalBitsNeeded / totalChannels) * 100;
+        this.onProgress(Math.min(100, Math.round(usagePct)));
 
-      // Send the stego frame losslessly as a PNG via callback asynchronously (prevents UI thread blocking)
-      if (this.onStegoFrame) {
-        outputCanvas.toBlob((blob) => {
-          if (blob && this.isRunning) {
-            blob.arrayBuffer().then((buffer) => {
-              if (this.isRunning && this.onStegoFrame) {
-                this.onStegoFrame(new Uint8Array(buffer), currentFrameIdx);
-              }
-            });
-          }
-        }, 'image/png');
-      }
+        // Advance frame index
+        this.frameIndex++;
 
-      // 5. Update progress percentage
-      const totalBitsNeeded = 32 + dataBits.length;
-      const usagePct = (totalBitsNeeded / totalChannels) * 100;
-      this.onProgress(Math.min(100, Math.round(usagePct)));
+        const duration = performance.now() - startTime;
+        if (this.onFrameProcessTime) {
+          this.onFrameProcessTime(duration);
+        }
 
-      // 6. Advance frame index
-      this.frameIndex++;
-
-      const duration = performance.now() - startTime;
-      if (this.onFrameProcessTime) {
-        this.onFrameProcessTime(duration);
+        // Loop at dynamic target FPS
+        setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
       }
     } catch (e) {
       console.error("Error encoding video stego frame:", e);
+      // Fail-safe schedule next frame
+      setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
     }
-
-    // Loop at dynamic target FPS (default 30 fps -> ~33ms delay)
-    const delay = Math.max(10, Math.floor(1000 / this.targetFps));
-    setTimeout(this.processFrame, delay);
   };
 
   setResolution(resolution: '240p' | '480p'): void {

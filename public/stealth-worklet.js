@@ -134,6 +134,20 @@ class StealthProcessor extends AudioWorkletProcessor {
             }
             this.wasmEngine.set_payload(bytes);
             this.wasmEngine.process_audio_chunk(outputChannel0);
+
+            // Wrap encoded audio in a fake RTP packet (12-byte RTP header + audio payload)
+            const audioBytes = new Uint8Array(outputChannel0.buffer);
+            const rtpPacket = this.wasmEngine.generate_fake_rtp_packet(audioBytes);
+
+            // Get natural Wi-Fi jitter value (0–15ms random)
+            const jitterMs = this.wasmEngine.calculate_human_jitter();
+
+            // Report to main thread — main thread applies the delay before socket.emit
+            this.port.postMessage({
+              type: 'RTP_CHUNK_READY',
+              rtp: rtpPacket,
+              jitter: jitterMs
+            });
           }
         } else {
           // Use high-performance JS LSB embedding
