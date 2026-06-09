@@ -84,8 +84,14 @@ export async function preloadClips(): Promise<HTMLVideoElement[]> {
  * Determines which clip index should be active based on the current frame index
  */
 export function getCurrentClipIndex(frameIndex: number, clipSequence: number[]): number {
-  const slot = Math.floor(frameIndex / 900) % clipSequence.length;
-  return clipSequence[slot];
+  if (frameIndex < 0 || isNaN(frameIndex)) {
+    frameIndex = 0;
+  }
+  let slot = Math.floor(frameIndex / 900) % clipSequence.length;
+  if (slot < 0 || isNaN(slot)) {
+    slot = 0;
+  }
+  return clipSequence[slot] ?? 0;
 }
 
 /**

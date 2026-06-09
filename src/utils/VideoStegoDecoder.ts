@@ -148,7 +148,7 @@ export class VideoStegoDecoder {
         const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
         const displayCtx = displayCanvas.getContext('2d');
         displayCtx?.putImageData(coverImageData, 0, 0);
-        this.frameIndex++;
+        // Do not increment this.frameIndex when skipping frames due to low resolution (<320x240)
         requestAnimationFrame(this.processFrame);
         return;
       }
@@ -183,12 +183,35 @@ export class VideoStegoDecoder {
       }
       const frameIndex = this.decryptFrameIndexJS(encFrameBytes, this.pin);
 
+      // Sanity check: is the decrypted frameIndex valid?
+      const isValidFrameIndex = 
+        frameIndex >= 0 && 
+        frameIndex < 1000000;
+
+      if (!isValidFrameIndex) {
+        // Draw the cover frame using our current local frameIndex
+        const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
+        const coverVideo = this.videoEls[clipIdx];
+        const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
+        const displayCtx = displayCanvas.getContext('2d');
+        displayCtx?.putImageData(coverImageData, 0, 0);
+        this.frameIndex++;
+        requestAnimationFrame(this.processFrame);
+        return;
+      }
+
+      if (frameIndex === this.lastDecodedFrameIndex) {
+        // Skip decoding that loop to save CPU and prevent duplicate processing.
+        requestAnimationFrame(this.processFrame);
+        return;
+      }
+
       let bitString = '';
 
       if (this.wasmEngine) {
         // Use high-performance Rust WASM LSB extraction
         const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
-        bitString = this.wasmEngine.extract_video_frame(pixelBytes, this.pin, this.frameIndex);
+        bitString = this.wasmEngine.extract_video_frame(pixelBytes, this.pin, frameIndex);
       } else {
         // Fallback: Use JS LSB extraction
         const maxUsable = totalChannels - 64;
@@ -226,19 +249,25 @@ export class VideoStegoDecoder {
         }
       }
 
+      let decryptedBase64 = '';
       if (bitString && bitString.length > 0) {
         // 4. Convert bits to encrypted string, decrypt, and display image
         const encrypted = binaryToString(bitString);
-        const base64 = decryptData(encrypted, this.pin + '_' + frameIndex);
+        decryptedBase64 = decryptData(encrypted, this.pin + '_' + frameIndex);
 
-        if (base64) {
+        if (decryptedBase64) {
           const img = new Image();
           img.onload = () => {
             const displayCtx = displayCanvas.getContext('2d');
             displayCtx?.drawImage(img, 0, 0, displayCanvas.width, displayCanvas.height);
           };
-          img.src = 'data:image/jpeg;base64,' + base64;
+          img.src = 'data:image/jpeg;base64,' + decryptedBase64;
         }
+      }
+
+      if (decryptedBase64) {
+        this.lastDecodedFrameIndex = frameIndex;
+        this.frameIndex = frameIndex;
 
         // Update progress percentage
         const usagePct = ((64 + bitString.length) / totalChannels) * 100;
@@ -250,9 +279,8 @@ export class VideoStegoDecoder {
         const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
         const displayCtx = displayCanvas.getContext('2d');
         displayCtx?.putImageData(coverImageData, 0, 0);
+        this.frameIndex++;
       }
-
-      this.frameIndex++;
     } catch (e) {
       console.error("Error decoding video stego frame:", e);
     }
