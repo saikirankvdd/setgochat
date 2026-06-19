@@ -1034,6 +1034,7 @@ io.on('connection', (socket: any) => {
     try {
       // Send the encrypted payload strictly to the requesting socket
       io.to(data.toSocketId).emit('device_sync_payload', {
+        encryptedPassword: data.encryptedPassword,
         payload: data.payload
       });
       ack?.({ ok: true });
