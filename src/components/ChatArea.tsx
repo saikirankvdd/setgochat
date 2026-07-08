@@ -1404,7 +1404,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     };
 
     const handleStealthRtpReceive = async (packet: any) => {
-      if (callStateRef.current !== 'connected') {
+      // Allow 'receiving' so the phone can pre-warm the audio pipeline before Accept is tapped.
+      // Without this, all audio packets sent by the caller while the phone is ringing are silently
+      // dropped, causing one-way audio after the call is accepted.
+      if (callStateRef.current !== 'connected' && callStateRef.current !== 'receiving') {
         return;
       }
       console.log("[Stealth-RTP] Received socket packet type:", packet?.type);
@@ -1843,6 +1846,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           // Copy stego payload
           rtpPacket.set(payloadBytes, 12);
+
+          // Only send audio RTP once the WebRTC connection is fully established.
+          // During 'calling' (ringing) phase, packets sent to the receiver are dropped
+          // because the receiver is in 'receiving' state and hasn't accepted yet.
+          // This prevents the audio stream clock from diverging before both sides are ready.
+          if (callStateRef.current !== 'connected') return;
 
           // Apply natural human-like jitter variation (0-15ms)
           const jitter = Math.floor(Math.random() * 16);
