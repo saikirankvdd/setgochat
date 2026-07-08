@@ -636,7 +636,7 @@ const EVENT_SIZE_LIMITS: Record<string, number> = {
   device_sync_request: 10000,   // 10 KB
   device_sync_payload: 1000000,  // 1 MB (Added to allow database sync files)
   chat_sync_request:   5000,      // 5 KB
-  chat_sync_approve:   5000000    // 5 MB – encrypted chat history export
+  chat_sync_approve:   200000000  // 200 MB – encrypted chat history export with media
 };
 
 // Event Rate Limiting Store

@@ -6,7 +6,7 @@ import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, S
 import { SharedMediaViewer } from './SharedMediaViewer';
 import { useModal } from '../contexts/ModalContext';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
-import { encryptData, decryptData, stringToBinary, binaryToString, uint8ToBase64, base64ToUint8, getSha256Key, fastEncrypt, fastDecrypt } from '../utils/crypto';
+import { encryptData, decryptData, stringToBinary, binaryToString, uint8ToBase64, base64ToUint8, getSha256Key, fastEncrypt, fastDecrypt, hashString } from '../utils/crypto';
 import { encodeLSB, decodeLSB, createDynamicCarrier, encodeLSB4Bit, decodeLSB4Bit, createDynamicCarrier4Bit, generateMusicCarrier, encodeLSB1Bit, decodeLSB1Bit } from '../utils/stego';
 import { generateWallpaperCanvas, encodeImageLSB, decodeImageLSB } from '../utils/imageStego';
 import { strToU8, gzipSync, strFromU8, gunzipSync } from 'fflate';
@@ -216,7 +216,8 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
   useEffect(() => {
     const fetchPreview = async () => {
       const msgs = await getAllMessagesLocal();
-      let filteredMsgs = msgs.filter(m => m.sessionId === sessionInfo.sessionId);
+      const hashedSessionId = await hashString(sessionInfo.sessionId);
+      let filteredMsgs = msgs.filter(m => m.sessionId === hashedSessionId || m.sessionId === sessionInfo.sessionId);
       
       if (exportOption === 'range_media' || exportOption === 'range_text') {
         if (startDate && endDate) {
@@ -257,7 +258,8 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
     const calc = async () => {
        try {
          const msgs = await getAllMessagesLocal();
-         let filteredMsgs = msgs.filter(m => m.sessionId === sessionInfo.sessionId);
+         const hashedSessionId = await hashString(sessionInfo.sessionId);
+         let filteredMsgs = msgs.filter(m => m.sessionId === hashedSessionId || m.sessionId === sessionInfo.sessionId);
          if (exportOption === 'range_media' || exportOption === 'range_text') {
            const startTs = startDate ? new Date(startDate).setHours(0,0,0,0) : 0;
            const endTs = endDate ? new Date(endDate).setHours(23,59,59,999) : Infinity;
@@ -311,7 +313,8 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
     try {
        log("[1/6] Loading messages from local database...");
        const msgs = await getAllMessagesLocal();
-       let filteredMsgs = msgs.filter(m => m.sessionId === sessionInfo.sessionId);
+       const hashedSessionId = await hashString(sessionInfo.sessionId);
+       let filteredMsgs = msgs.filter(m => m.sessionId === hashedSessionId || m.sessionId === sessionInfo.sessionId);
        
        if (exportOption === 'range_media' || exportOption === 'range_text') {
          const startTs = new Date(startDate).setHours(0,0,0,0);
@@ -3305,40 +3308,74 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         </div>
       </div>
 
-      {/* Chat History Sync Approval Modal */}
-      {showChatSyncModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-          <div className="bg-[#202c33] rounded-2xl p-6 max-w-sm w-full border border-[#2a3942] shadow-2xl animate-fade-in">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-10 h-10 rounded-full bg-[#00a884]/20 flex items-center justify-center">
-                <RefreshCw className="w-5 h-5 text-[#00a884]" />
-              </div>
-              <div>
-                <h3 className="text-[#e9edef] font-semibold text-base">Chat Sync Request</h3>
-                <p className="text-[#8696a0] text-xs">{targetUser.username} wants your chat history</p>
-              </div>
-            </div>
-            <p className="text-[#8696a0] text-sm mb-6">
-              <span className="text-[#e9edef] font-medium">{targetUser.username}</span> is requesting a copy of your local chat history for this conversation. Your messages will be sent end-to-end encrypted using your shared session key.
-            </p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => handleApproveChatSync(showChatSyncModal.fromId)}
-                className="flex-1 py-3 bg-[#00a884] hover:bg-[#06cf9c] text-white font-semibold rounded-xl transition-colors text-sm"
-              >
-                ✓ Approve Sync
-              </button>
-              <button
-                onClick={() => setShowChatSyncModal(null)}
-                className="flex-1 py-3 bg-[#3b4a54] hover:bg-[#4a5568] text-[#d1d7db] font-semibold rounded-xl transition-colors text-sm"
-              >
-                Decline
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* Chat History Sync Approval Modal */}
+
+      {showChatSyncModal && (
+
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
+
+          <div className="bg-[#202c33] rounded-2xl p-6 max-w-sm w-full border border-[#2a3942] shadow-2xl animate-fade-in">
+
+            <div className="flex items-center gap-3 mb-4">
+
+              <div className="w-10 h-10 rounded-full bg-[#00a884]/20 flex items-center justify-center">
+
+                <RefreshCw className="w-5 h-5 text-[#00a884]" />
+
+              </div>
+
+              <div>
+
+                <h3 className="text-[#e9edef] font-semibold text-base">Chat Sync Request</h3>
+
+                <p className="text-[#8696a0] text-xs">{targetUser.username} wants your chat history</p>
+
+              </div>
+
+            </div>
+
+            <p className="text-[#8696a0] text-sm mb-6">
+
+              <span className="text-[#e9edef] font-medium">{targetUser.username}</span> is requesting a copy of your local chat history for this conversation. Your messages will be sent end-to-end encrypted using your shared session key.
+
+            </p>
+
+            <div className="flex gap-3">
+
+              <button
+
+                onClick={() => handleApproveChatSync(showChatSyncModal.fromId)}
+
+                className="flex-1 py-3 bg-[#00a884] hover:bg-[#06cf9c] text-white font-semibold rounded-xl transition-colors text-sm"
+
+              >
+
+                ✓ Approve Sync
+
+              </button>
+
+              <button
+
+                onClick={() => setShowChatSyncModal(null)}
+
+                className="flex-1 py-3 bg-[#3b4a54] hover:bg-[#4a5568] text-[#d1d7db] font-semibold rounded-xl transition-colors text-sm"
+
+              >
+
+                Decline
+
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      )}
+
+
+
       {/* Messages Area */}
       <div 
         ref={chatContainerRef}
