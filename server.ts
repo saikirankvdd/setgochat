@@ -634,7 +634,9 @@ const EVENT_SIZE_LIMITS: Record<string, number> = {
   request_offline_messages: 1000,
   stealth_rtp_packet: 1000000, // 1 MB (Added to allow stego real-time voice packets ~12KB and video frames ~200KB)
   device_sync_request: 10000,   // 10 KB
-  device_sync_payload: 1000000  // 1 MB (Added to allow database sync files)
+  device_sync_payload: 1000000,  // 1 MB (Added to allow database sync files)
+  chat_sync_request:   5000,      // 5 KB
+  chat_sync_approve:   5000000    // 5 MB – encrypted chat history export
 };
 
 // Event Rate Limiting Store
@@ -1040,6 +1042,39 @@ io.on('connection', (socket: any) => {
       ack?.({ ok: true });
     } catch (err: any) {
       console.error('[Security] device_sync_payload rejected:', err.message);
+      ack?.({ ok: false });
+    }
+  });
+
+  // Cross-user chat history sync — lets Lux request Saiki2's local messages over their shared E2EE session
+  socket.on('chat_sync_request', async (data, ack) => {
+    try {
+      const sessionId = [socket.userId, String(data.toId)].sort().join('-');
+      await assertParticipant(socket.userId, sessionId);
+      // Forward the sync request to the other participant
+      io.to(`user_${data.toId}`).emit('chat_sync_request', {
+        fromId: socket.userId,
+        sessionId: data.sessionId
+      });
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] chat_sync_request rejected:', err.message);
+      ack?.({ ok: false });
+    }
+  });
+
+  socket.on('chat_sync_approve', async (data, ack) => {
+    try {
+      const sessionId = [socket.userId, String(data.toId)].sort().join('-');
+      await assertParticipant(socket.userId, sessionId);
+      // Forward encrypted history to the requester
+      io.to(`user_${data.toId}`).emit('chat_sync_receive', {
+        encryptedHistory: data.encryptedHistory,
+        sessionId: data.sessionId
+      });
+      ack?.({ ok: true });
+    } catch (err: any) {
+      console.error('[Security] chat_sync_approve rejected:', err.message);
       ack?.({ ok: false });
     }
   });
