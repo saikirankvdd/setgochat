@@ -1102,18 +1102,65 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   const handleApproveChatSync = async (fromId: string) => {
     try {
+      // 1. Resolve vault fallback PIN to handle cases where messages are encrypted with an older local PIN
+      let vaultFallbackPin = '';
+      try {
+        const { decryptPINWithPrivateKey } = await import('../utils/e2ee');
+        const encLocalPin = await getPinLocal(sessionInfo.sessionId);
+        if (encLocalPin) {
+          const privKey = user.privateKey
+            || sessionStorage.getItem('stego_priv_key_' + user.id.toString())
+            || await getPrivateKeyLocal(user.id.toString())
+            || null;
+          if (privKey) {
+            const plain = await decryptPINWithPrivateKey(encLocalPin, privKey);
+            if (plain && plain !== 'DECRYPTION_FAILED' && plain !== 'UNENCRYPTED') {
+              vaultFallbackPin = plain;
+            }
+          }
+        }
+      } catch (e) {
+        console.debug('[ChatSync] Could not load vault fallback PIN:', e);
+      }
+
       const msgs = await getMessagesLocal(sessionInfo.sessionId);
-      const exportData = msgs.map(m => ({
-        id: m.id,
-        sessionId: sessionInfo.sessionId,
-        fromId: m.fromId,
-        toId: m.toId,
-        encryptedText: m.encryptedText,
-        encryptedFile: m.encryptedFile,
-        timestamp: m.timestamp,
-        isSelfDestruct: m.isSelfDestruct,
-        expiresAt: m.expiresAt
-      }));
+      
+      const exportData = msgs.map(m => {
+        // Try to decrypt the text first with active pin, then fallback pin
+        let plainText = '';
+        if (m.encryptedText) {
+          plainText = decryptData(m.encryptedText, sessionInfo.pin) || '';
+          if (!plainText && vaultFallbackPin && vaultFallbackPin !== sessionInfo.pin) {
+            plainText = decryptData(m.encryptedText, vaultFallbackPin) || '';
+          }
+        }
+
+        // Try to decrypt the file payload with active pin, then fallback pin
+        let plainFile = '';
+        if (m.encryptedFile) {
+          plainFile = decryptData(m.encryptedFile, sessionInfo.pin) || '';
+          if (!plainFile && vaultFallbackPin && vaultFallbackPin !== sessionInfo.pin) {
+            plainFile = decryptData(m.encryptedFile, vaultFallbackPin) || '';
+          }
+        }
+
+        // Re-encrypt strictly with the current active shared PIN so the receiver can decrypt it
+        const newEncryptedText = plainText ? encryptData(plainText, sessionInfo.pin) : '';
+        const newEncryptedFile = plainFile ? encryptData(plainFile, sessionInfo.pin) : undefined;
+
+        return {
+          id: m.id,
+          sessionId: sessionInfo.sessionId,
+          fromId: m.fromId,
+          toId: m.toId,
+          encryptedText: newEncryptedText,
+          encryptedFile: newEncryptedFile,
+          timestamp: m.timestamp,
+          isSelfDestruct: m.isSelfDestruct,
+          expiresAt: m.expiresAt
+        };
+      });
+
       const encrypted = encryptData(JSON.stringify(exportData), sessionInfo.pin);
       socket.emit('chat_sync_approve', {
         toId: fromId,
