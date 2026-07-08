@@ -22,6 +22,7 @@ interface SidebarProps {
   notifications: any[];
   onClearNotifications: () => void;
   onSyncRequest?: () => void;
+  pinsReady?: boolean;
 }
 
 
@@ -123,7 +124,7 @@ const BackupModal = ({ onClose, currentUser }: { onClose: () => void, currentUse
   );
 };
 
-export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, activeUserId, onShowAdmin, onlineUsers, lastMessages, unreadCounts, blockedUsersList = [], onShowOnboarding, notifications, onClearNotifications, onSyncRequest }: SidebarProps) {
+export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, activeUserId, onShowAdmin, onlineUsers, lastMessages, unreadCounts, blockedUsersList = [], onShowOnboarding, notifications, onClearNotifications, onSyncRequest, pinsReady = true }: SidebarProps) {
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<'chats' | 'requests' | 'calls'>('chats');
   const [showProfile, setShowProfile] = useState(false);
@@ -477,6 +478,13 @@ const BlockedUsersModal = ({ onClose, users, onSelect }: { onClose: () => void, 
 
   return (
     <div className="flex flex-col h-full bg-[#111b21] w-full max-w-full">
+      {/* Vault Loading Banner */}
+      {!pinsReady && (
+        <div className="flex items-center justify-center gap-2 bg-[#202c33] border-b border-[#2a3942] px-4 py-2">
+          <div className="w-3 h-3 border-2 border-[#00a884]/40 border-t-[#00a884] rounded-full animate-spin flex-shrink-0" />
+          <span className="text-[#8696a0] text-xs">Decrypting secure vault… please wait</span>
+        </div>
+      )}
       {/* Header */}
       <div className="h-[60px] bg-[#202c33] px-4 flex items-center justify-between shadow-md z-10 w-full">
         <div className="flex items-center space-x-3 cursor-pointer" onClick={() => setShowProfile(true)}>

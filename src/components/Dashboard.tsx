@@ -624,6 +624,15 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
     try {
       if (!user.publicKey || !targetUser.publicKey) return;
 
+      // CRITICAL GUARD: Do NOT generate a new PIN if session_pins hasn't been received yet.
+      // If the user clicks a chat before the server responds with existing PINs, pinsRef is
+      // empty and isValidPin would be false — causing a fresh PIN to overwrite the old one,
+      // permanently making all locally stored messages (encrypted with the old PIN) unreadable.
+      if (!pinsReady) {
+        console.log('[E2EE] Pins not ready yet — skipping start_chat to prevent overwriting existing session PIN.');
+        return;
+      }
+
       const sId = [String(user.id), String(targetUser.id)].sort().join('-');
       const existingPin = pinsRef.current[sId];
       
@@ -709,6 +718,7 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
           users={visibleUsers}
           sessions={sessions}
           calls={calls}
+          pinsReady={pinsReady}
           onSelectUser={(u) => { setUnreadCounts(prev => ({ ...prev, [u.id]: 0 })); handleStartChat(u); }} 
           activeUserId={activeChat?.id}
           onShowAdmin={() => setShowAdmin(true)}
