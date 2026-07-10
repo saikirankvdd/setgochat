@@ -163,8 +163,6 @@ const DataManagementModal = ({ onClose, sessionInfo, targetUser }: { onClose: ()
   const [password, setPassword] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
-  const [reloadTrigger, setReloadTrigger] = useState(0); // incremented to force message reload after sync
-  const [showChatSyncModal, setShowChatSyncModal] = useState<{fromId: string} | null>(null);
   const [previewMsgs, setPreviewMsgs] = useState<any[]>([]);
   const [exportLog, setExportLog] = useState<string[]>([]);
   const { showModal } = useModal();
@@ -1103,6 +1101,66 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     };
   }, []);
 
+  const handleSendSyncRequest = async () => {
+    try {
+      setIsProcessing(true);
+      // 1. Encrypt token text
+      const encrypted = encryptData("JSON_SYNC_REQUEST", sessionInfo.pin);
+      
+      // 2. Convert to Binary
+      const binary = stringToBinary(encrypted);
+      
+      // 3. Create Carrier Audio (stealthy cover song payload)
+      const carrier = createDynamicCarrier(binary.length);
+      
+      // 4. Hide Data in Carrier
+      const stegoAudio = encodeLSB(carrier, binary);
+      
+      // 5. Convert to Base64
+      const base64 = uint8ToBase64(stegoAudio);
+
+      // 6. Send via standard send_message socket channel (enables seamless offline queuing)
+      socket.emit('send_message', {
+        sessionId: sessionInfo.sessionId,
+        fromId: user.id,
+        toId: targetUser.id,
+        audioBase64: base64,
+        isSelfDestruct: false,
+        isOneTime: false,
+        timer: 0
+      });
+
+      // Add request inline locally
+      const newMsg: Message = {
+        id: Math.random().toString(36).substr(2, 9),
+        fromId: user.id,
+        text: "JSON_SYNC_REQUEST",
+        timestamp: Date.now(),
+        isSelfDestruct: false,
+        isOneTime: false,
+        timerSeconds: 0,
+        isRevealed: true
+      };
+      setMessages(prev => [...prev, newMsg]);
+      addMessageLocal(newMsg);
+
+      showModal({ title: 'Request Sent', message: `Chat sync request sent to ${targetUser.username}. They will see an approval box inside their chat timeline.`, iconType: 'info' });
+    } catch (err) {
+      alert('Error encoding sync request: ' + err);
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const handleDeclineChatSync = (fromId: string) => {
+    socket.emit('chat_sync_decline', {
+      toId: fromId,
+      reason: 'user_declined'
+    });
+    // Remove the sync request message locally so the buttons disappear
+    setMessages(prev => prev.filter(m => m.text !== 'JSON_SYNC_REQUEST'));
+  };
+
   const handleApproveChatSync = async (fromId: string) => {
     try {
       // 1. Resolve vault fallback PIN to handle cases where messages are encrypted with an older local PIN
@@ -1164,13 +1222,34 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         };
       });
 
-      const encrypted = encryptData(JSON.stringify(exportData), sessionInfo.pin);
+      const serializedData = JSON.stringify(exportData);
+      const sizeBytes = serializedData.length;
+
+      // 200 MB Limit check
+      if (sizeBytes > 200 * 1024 * 1024) {
+        showModal({ 
+          title: 'Sync Size Exceeded', 
+          message: 'The chat history size exceeds the 200 MB over-the-air limit. Please use the manual Export/Import feature instead to securely transfer your history.', 
+          iconType: 'warning' 
+        });
+        
+        socket.emit('chat_sync_decline', {
+          toId: fromId,
+          reason: 'size_limit_exceeded'
+        });
+        
+        // Remove request bubble
+        setMessages(prev => prev.filter(m => m.text !== 'JSON_SYNC_REQUEST'));
+        return;
+      }
+
+      const encrypted = encryptData(serializedData, sessionInfo.pin);
       socket.emit('chat_sync_approve', {
         toId: fromId,
-        sessionId: sessionInfo.sessionId,
         encryptedHistory: encrypted
       });
-      setShowChatSyncModal(null);
+      // Clear sync request bubble locally
+      setMessages(prev => prev.filter(m => m.text !== 'JSON_SYNC_REQUEST'));
       showModal({ title: 'Sync Approved', message: 'Your chat history has been sent securely.', iconType: 'success' });
     } catch (e) {
       console.error('[ChatSync] Failed to export history:', e);
@@ -1611,12 +1690,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     };
 
     // Chat history sync: receive request from the other user → show approval modal
-    const handleChatSyncRequest = (data: any) => {
-      if (data.sessionId !== sessionInfo.sessionId) return;
-      setShowChatSyncModal({ fromId: data.fromId });
-    };
+    
 
-    // Chat history sync: receive approved history from the other user → import + reload
+    // Chat history sync: receive approved history from the other user
     const handleChatSyncReceive = async (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
       try {
@@ -1625,15 +1701,36 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         const msgs = JSON.parse(decrypted);
         await importMessagesLocal(msgs);
         setReloadTrigger(t => t + 1); // trigger loadLocalMessages re-run
-        showModal({ title: '✅ Sync Complete', message: 'Chat history has been synced successfully! Messages are now loading.', iconType: 'success' });
+        setMessages(prev => prev.filter(m => m.text !== 'JSON_SYNC_REQUEST'));
+        showModal({ title: 'Sync Complete', message: 'Chat history has been synced successfully! Messages are now loading.', iconType: 'success' });
       } catch (e) {
         console.error('[ChatSync] Failed to import synced history:', e);
         showModal({ title: 'Sync Failed', message: 'Could not import chat history. Please try again.', iconType: 'warning' });
       }
     };
 
-    socket.on('chat_sync_request', handleChatSyncRequest);
+    const handleChatSyncDecline = (data: any) => {
+      if (data.sessionId !== sessionInfo.sessionId) return;
+      setMessages(prev => prev.filter(m => m.text !== 'JSON_SYNC_REQUEST'));
+
+      if (data.reason === 'size_limit_exceeded') {
+        showModal({
+          title: 'Sync Size Exceeded',
+          message: `${targetUser.username}'s chat history exceeds the 200 MB limit. Please use the manual Export/Import feature instead to securely transfer history.`,
+          iconType: 'warning'
+        });
+      } else {
+        showModal({
+          title: 'Sync Declined',
+          message: `${targetUser.username} declined the sync request.`,
+          iconType: 'info'
+        });
+      }
+    };
+
+    
     socket.on('chat_sync_receive', handleChatSyncReceive);
+    socket.on('chat_sync_decline', handleChatSyncDecline);
     socket.on('stealth_pong', handleStealthPong);
     socket.on('receive_message', handleReceive);
     socket.on('receive_file', handleReceiveFile);
@@ -1651,8 +1748,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     socket.on('stealth_rtp_receive', handleStealthRtpReceive);
 
     return () => {
-      socket.off('chat_sync_request', handleChatSyncRequest);
+      
       socket.off('chat_sync_receive', handleChatSyncReceive);
+      socket.off('chat_sync_decline', handleChatSyncDecline);
       socket.off('stealth_pong', handleStealthPong);
       socket.off('receive_message', handleReceive);
       socket.off('receive_file', handleReceiveFile);
@@ -3291,10 +3389,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                    </div>
                    <div className="px-4 py-2 text-xs text-[#8696a0] font-bold uppercase tracking-wider bg-[#111b21]">Data Management</div>
                    <button onClick={() => {
-                      socket.emit('chat_sync_request', { toId: targetUser.id, sessionId: sessionInfo.sessionId });
-                      showModal({ title: 'Request Sent', message: `Chat sync request sent to ${targetUser.username}. They will see an approval prompt on their device.`, iconType: 'info' });
-                      setShowDropdown(false);
-                   }} className="w-full text-left px-4 py-3 text-[#00a884] text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors border-b border-[#202c33]">
+                       handleSendSyncRequest();
+                       setShowDropdown(false);
+                    }} className="w-full text-left px-4 py-3 text-[#00a884] text-sm hover:bg-[#202c33] flex items-center gap-3 transition-colors border-b border-[#202c33]">
                       <RefreshCw className="w-4 h-4" />
                       Request Chat History Sync
                    </button>
@@ -3308,75 +3405,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         </div>
       </div>
 
-      {/* Chat History Sync Approval Modal */}
-
-      {showChatSyncModal && (
-
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[9999] flex items-center justify-center p-4">
-
-          <div className="bg-[#202c33] rounded-2xl p-6 max-w-sm w-full border border-[#2a3942] shadow-2xl animate-fade-in">
-
-            <div className="flex items-center gap-3 mb-4">
-
-              <div className="w-10 h-10 rounded-full bg-[#00a884]/20 flex items-center justify-center">
-
-                <RefreshCw className="w-5 h-5 text-[#00a884]" />
-
-              </div>
-
-              <div>
-
-                <h3 className="text-[#e9edef] font-semibold text-base">Chat Sync Request</h3>
-
-                <p className="text-[#8696a0] text-xs">{targetUser.username} wants your chat history</p>
-
-              </div>
-
-            </div>
-
-            <p className="text-[#8696a0] text-sm mb-6">
-
-              <span className="text-[#e9edef] font-medium">{targetUser.username}</span> is requesting a copy of your local chat history for this conversation. Your messages will be sent end-to-end encrypted using your shared session key.
-
-            </p>
-
-            <div className="flex gap-3">
-
-              <button
-
-                onClick={() => handleApproveChatSync(showChatSyncModal.fromId)}
-
-                className="flex-1 py-3 bg-[#00a884] hover:bg-[#06cf9c] text-white font-semibold rounded-xl transition-colors text-sm"
-
-              >
-
-                ✓ Approve Sync
-
-              </button>
-
-              <button
-
-                onClick={() => setShowChatSyncModal(null)}
-
-                className="flex-1 py-3 bg-[#3b4a54] hover:bg-[#4a5568] text-[#d1d7db] font-semibold rounded-xl transition-colors text-sm"
-
-              >
-
-                Decline
-
-              </button>
-
-            </div>
-
-          </div>
-
-        </div>
-
-      )}
-
-
-
-      {/* Messages Area */}
+            {/* Messages Area */}
       <div 
         ref={chatContainerRef}
         className="flex-1 overflow-y-auto p-6 space-y-4 relative bg-[var(--chat-bg)]"
@@ -3495,8 +3524,38 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                        BURNING...
                      </div>
                   )}
-                  {msg.file ? (
-                    <div className="mb-2 relative">
+                  {msg.text === 'JSON_SYNC_REQUEST' ? (
+                    <div className="py-2 px-1 flex flex-col gap-2 min-w-[220px]">
+                      <div className="flex items-center gap-2 text-orange-400">
+                        <RefreshCw className="w-4 h-4" />
+                        <span className="font-semibold text-sm">Chat Sync Request</span>
+                      </div>
+                      <p className="text-xs text-[#8696a0] leading-normal">
+                        {isMine(msg)
+                          ? "You requested a copy of the chat history to restore this conversation on your other device."
+                          : `${targetUser.username} is requesting a copy of the chat history to restore this conversation on their device.`}
+                      </p>
+                      {!isMine(msg) && (
+                        <div className="flex gap-2 mt-2">
+                          <button
+                            onClick={() => handleApproveChatSync(msg.fromId.toString())}
+                            className="flex-1 py-1.5 bg-[#00a884] hover:bg-[#06cf9c] text-white font-bold rounded text-xs transition-colors"
+                          >
+                            ✓ Approve
+                          </button>
+                          <button
+                            onClick={() => handleDeclineChatSync(msg.fromId.toString())}
+                            className="flex-1 py-1.5 bg-[#3b4a54] hover:bg-[#4a5568] text-[#d1d7db] font-semibold rounded text-xs transition-colors"
+                          >
+                            Decline
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      {msg.file ? (
+                        <div className="mb-2 relative">
                   {msg.file.type?.startsWith('image/') ? (
                     <div className="relative inline-block group/media">
                       <img src={msg.file.data} alt="attachment" className="max-w-full rounded-lg max-h-64 object-contain" />
@@ -3533,7 +3592,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                   )}
                 </div>
               ) : null}
-              {msg.text && <p className="text-sm leading-relaxed pr-8 whitespace-pre-wrap">{renderMessageText(msg.text)}</p>}
+              {msg.text && msg.text !== 'JSON_SYNC_REQUEST' && <p className="text-sm leading-relaxed pr-8 whitespace-pre-wrap">{renderMessageText(msg.text)}</p>}
+                    </>
+                  )}
               <div className="flex items-center justify-end mt-1 space-x-1">
                 <span className="text-[10px] text-[#8696a0] flex items-center">
                   {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
