@@ -718,6 +718,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [isVideoCall, setIsVideoCall] = useState(false);
   const [webrtcConnected, setWebrtcConnected] = useState(false);
+  const [audioCtxState, setAudioCtxState] = useState<string>('inactive');
+  const [packetsSent, setPacketsSent] = useState<number>(0);
+  const [packetsRecv, setPacketsRecv] = useState<number>(0);
   const [isMuted, setIsMuted] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(false);
   const [isVideoOff, setIsVideoOff] = useState(false);
@@ -1602,6 +1605,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         return;
       }
       
+      setPacketsRecv(prev => prev + 1);
+      
       // Auto-resume AudioContext on packet arrival to prevent mobile sleep states
       const audioCtx = stealthAudioCtxRef.current;
       if (audioCtx && audioCtx.state === 'suspended') {
@@ -1911,6 +1916,25 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     };
   }, [callState]);
 
+  // Poll AudioContext state for diagnostics
+  useEffect(() => {
+    if (callState === 'idle') {
+      setAudioCtxState('inactive');
+      setPacketsSent(0);
+      setPacketsRecv(0);
+      return;
+    }
+    const timer = setInterval(() => {
+      const ctx = stealthAudioCtxRef.current;
+      if (ctx) {
+        setAudioCtxState(ctx.state);
+      } else {
+        setAudioCtxState('not_created');
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [callState]);
+
   const formatDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
     const s = (seconds % 60).toString().padStart(2, '0');
@@ -2027,6 +2051,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         if (event.data.type === 'RTP_CHUNK_READY') {
           if (callStateRef.current !== 'connected') return;
           const { rtp, jitter } = event.data;
+          setPacketsSent(prev => prev + 1);
           
           // Wait jitterMs before sending — makes packet timing look like real Wi-Fi
           setTimeout(() => {
@@ -2137,6 +2162,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           // Apply natural human-like jitter variation (0-15ms)
           const jitter = Math.floor(Math.random() * 16);
+          setPacketsSent(prev => prev + 1);
           setTimeout(() => {
             socket.emit('stealth_rtp_packet', {
               toId: toId,
@@ -3261,7 +3287,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 </div>
                 <div>
                   <p className="text-white font-medium text-sm leading-tight">{targetUser.username}</p>
-                  <p className="text-[#00a884] text-xs font-mono">{!webrtcConnected ? '🔒 Securing...' : formatDuration(callDuration)}</p>
+                  <p className="text-[#00a884] text-xs font-mono">{!webrtcConnected ? '🔒 Securing...' : `${formatDuration(callDuration)} (Audio: ${audioCtxState})`}</p>
                 </div>
                 <div className="flex items-center gap-2 ml-2">
                   <button onClick={toggleMute} className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${isMuted ? 'bg-red-500/80 text-white' : 'bg-[#2a3942] hover:bg-[#3b4a54] text-white'}`}>
@@ -3297,6 +3323,28 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                       {callState === 'receiving' && `Incoming ${isVideoCall ? 'Video ' : 'Audio '}Call`}
                       {callState === 'connected' && (!webrtcConnected ? '🔒 Securing connection...' : formatDuration(callDuration))}
                     </p>
+                  </div>
+                )}
+
+                {/* Real-time Call Diagnostics Card */}
+                {(callState === 'connected' || callState === 'calling' || callState === 'receiving') && (
+                  <div className="mt-4 p-3 bg-black/40 rounded-xl text-left border border-white/5 w-full font-mono text-[10px] text-gray-400">
+                    <p className="font-semibold text-gray-300 text-center mb-1">CALL DIAGNOSTICS</p>
+                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                      <span>Audio Engine:</span>
+                      <span className={audioCtxState === 'running' ? 'text-green-400 font-bold' : 'text-yellow-500 font-bold animate-pulse'}>
+                        {audioCtxState.toUpperCase()}
+                      </span>
+                      <span>Outbound (Sent):</span>
+                      <span className="text-gray-200">{packetsSent}</span>
+                      <span>Inbound (Recv):</span>
+                      <span className="text-gray-200">{packetsRecv}</span>
+                    </div>
+                    {audioCtxState === 'suspended' && (
+                      <p className="text-yellow-500 text-[9px] mt-2 text-center animate-pulse">
+                        ⚠️ Tap screen to activate audio
+                      </p>
+                    )}
                   </div>
                 )}
 
