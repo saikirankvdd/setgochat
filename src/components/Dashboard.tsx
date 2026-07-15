@@ -404,7 +404,7 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
            // Handle Covert Stego signaling in Dashboard
            if (data.isStegoSignaling || (previewText && (previewText.startsWith('H4sI') || previewText.includes('"type":"stego_call_')))) {
              try {
-               let decryptedSignaling = previewText;
+               let decryptedSignaling = previewText || '';
                if (previewText.startsWith('H4sI')) {
                  const compressedBytes = base64ToUint8(previewText);
                  const decompressedBytes = gunzipSync(compressedBytes);

@@ -1884,6 +1884,26 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
   }, [callState, remoteStream, isVideoCall]);
 
+  // Global user interaction listener to force-resume AudioContext on mobile devices
+  useEffect(() => {
+    const resumeAudio = () => {
+      const audioCtx = stealthAudioCtxRef.current;
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume()
+          .then(() => console.log("[Stealth-Gesture] AudioCtx successfully resumed via user interaction!"))
+          .catch(e => console.warn("Failed to resume AudioCtx:", e));
+      }
+    };
+    if (callState === 'connected' || callState === 'calling' || callState === 'receiving') {
+      document.addEventListener('click', resumeAudio);
+      document.addEventListener('touchstart', resumeAudio);
+    }
+    return () => {
+      document.removeEventListener('click', resumeAudio);
+      document.removeEventListener('touchstart', resumeAudio);
+    };
+  }, [callState]);
+
   const formatDuration = (seconds: number) => {
     const m = Math.floor(seconds / 60).toString().padStart(2, '0');
     const s = (seconds % 60).toString().padStart(2, '0');
