@@ -695,6 +695,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isProcessing, setIsProcessing] = useState(false);
   const [reloadTrigger, setReloadTrigger] = useState(0); // incremented to force message reload after sync
   const [showChatSyncModal, setShowChatSyncModal] = useState<{fromId: string} | null>(null);
+  const [syncProgress, setSyncProgress] = useState<number | null>(null);
   const [showUserProfile, setShowUserProfile] = useState(false);
   const [callState, setCallState] = useState<'idle' | 'calling' | 'receiving' | 'connected'>('idle');
   const callStateRef = useRef(callState);
@@ -1699,12 +1700,30 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         const decrypted = decryptData(data.encryptedHistory, sessionInfo.pin);
         if (!decrypted) throw new Error('Decryption failed');
         const msgs = JSON.parse(decrypted);
-        await importMessagesLocal(msgs);
+        
+        // Import in batches to show progress
+        if (msgs.length > 0) {
+          setSyncProgress(0);
+          const total = msgs.length;
+          const batchSize = 25;
+          for (let i = 0; i < total; i += batchSize) {
+            const batch = msgs.slice(i, i + batchSize);
+            await importMessagesLocal(batch);
+            setSyncProgress(Math.round((Math.min(i + batchSize, total) / total) * 100));
+            // Yield control to UI thread to render progress updates
+            await new Promise(resolve => setTimeout(resolve, 0));
+          }
+          setSyncProgress(100);
+          await new Promise(resolve => setTimeout(resolve, 300));
+          setSyncProgress(null);
+        }
+
         setReloadTrigger(t => t + 1); // trigger loadLocalMessages re-run
         setMessages(prev => prev.filter(m => m.text !== 'JSON_SYNC_REQUEST'));
         showModal({ title: 'Sync Complete', message: 'Chat history has been synced successfully! Messages are now loading.', iconType: 'success' });
       } catch (e) {
         console.error('[ChatSync] Failed to import synced history:', e);
+        setSyncProgress(null);
         showModal({ title: 'Sync Failed', message: 'Could not import chat history. Please try again.', iconType: 'warning' });
       }
     };
@@ -3121,6 +3140,25 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   return (
     <div className="flex flex-row h-full w-full">
+      {/* Sync progress overlay */}
+      {syncProgress !== null && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
+          <div className="bg-[#202c33] rounded-2xl p-6 max-w-sm w-full border border-[#2a3942] shadow-2xl animate-fade-in text-center flex flex-col items-center">
+            <Loader2 className="w-10 h-10 text-[#00a884] animate-spin mb-4" />
+            <h3 className="text-[#e9edef] font-semibold text-base mb-2">Syncing Chat History</h3>
+            <p className="text-[#8696a0] text-sm mb-6">
+              Importing and decrypting secure messages...
+            </p>
+            <div className="w-full bg-[#111b21] rounded-full h-2.5 mb-2 overflow-hidden border border-[#2a3942]">
+              <div 
+                className="bg-[#00a884] h-2.5 rounded-full transition-all duration-300" 
+                style={{ width: `${syncProgress}%` }}
+              />
+            </div>
+            <span className="text-[#00a884] font-bold text-sm">{syncProgress}%</span>
+          </div>
+        </div>
+      )}
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col relative">
         {/* Call UI Overlay */}
