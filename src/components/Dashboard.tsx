@@ -5,7 +5,7 @@ import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { decodeLSB, decodeLSB1Bit } from '../utils/stego';
 import { gunzipSync, strFromU8 } from 'fflate';
-import { decryptData, binaryToString, encryptData } from '../utils/crypto';
+import { decryptData, binaryToString, encryptData, base64ToUint8 } from '../utils/crypto';
 import { useModal } from '../contexts/ModalContext';
 import { saveMessageLocal } from '../utils/db';
 import { AdminDashboard } from './AdminDashboard';
@@ -371,7 +371,6 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
     });
 
     const processPreview = (data: any, isFile: boolean, msgType: string) => {
-       if (data.isStegoSignaling) return; // Discard call signaling immediately
        if (data.fromId === user.id) return;
        const pin = pinsRef.current[data.sessionId];
        if (!pin) return; 
@@ -398,18 +397,47 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
            const binaryString = atob(data.audioBase64);
            const bytes = new Uint8Array(binaryString.length);
            for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
-           // Sequential decoder — matches encodeLSB used in handleSendMessage
            const binary = decodeLSB(bytes.buffer);
            extractedEncryptedText = binaryToString(binary);
            previewText = decryptData(extractedEncryptedText, pin);
            
-           // Covert Stego signaling messages must be ignored by Dashboard preview
-           if (previewText && (previewText.includes('"type":"stego_call_') || previewText.startsWith('{"type":"stego_'))) {
-              return;
-           }
-           // Any H4sI prefix = Gzip stego signaling payload — always discard
-           if (previewText && previewText.startsWith('H4sI')) {
-              return; // Never display or save stego signaling residues
+           // Handle Covert Stego signaling in Dashboard
+           if (data.isStegoSignaling || (previewText && (previewText.startsWith('H4sI') || previewText.includes('"type":"stego_call_')))) {
+             try {
+               let decryptedSignaling = previewText;
+               if (previewText.startsWith('H4sI')) {
+                 const compressedBytes = base64ToUint8(previewText);
+                 const decompressedBytes = gunzipSync(compressedBytes);
+                 decryptedSignaling = strFromU8(decompressedBytes);
+               }
+               
+               if (decryptedSignaling.includes('"type":"stego_call_')) {
+                 const parsed = JSON.parse(decryptedSignaling);
+                 if (parsed.type === 'stego_call_offer') {
+                   if (activeUserIdRef.current !== data.fromId) {
+                     const sender = usersRef.current.find(u => u.id === data.fromId);
+                     const senderName = sender ? sender.username : `User ${data.fromId}`;
+                     setIncomingCall({
+                       sessionId: data.sessionId,
+                       fromId: data.fromId,
+                       fromName: senderName,
+                       offer: parsed.offer,
+                       withVideo: parsed.withVideo,
+                       callId: parsed.callId
+                     });
+                     playNotificationSound();
+                   }
+                 } else if (parsed.type === 'stego_call_end') {
+                   setIncomingCall(prev => {
+                     if (prev && prev.sessionId === data.sessionId) return null;
+                     return prev;
+                   });
+                 }
+               }
+             } catch (err) {
+               console.error("[Dashboard-Stego-Signaling] Failed to process signaling:", err);
+             }
+             return; // Ignore signaling message from standard chat previews
            }
          } catch(e) {}
        }

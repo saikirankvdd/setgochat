@@ -913,6 +913,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       console.log("[Stealth-Call] WebRTC connection state changed to:", state);
       if (state === 'connected') {
         setWebrtcConnected(true);
+        // Force resume AudioContext when call connects to ensure mobile browsers start processing audio nodes
+        const audioCtx = stealthAudioCtxRef.current;
+        if (audioCtx && audioCtx.state === 'suspended') {
+          audioCtx.resume()
+            .then(() => console.log("[Stealth-Call] AudioContext successfully resumed on WebRTC connect!"))
+            .catch(e => console.warn("[Stealth-Call] Failed to resume AudioContext on WebRTC connect:", e));
+        }
         setMessages(prev => {
           const systemMsgText = isVideo ? '🔒 Secure video call established.' : '🔒 Secure audio call established.';
           if (prev.some(m => m.fromId === 'system' && m.text === systemMsgText)) return prev;
@@ -1543,6 +1550,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (peerConnectionRef.current) {
         await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
         setCallState('connected');
+        callStateRef.current = 'connected';
         
         while (pendingCandidates.current.length > 0) {
           const candidate = pendingCandidates.current.shift();
@@ -1586,6 +1594,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (callStateRef.current !== 'connected' && callStateRef.current !== 'receiving') {
         return;
       }
+      
+      // Auto-resume AudioContext on packet arrival to prevent mobile sleep states
+      const audioCtx = stealthAudioCtxRef.current;
+      if (audioCtx && audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(err => console.warn("[Stealth-RTP] Failed to resume AudioContext on packet receive:", err));
+      }
+      
       console.log("[Stealth-RTP] Received socket packet type:", packet?.type);
 
       if (packet.timestamp) {
@@ -2111,6 +2126,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       stealthWorkletRef.current = workletNode;
       (window as any).stealthMicProcessor = micProcessor; // prevent GC
 
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(e => console.warn("[Stealth-Encode] Failed to resume AudioContext:", e));
+      }
+
       return dest.stream.getAudioTracks()[0];
     } catch (e) {
       console.error("[Stealth] Failed to start encode pipeline:", e);
@@ -2143,6 +2162,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       console.log("[Stealth-RTP] voicePlayer AudioWorkletNode initialized and connected to AudioContext destination.");
       (window as any).stealthVoicePlayerNode = voicePlayerNode; // prevent GC
       (window as any).stealthDecodePipelineActive = true;
+      
+      if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(e => console.warn("[Stealth-Decode] Failed to resume AudioContext:", e));
+      }
     } catch (e) {
       console.error("[Stealth] Failed to start decode pipeline:", e);
     }
