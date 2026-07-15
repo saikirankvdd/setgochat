@@ -695,7 +695,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [isProcessing, setIsProcessing] = useState(false);
   const [reloadTrigger, setReloadTrigger] = useState(0); // incremented to force message reload after sync
   const [showChatSyncModal, setShowChatSyncModal] = useState<{fromId: string} | null>(null);
-  const [syncProgress, setSyncProgress] = useState<number | null>(null);
+  const [importProgress, setImportProgress] = useState<number | null>(null);
+  const [exportProgress, setExportProgress] = useState<number | null>(null);
   const [showUserProfile, setShowUserProfile] = useState(false);
   const [callState, setCallState] = useState<'idle' | 'calling' | 'receiving' | 'connected'>('idle');
   const callStateRef = useRef(callState);
@@ -1186,42 +1187,55 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
 
       const msgs = await getMessagesLocal(sessionInfo.sessionId);
+      const total = msgs.length;
+      const exportData = [];
       
-      const exportData = msgs.map(m => {
-        // Try to decrypt the text first with active pin, then fallback pin
-        let plainText = '';
-        if (m.encryptedText) {
-          plainText = decryptData(m.encryptedText, sessionInfo.pin) || '';
-          if (!plainText && vaultFallbackPin && vaultFallbackPin !== sessionInfo.pin) {
-            plainText = decryptData(m.encryptedText, vaultFallbackPin) || '';
+      if (total > 0) {
+        setExportProgress(0);
+        const batchSize = 15;
+        for (let i = 0; i < total; i++) {
+          const m = msgs[i];
+          let plainText = '';
+          if (m.encryptedText) {
+            plainText = decryptData(m.encryptedText, sessionInfo.pin) || '';
+            if (!plainText && vaultFallbackPin && vaultFallbackPin !== sessionInfo.pin) {
+              plainText = decryptData(m.encryptedText, vaultFallbackPin) || '';
+            }
+          }
+
+          let plainFile = '';
+          if (m.encryptedFile) {
+            plainFile = decryptData(m.encryptedFile, sessionInfo.pin) || '';
+            if (!plainFile && vaultFallbackPin && vaultFallbackPin !== sessionInfo.pin) {
+              plainFile = decryptData(m.encryptedFile, vaultFallbackPin) || '';
+            }
+          }
+
+          const newEncryptedText = plainText ? encryptData(plainText, sessionInfo.pin) : '';
+          const newEncryptedFile = plainFile ? encryptData(plainFile, sessionInfo.pin) : undefined;
+
+          exportData.push({
+            id: m.id,
+            sessionId: sessionInfo.sessionId,
+            fromId: m.fromId,
+            toId: m.toId,
+            encryptedText: newEncryptedText,
+            encryptedFile: newEncryptedFile,
+            timestamp: m.timestamp,
+            isSelfDestruct: m.isSelfDestruct,
+            expiresAt: m.expiresAt
+          });
+          
+          if (i > 0 && i % batchSize === 0) {
+            setExportProgress(Math.round((i / total) * 100));
+            // Yield execution to browser event loop to update UI progress text
+            await new Promise(resolve => setTimeout(resolve, 0));
           }
         }
-
-        // Try to decrypt the file payload with active pin, then fallback pin
-        let plainFile = '';
-        if (m.encryptedFile) {
-          plainFile = decryptData(m.encryptedFile, sessionInfo.pin) || '';
-          if (!plainFile && vaultFallbackPin && vaultFallbackPin !== sessionInfo.pin) {
-            plainFile = decryptData(m.encryptedFile, vaultFallbackPin) || '';
-          }
-        }
-
-        // Re-encrypt strictly with the current active shared PIN so the receiver can decrypt it
-        const newEncryptedText = plainText ? encryptData(plainText, sessionInfo.pin) : '';
-        const newEncryptedFile = plainFile ? encryptData(plainFile, sessionInfo.pin) : undefined;
-
-        return {
-          id: m.id,
-          sessionId: sessionInfo.sessionId,
-          fromId: m.fromId,
-          toId: m.toId,
-          encryptedText: newEncryptedText,
-          encryptedFile: newEncryptedFile,
-          timestamp: m.timestamp,
-          isSelfDestruct: m.isSelfDestruct,
-          expiresAt: m.expiresAt
-        };
-      });
+        setExportProgress(100);
+        await new Promise(resolve => setTimeout(resolve, 200));
+        setExportProgress(null);
+      }
 
       const serializedData = JSON.stringify(exportData);
       const sizeBytes = serializedData.length;
@@ -1703,19 +1717,19 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         
         // Import in batches to show progress
         if (msgs.length > 0) {
-          setSyncProgress(0);
+          setImportProgress(0);
           const total = msgs.length;
           const batchSize = 25;
           for (let i = 0; i < total; i += batchSize) {
             const batch = msgs.slice(i, i + batchSize);
             await importMessagesLocal(batch);
-            setSyncProgress(Math.round((Math.min(i + batchSize, total) / total) * 100));
+            setImportProgress(Math.round((Math.min(i + batchSize, total) / total) * 100));
             // Yield control to UI thread to render progress updates
             await new Promise(resolve => setTimeout(resolve, 0));
           }
-          setSyncProgress(100);
+          setImportProgress(100);
           await new Promise(resolve => setTimeout(resolve, 300));
-          setSyncProgress(null);
+          setImportProgress(null);
         }
 
         setReloadTrigger(t => t + 1); // trigger loadLocalMessages re-run
@@ -1723,7 +1737,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         showModal({ title: 'Sync Complete', message: 'Chat history has been synced successfully! Messages are now loading.', iconType: 'success' });
       } catch (e) {
         console.error('[ChatSync] Failed to import synced history:', e);
-        setSyncProgress(null);
+        setImportProgress(null);
         showModal({ title: 'Sync Failed', message: 'Could not import chat history. Please try again.', iconType: 'warning' });
       }
     };
@@ -3140,22 +3154,22 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   return (
     <div className="flex flex-row h-full w-full">
-      {/* Sync progress overlay */}
-      {syncProgress !== null && (
+      {/* Import progress overlay */}
+      {importProgress !== null && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[99999] flex items-center justify-center p-4">
           <div className="bg-[#202c33] rounded-2xl p-6 max-w-sm w-full border border-[#2a3942] shadow-2xl animate-fade-in text-center flex flex-col items-center">
             <Loader2 className="w-10 h-10 text-[#00a884] animate-spin mb-4" />
-            <h3 className="text-[#e9edef] font-semibold text-base mb-2">Syncing Chat History</h3>
+            <h3 className="text-[#e9edef] font-semibold text-base mb-2">Importing Chat History</h3>
             <p className="text-[#8696a0] text-sm mb-6">
               Importing and decrypting secure messages...
             </p>
             <div className="w-full bg-[#111b21] rounded-full h-2.5 mb-2 overflow-hidden border border-[#2a3942]">
               <div 
                 className="bg-[#00a884] h-2.5 rounded-full transition-all duration-300" 
-                style={{ width: `${syncProgress}%` }}
+                style={{ width: `${importProgress}%` }}
               />
             </div>
-            <span className="text-[#00a884] font-bold text-sm">{syncProgress}%</span>
+            <span className="text-[#00a884] font-bold text-sm">{importProgress}%</span>
           </div>
         </div>
       )}
@@ -3361,6 +3375,18 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               {recoveryProgress !== null && (
                 <div className="text-[10px] text-[#00a884] font-medium mt-0.5 animate-pulse">
                   Recovering messages: {recoveryProgress}%
+                </div>
+              )}
+              {exportProgress !== null && (
+                <div className="text-[10px] text-[#eab308] font-medium mt-0.5 animate-pulse flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin text-[#eab308]" />
+                  Exporting chat: {exportProgress}%
+                </div>
+              )}
+              {importProgress !== null && (
+                <div className="text-[10px] text-[#00a884] font-medium mt-0.5 animate-pulse flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin text-[#00a884]" />
+                  Importing chat: {importProgress}%
                 </div>
               )}
             </div>
