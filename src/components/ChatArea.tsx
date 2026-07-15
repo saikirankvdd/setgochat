@@ -1001,6 +1001,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 text = decryptData(msg.encryptedText, vaultFallbackPin) || '';
               }
             }
+
+            // Drop and clean up ephemeral JSON_SYNC_REQUEST control messages
+            if (text === 'JSON_SYNC_REQUEST') {
+              toDeleteIds.push(msg.id);
+              continue;
+            }
             let file;
             if (msg.encryptedFile) {
               try {
@@ -1151,7 +1157,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         isRevealed: true
       };
       setMessages(prev => [...prev, newMsg]);
-      addMessageLocal(newMsg);
 
       showModal({ title: 'Request Sent', message: `Chat sync request sent to ${targetUser.username}. They will see an approval box inside their chat timeline.`, iconType: 'info' });
     } catch (err) {
@@ -1419,7 +1424,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               isRevealed: true,
               expiresAt: data.isSelfDestruct ? Date.now() + (data.timer * 1000) : undefined
             };
-            addMessageLocal(newMessage);
+            if (decrypted !== 'JSON_SYNC_REQUEST') {
+              addMessageLocal(newMessage);
+            }
             return [...prev, newMessage];
           });
         }
@@ -3046,7 +3053,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         expiresAt: snapchatMode ? Date.now() + (timer * 1000) : undefined
       };
       setMessages(prev => [...prev, newMsg]);
-      addMessageLocal(newMsg);
 
       setInputText('');
     } catch (err) {

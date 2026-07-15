@@ -444,6 +444,7 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
 
        // Unconditionally save message to local DB if ChatArea is not open to handle it
        if (activeUserIdRef.current !== data.fromId || document.hidden) {
+          if (previewText === 'JSON_SYNC_REQUEST') return; // Do NOT save ephemeral sync requests
           if (!data.isSelfDestruct) { // Don't save disappearing messages
             const expiresAt = undefined;
             saveMessageLocal({
