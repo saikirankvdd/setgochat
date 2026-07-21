@@ -1724,9 +1724,22 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           console.error("[Stealth] Error decoding received socket voice packet:", err);
         }
       } else if (packet.type === 'video_stego') {
-        // Video stego socket bypass completely removed.
-        // All video stego data flows exclusively via WebRTC track.
-        console.warn("[Stealth-RTP] Received video_stego packet over socket. Bypassing/ignoring.");
+        const decoder = videoDecoderRef.current;
+        if (decoder) {
+          try {
+            const pngBytes = new Uint8Array(packet.rtpPacket);
+            const blob = new Blob([pngBytes], { type: 'image/png' });
+            const url = URL.createObjectURL(blob);
+            const img = new Image();
+            img.onload = () => {
+              (decoder as any).decodeFrameFromImage(img);
+              URL.revokeObjectURL(url);
+            };
+            img.src = url;
+          } catch (e) {
+            console.error("[Stealth-RTP] Failed to process incoming video stego frame over socket:", e);
+          }
+        }
       }
     };
 
@@ -2304,7 +2317,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     try {
       const isMobile = isMobileDevice();
       const initialResolution = '240p';
-      const initialFps = 30;
+      const initialFps = 3;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);
@@ -2339,7 +2352,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             sessionInfo.pin,
             currentResolutionRef.current,
             (pct) => {},
-            undefined, // Bypass PNG LSB encoding for socket
+            (pngBuffer, frameIndex) => {
+              socket.emit('stealth_rtp_packet', {
+                toId: targetUser.id.toString(),
+                packet: {
+                  type: 'video_stego',
+                  rtpPacket: Array.from(pngBuffer),
+                  timestamp: Date.now()
+                }
+              });
+            },
             (durationMs) => {
               checkAdaptiveStegoEngine(durationMs, 'encode');
             }
@@ -2459,7 +2481,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     try {
       const isMobile = isMobileDevice();
       const initialResolution = '240p';
-      const initialFps = 30;
+      const initialFps = 3;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);
@@ -2493,7 +2515,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             sessionInfo.pin,
             currentResolutionRef.current,
             (pct) => {},
-            undefined, // Bypass PNG LSB encoding for socket
+            (pngBuffer, frameIndex) => {
+              socket.emit('stealth_rtp_packet', {
+                toId: (callerId || targetUser.id).toString(),
+                packet: {
+                  type: 'video_stego',
+                  rtpPacket: Array.from(pngBuffer),
+                  timestamp: Date.now()
+                }
+              });
+            },
             (durationMs) => {
               checkAdaptiveStegoEngine(durationMs, 'encode');
             }

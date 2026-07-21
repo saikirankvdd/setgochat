@@ -105,6 +105,115 @@ export class VideoStegoDecoder {
     });
   }
 
+  public decodeFrameFromImage(img: HTMLImageElement): void {
+    if (!this.isRunning) return;
+    try {
+      const decodeCanvas = this.decodeCanvas;
+      const coverCanvas = this.coverCanvas;
+      const displayCanvas = this.displayCanvas;
+      if (!decodeCanvas || !coverCanvas || !displayCanvas) return;
+
+      const decCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
+      if (!decCtx) return;
+
+      // 1. Draw received stego image to decode canvas
+      decCtx.drawImage(img, 0, 0, this.width, this.height);
+      const receivedImageData = decCtx.getImageData(0, 0, this.width, this.height);
+      const pixels = receivedImageData.data;
+
+      const totalChannels = this.width * this.height * 3;
+
+      // 2. Extract frame index
+      const encFrameBytes = new Uint8Array(4);
+      let channelIdxIdx = 0;
+      for (let i = 0; i < 32; i++) {
+        if (channelIdxIdx % 4 === 3) channelIdxIdx++;
+        const bit = pixels[channelIdxIdx] & 1;
+        const byteIdx = Math.floor(i / 8);
+        const bitIdx = 7 - (i % 8);
+        encFrameBytes[byteIdx] |= (bit << bitIdx);
+        channelIdxIdx++;
+      }
+      const frameIndex = this.decryptFrameIndexJS(encFrameBytes, this.pin);
+
+      const isValidFrameIndex = frameIndex >= 0 && frameIndex < 1000000;
+      if (!isValidFrameIndex) {
+        const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
+        const coverVideo = this.videoEls[clipIdx];
+        const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
+        const displayCtx = displayCanvas.getContext('2d');
+        displayCtx?.putImageData(coverImageData, 0, 0);
+        this.frameIndex++;
+        return;
+      }
+
+      let bitString = '';
+      if (this.wasmEngine) {
+        const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
+        bitString = this.wasmEngine.extract_video_frame(pixelBytes, this.pin, frameIndex);
+      } else {
+        const maxUsable = totalChannels - 64;
+        let channelIdx = 0;
+        for (let i = 0; i < 32; i++) {
+          if (channelIdx % 4 === 3) channelIdx++;
+          channelIdx++;
+        }
+        const encLenBytes = new Uint8Array(4);
+        for (let i = 0; i < 32; i++) {
+          if (channelIdx % 4 === 3) channelIdx++;
+          const bit = pixels[channelIdx] & 1;
+          const byteIdx = Math.floor(i / 8);
+          const bitIdx = 7 - (i % 8);
+          encLenBytes[byteIdx] |= (bit << bitIdx);
+          channelIdx++;
+        }
+        const dataLength = this.decryptLengthHeaderJS(encLenBytes, this.pin + '_' + frameIndex);
+
+        if (dataLength > 0 && dataLength <= maxUsable) {
+          const stride = Math.floor(maxUsable / dataLength);
+          const prng = new JS_PRNG(this.pin + '_scatter_' + frameIndex);
+          for (let i = 0; i < dataLength; i++) {
+            const relativeLogicalIdx = i * stride + Math.floor(prng.next() * stride);
+            const targetLogicalIdx = 64 + relativeLogicalIdx;
+            const actualIdx = targetLogicalIdx + Math.floor(targetLogicalIdx / 3);
+            const bit = pixels[actualIdx] & 1;
+            bitString += bit.toString();
+          }
+        }
+      }
+
+      let decryptedBase64 = '';
+      if (bitString && bitString.length > 0) {
+        const encrypted = binaryToString(bitString);
+        const iv = CryptoJS.lib.WordArray.create([0, 0, 0, frameIndex]);
+        decryptedBase64 = fastDecrypt(encrypted, this.masterKey!, iv);
+
+        if (decryptedBase64) {
+          const faceImg = new Image();
+          faceImg.onload = () => {
+            const displayCtx = displayCanvas.getContext('2d');
+            displayCtx?.drawImage(faceImg, 0, 0, displayCanvas.width, displayCanvas.height);
+          };
+          faceImg.src = 'data:image/jpeg;base64,' + decryptedBase64;
+        }
+      }
+
+      if (decryptedBase64) {
+        this.lastDecodedFrameIndex = frameIndex;
+        this.frameIndex = frameIndex;
+      } else {
+        const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
+        const coverVideo = this.videoEls[clipIdx];
+        const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
+        const displayCtx = displayCanvas.getContext('2d');
+        displayCtx?.putImageData(coverImageData, 0, 0);
+        this.frameIndex++;
+      }
+    } catch (e) {
+      console.error("Error decoding socket stego frame:", e);
+    }
+  }
+
   setResolution(resolution: '240p' | '480p'): void {
     if (resolution === '240p') {
       this.width = 320;
