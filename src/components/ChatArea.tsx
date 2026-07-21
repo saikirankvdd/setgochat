@@ -10,7 +10,7 @@ import { encryptData, decryptData, stringToBinary, binaryToString, uint8ToBase64
 import { encodeLSB, decodeLSB, createDynamicCarrier, encodeLSB4Bit, decodeLSB4Bit, createDynamicCarrier4Bit, generateMusicCarrier, encodeLSB1Bit, decodeLSB1Bit } from '../utils/stego';
 import { generateWallpaperCanvas, encodeImageLSB, decodeImageLSB } from '../utils/imageStego';
 import { strToU8, gzipSync, strFromU8, gunzipSync } from 'fflate';
-import { saveMessageLocal, getMessagesLocal, deleteMessageLocal, getAllMessagesLocal, importMessagesLocal } from '../utils/db';
+import { saveMessageLocal, getMessagesLocal, deleteMessageLocal, getAllMessagesLocal, importMessagesLocal, getPinLocal, getPrivateKeyLocal } from '../utils/db';
 import { generateCoverSong } from '../utils/coverSongGenerator';
 import { VideoStegoEncoder } from '../utils/VideoStegoEncoder';
 import { VideoStegoDecoder } from '../utils/VideoStegoDecoder';
@@ -703,6 +703,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   useEffect(() => {
     callStateRef.current = callState;
   }, [callState]);
+
+  const [showSecureEngineMsg, setShowSecureEngineMsg] = useState(false);
+  useEffect(() => {
+    if (callState === 'connected') {
+      setShowSecureEngineMsg(true);
+      const timer = setTimeout(() => {
+        setShowSecureEngineMsg(false);
+      }, 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [callState]);
   const [isHovering, setIsHovering] = useState<number | null>(null);
   const [hashedMyId, setHashedMyId] = useState<string>('');
 
@@ -710,7 +721,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
      import('../utils/crypto').then(m => m.hashString(user.id.toString()).then(setHashedMyId));
   }, [user.id]);
 
-  const isMine = (msg: any) => msg.fromId === user.id || msg.fromId === user.id.toString() || msg.fromId === hashedMyId;
+  const isMine = (msg: any) => String(msg.fromId) === String(user.id) || String(msg.fromId) === String(hashedMyId);
 
   const [callerId, setCallerId] = useState<string | null>(null);
   const [callDuration, setCallDuration] = useState(0);
@@ -1318,7 +1329,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const handleReceive = async (data: any) => {
       if (data.sessionId !== sessionInfo.sessionId) return;
-      if (data.fromId === user.id || data.fromId === user.id.toString() || data.fromId === hashedMyId) {
+      if (String(data.fromId) === String(user.id) || String(data.fromId) === String(hashedMyId)) {
         if (data.isStegoSignaling) {
           console.log("[Stealth-Signaling] Ignoring self-sent signaling packet.");
           return;
@@ -1659,7 +1670,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           // Strip 12-byte RTP header
           let payloadBytes: Uint8Array;
+          let seq = 0;
           if (rtpBytes.length > 12 && rtpBytes[0] === 0x80 && rtpBytes[1] === 0x78) {
+            seq = (rtpBytes[2] << 8) | rtpBytes[3];
             payloadBytes = rtpBytes.subarray(12);
           } else {
             // Fallback for legacy WAV carrier
@@ -3254,15 +3267,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         {callState !== 'idle' && (
           <div 
             ref={callOverlayRef}
-            className={`absolute inset-0 z-50 flex flex-col items-center justify-center animate-fade-in
-              ${
-                callState === 'connected' && !isVideoCall
-                  // Audio connected: compact floating card at top, chat visible + blurred behind
-                  ? 'bg-black/40 backdrop-blur-sm'
-                  // Calling/receiving/video: full blur overlay
-                  : 'bg-black/60 backdrop-blur-md'
-              }
-            `}
+            className="absolute inset-0 z-50 flex flex-col items-center justify-center animate-fade-in bg-black/60 backdrop-blur-md"
           >
             {/* Remote video — fullscreen behind for video calls */}
             <video 
@@ -3279,172 +3284,127 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               className={`absolute inset-0 w-full h-full object-cover z-0 ${isVideoCall && callState === 'connected' ? 'block' : 'hidden'}`}
             />
 
-            {/* Audio Call Connected: compact floating card (chat visible behind) */}
-            {callState === 'connected' && !isVideoCall ? (
-              <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex items-center gap-3 bg-[#202c33]/90 backdrop-blur-md border border-[#2a3942] rounded-2xl px-5 py-3 shadow-2xl">
-                <div className="w-9 h-9 bg-[#00a884] rounded-full flex items-center justify-center shadow-lg">
-                  <Phone className="w-4 h-4 text-white" />
-                </div>
-                <div>
-                  <p className="text-white font-medium text-sm leading-tight">{targetUser.username}</p>
-                  <p className="text-[#00a884] text-xs font-mono">{!webrtcConnected ? '🔒 Securing...' : `${formatDuration(callDuration)} (Audio: ${audioCtxState})`}</p>
-                </div>
-                <div className="flex items-center gap-2 ml-2">
-                  <button onClick={toggleMute} className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${isMuted ? 'bg-red-500/80 text-white' : 'bg-[#2a3942] hover:bg-[#3b4a54] text-white'}`}>
-                    {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
-                  </button>
-                  <button onClick={toggleSpeaker} className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${speakerOn ? 'bg-green-500 text-white' : 'bg-[#2a3942] hover:bg-[#3b4a54] text-white'}`}>
-                    <Volume2 className="w-4 h-4" />
-                  </button>
-                  <button onClick={togglePiP} className="w-9 h-9 rounded-full flex items-center justify-center bg-[#2a3942] hover:bg-[#3b4a54] text-white transition-colors">
-                    <ExternalLink className="w-4 h-4" />
-                  </button>
-                  <button onClick={() => endCall()} className="w-9 h-9 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-colors">
-                    <Phone className="w-4 h-4 text-white rotate-[135deg]" />
-                  </button>
-                </div>
-              </div>
-            ) : (
-              /* Calling / Receiving / Video connected: centred card */
-              <div className={`relative w-full max-w-sm flex-1 flex flex-col items-center justify-center z-10 ${
-                isVideoCall && callState === 'connected' ? 'bg-transparent' : 'bg-[#202c33] rounded-3xl border border-[#2a3942] p-8 shadow-2xl max-h-[420px] mx-8'
-              }`}>
-                {/* Avatar for non-video states */}
-                {(!isVideoCall || callState !== 'connected') && (
-                  <div className="flex flex-col items-center">
-                    <div className="w-24 h-24 bg-[#00a884] rounded-full flex items-center justify-center mb-6 animate-pulse shadow-lg shadow-[#00a884]/20">
-                      {isVideoCall ? <Video className="w-10 h-10 text-white" /> : <Phone className="w-10 h-10 text-white" />}
-                    </div>
-                    <h2 className="text-2xl text-white font-medium mb-2">
-                      {callState === 'receiving' ? (String(callerId) === String(targetUser.id) ? targetUser.username : 'Unknown') : targetUser.username}
-                    </h2>
-                    <p className="text-[#8696a0] mb-2 text-lg">
-                      {callState === 'calling' && 'Calling...'}
-                      {callState === 'receiving' && `Incoming ${isVideoCall ? 'Video ' : 'Audio '}Call`}
-                      {callState === 'connected' && (!webrtcConnected ? '🔒 Securing connection...' : formatDuration(callDuration))}
-                    </p>
+            {/* Calling / Receiving / Connected: centred card */}
+            <div className={`relative w-full max-w-sm flex-1 flex flex-col items-center justify-center z-10 ${
+              isVideoCall && callState === 'connected' ? 'bg-transparent' : 'bg-[#202c33] rounded-3xl border border-[#2a3942] p-8 shadow-2xl max-h-[420px] mx-8'
+            }`}>
+              {/* Avatar for non-video states */}
+              {(!isVideoCall || callState !== 'connected') && (
+                <div className="flex flex-col items-center">
+                  <div className="w-24 h-24 bg-[#00a884] rounded-full flex items-center justify-center mb-6 animate-pulse shadow-lg shadow-[#00a884]/20">
+                    {isVideoCall ? <Video className="w-10 h-10 text-white" /> : <Phone className="w-10 h-10 text-white" />}
                   </div>
-                )}
-
-                {/* Real-time Call Diagnostics Card */}
-                {(callState === 'connected' || callState === 'calling' || callState === 'receiving') && (
-                  <div className="mt-4 p-3 bg-black/40 rounded-xl text-left border border-white/5 w-full font-mono text-[10px] text-gray-400">
-                    <p className="font-semibold text-gray-300 text-center mb-1">CALL DIAGNOSTICS</p>
-                    <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
-                      <span>Audio Engine:</span>
-                      <span className={audioCtxState === 'running' ? 'text-green-400 font-bold' : 'text-yellow-500 font-bold animate-pulse'}>
-                        {audioCtxState.toUpperCase()}
-                      </span>
-                      <span>Outbound (Sent):</span>
-                      <span className="text-gray-200">{packetsSent}</span>
-                      <span>Inbound (Recv):</span>
-                      <span className="text-gray-200">{packetsRecv}</span>
-                    </div>
-                    {audioCtxState === 'suspended' && (
-                      <p className="text-yellow-500 text-[9px] mt-2 text-center animate-pulse">
-                        ⚠️ Tap screen to activate audio
-                      </p>
+                  <h2 className="text-2xl text-white font-medium mb-2">
+                    {callState === 'receiving' ? (String(callerId) === String(targetUser.id) ? targetUser.username : 'Unknown') : targetUser.username}
+                  </h2>
+                  <p className="text-[#8696a0] mb-2 text-lg">
+                    {callState === 'calling' && 'Calling...'}
+                    {callState === 'receiving' && `Incoming ${isVideoCall ? 'Video ' : 'Audio '}Call`}
+                    {callState === 'connected' && (
+                      showSecureEngineMsg 
+                        ? '🔒 Connected: Secure Audio Engine' 
+                        : (!webrtcConnected ? '🔒 Securing connection...' : formatDuration(callDuration))
                     )}
-                  </div>
-                )}
-
-                {/* Local PiP feed (Draggable) */}
-                <div 
-                  className={`absolute z-50 cursor-move rounded-2xl overflow-hidden shadow-2xl border-2 border-[#2a3942] bg-[#202c33] transition-opacity w-32 md:w-48 h-48 md:h-64 ${isVideoCall && !isVideoOff && callState === 'connected' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-                  style={{ 
-                    left: localVidPos.x === 'auto' ? undefined : `${localVidPos.x}px`, 
-                    top: localVidPos.y === 'auto' ? '20px' : `${localVidPos.y}px`,
-                    right: localVidPos.x === 'auto' ? '20px' : undefined,
-                    touchAction: 'none'
-                  }}
-                  onPointerDown={(e) => {
-                    const target = e.currentTarget as HTMLElement;
-                    const container = callOverlayRef.current;
-                    if (!container) return;
-                    const rect = container.getBoundingClientRect();
-                    const targetRect = target.getBoundingClientRect();
-                    
-                    isDraggingRef.current = true;
-                    target.setPointerCapture(e.pointerId);
-                    offsetRef.current = { 
-                      x: e.clientX - targetRect.left, 
-                      y: e.clientY - targetRect.top 
-                    };
-                  }}
-                  onPointerMove={(e) => {
-                    if (!isDraggingRef.current) return;
-                    const container = callOverlayRef.current;
-                    if (!container) return;
-                    const rect = container.getBoundingClientRect();
-                    
-                    let newX = e.clientX - rect.left - offsetRef.current.x;
-                    let newY = e.clientY - rect.top - offsetRef.current.y;
-                    
-                    const isMD = window.innerWidth > 768;
-                    const targetWidth = isMD ? 192 : 128; // matching w-32 (128px) or md:w-48 (192px)
-                    const targetHeight = isMD ? 256 : 192; // matching h-48 (192px) or md:h-64 (256px)
-                    
-                    if (newX < 10) newX = 10;
-                    if (newX > rect.width - targetWidth - 10) newX = rect.width - targetWidth - 10;
-                    if (newY < 10) newY = 10;
-                    if (newY > rect.height - targetHeight - 10) newY = rect.height - targetHeight - 10;
-                    
-                    setLocalVidPos({ x: newX, y: newY });
-                  }}
-                  onPointerUp={(e) => {
-                    isDraggingRef.current = false;
-                    const target = e.currentTarget as HTMLElement;
-                    target.releasePointerCapture(e.pointerId);
-                  }}
-                >
-                  <video 
-                    ref={localVideoRef} 
-                    autoPlay 
-                    playsInline 
-                    muted 
-                    className="w-full h-full object-cover" 
-                  />
+                  </p>
                 </div>
+              )}
 
-                {/* Actions Bar */}
-                <div className="absolute bottom-8 flex items-center justify-center space-x-6 w-full">
-                  {callState === 'receiving' ? (
-                    <>
-                      <button onClick={acceptCall} className="w-16 h-16 bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
-                        {isVideoCall ? <Video className="w-7 h-7 text-white" /> : <Phone className="w-7 h-7 text-white" />}
-                      </button>
-                      <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
-                        <Phone className="w-7 h-7 text-white rotate-[135deg]" />
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button onClick={toggleMute} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isMuted ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
-                        {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
-                      </button>
-                      
-                      <button onClick={toggleSpeaker} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${speakerOn ? 'bg-green-500 hover:bg-green-600 text-white' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
-                        <Volume2 className="w-6 h-6" />
-                      </button>
-
-                      {isVideoCall && (
-                        <button onClick={toggleVideo} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isVideoOff ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
-                          {isVideoOff ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
-                        </button>
-                      )}
-
-                      <button onClick={togglePiP} className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors bg-[#202c33] hover:bg-[#2a3942] text-white">
-                        <ExternalLink className="w-6 h-6" />
-                      </button>
-
-                      <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
-                        <Phone className="w-7 h-7 text-white rotate-[135deg]" />
-                      </button>
-                    </>
-                  )}
-                </div>
+              {/* Local PiP feed (Draggable) */}
+              <div 
+                className={`absolute z-50 cursor-move rounded-2xl overflow-hidden shadow-2xl border-2 border-[#2a3942] bg-[#202c33] transition-opacity w-32 md:w-48 h-48 md:h-64 ${isVideoCall && !isVideoOff && callState === 'connected' ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                style={{ 
+                  left: localVidPos.x === 'auto' ? undefined : `${localVidPos.x}px`, 
+                  top: localVidPos.y === 'auto' ? '20px' : `${localVidPos.y}px`,
+                  right: localVidPos.x === 'auto' ? '20px' : undefined,
+                  touchAction: 'none'
+                }}
+                onPointerDown={(e) => {
+                  const target = e.currentTarget as HTMLElement;
+                  const container = callOverlayRef.current;
+                  if (!container) return;
+                  const rect = container.getBoundingClientRect();
+                  const targetRect = target.getBoundingClientRect();
+                  
+                  isDraggingRef.current = true;
+                  target.setPointerCapture(e.pointerId);
+                  offsetRef.current = { 
+                    x: e.clientX - targetRect.left, 
+                    y: e.clientY - targetRect.top 
+                  };
+                }}
+                onPointerMove={(e) => {
+                  if (!isDraggingRef.current) return;
+                  const container = callOverlayRef.current;
+                  if (!container) return;
+                  const rect = container.getBoundingClientRect();
+                  
+                  let newX = e.clientX - rect.left - offsetRef.current.x;
+                  let newY = e.clientY - rect.top - offsetRef.current.y;
+                  
+                  const isMD = window.innerWidth > 768;
+                  const targetWidth = isMD ? 192 : 128; // matching w-32 (128px) or md:w-48 (192px)
+                  const targetHeight = isMD ? 256 : 192; // matching h-48 (192px) or md:h-64 (256px)
+                  
+                  if (newX < 10) newX = 10;
+                  if (newX > rect.width - targetWidth - 10) newX = rect.width - targetWidth - 10;
+                  if (newY < 10) newY = 10;
+                  if (newY > rect.height - targetHeight - 10) newY = rect.height - targetHeight - 10;
+                  
+                  setLocalVidPos({ x: newX, y: newY });
+                }}
+                onPointerUp={(e) => {
+                  isDraggingRef.current = false;
+                  const target = e.currentTarget as HTMLElement;
+                  target.releasePointerCapture(e.pointerId);
+                }}
+              >
+                <video 
+                  ref={localVideoRef} 
+                  autoPlay 
+                  playsInline 
+                  muted 
+                  className="w-full h-full object-cover" 
+                />
               </div>
-            )}
+
+              {/* Actions Bar */}
+              <div className="absolute bottom-8 flex items-center justify-center space-x-6 w-full">
+                {callState === 'receiving' ? (
+                  <>
+                    <button onClick={acceptCall} className="w-16 h-16 bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
+                      {isVideoCall ? <Video className="w-7 h-7 text-white" /> : <Phone className="w-7 h-7 text-white" />}
+                    </button>
+                    <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
+                      <Phone className="w-7 h-7 text-white rotate-[135deg]" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={toggleMute} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isMuted ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
+                      {isMuted ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
+                    </button>
+                    
+                    <button onClick={toggleSpeaker} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${speakerOn ? 'bg-green-500 hover:bg-green-600 text-white' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
+                      <Volume2 className="w-6 h-6" />
+                    </button>
+
+                    {isVideoCall && (
+                      <button onClick={toggleVideo} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${isVideoOff ? 'bg-[#3b4a54] text-white/50' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
+                        {isVideoOff ? <VideoOff className="w-6 h-6" /> : <Video className="w-6 h-6" />}
+                      </button>
+                    )}
+
+                    <button onClick={togglePiP} className="w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors bg-[#202c33] hover:bg-[#2a3942] text-white">
+                      <ExternalLink className="w-6 h-6" />
+                    </button>
+
+                    <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
+                      <Phone className="w-7 h-7 text-white rotate-[135deg]" />
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -3759,7 +3719,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               <div className="flex items-center justify-end mt-1 space-x-1">
                 <span className="text-[10px] text-[#8696a0] flex items-center">
                   {new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  {msg.fromId === user.id && (
+                  {isMine(msg) && (
                     <span className="ml-1">
                       {isOnline ? <CheckCheck className="w-4 h-4 text-[#53bdeb]" /> : <Check className="w-3 h-3 text-[#8696a0]" />}
                     </span>

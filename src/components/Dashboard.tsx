@@ -371,13 +371,13 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
     });
 
     const processPreview = (data: any, isFile: boolean, msgType: string) => {
-       if (data.fromId === user.id) return;
+       if (String(data.fromId) === String(user.id)) return;
        const pin = pinsRef.current[data.sessionId];
        if (!pin) return; 
        
        if (msgType === 'missed_call') {
            setLastMessages(prev => ({ ...prev, [data.fromId]: 'Missed Call' }));
-           if (activeUserIdRef.current !== data.fromId || document.hidden) {
+           if (String(activeUserIdRef.current) !== String(data.fromId) || document.hidden) {
               setUnreadCounts(prev => ({ ...prev, [data.fromId]: (prev[data.fromId] || 0) + 1 }));
               playNotificationSound();
               if ('Notification' in window && Notification.permission === 'granted') {
@@ -414,7 +414,7 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
                if (decryptedSignaling.includes('"type":"stego_call_')) {
                  const parsed = JSON.parse(decryptedSignaling);
                  if (parsed.type === 'stego_call_offer') {
-                   if (activeUserIdRef.current !== data.fromId) {
+                   if (String(activeUserIdRef.current) !== String(data.fromId)) {
                      const sender = usersRef.current.find(u => u.id === data.fromId);
                      const senderName = sender ? sender.username : `User ${data.fromId}`;
                      setIncomingCall({
@@ -443,7 +443,7 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
        }
 
        // Unconditionally save message to local DB if ChatArea is not open to handle it
-       if (activeUserIdRef.current !== data.fromId || document.hidden) {
+       if (String(activeUserIdRef.current) !== String(data.fromId) || document.hidden) {
           if (previewText === 'JSON_SYNC_REQUEST') return; // Do NOT save ephemeral sync requests
           if (!data.isSelfDestruct) { // Don't save disappearing messages
             const expiresAt = undefined;
@@ -489,7 +489,7 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
     const handleFile = (data: any) => processPreview(data, true, data.type);
 
     const handleCallOfferGlobal = (data: any) => {
-       if (activeUserIdRef.current === data.fromId) return; // ChatArea will handle it
+       if (activeUserIdRef.current !== null && String(activeUserIdRef.current) === String(data.fromId)) return; // ChatArea will handle it
        setIncomingCall(data);
     };
     const handleCallEndGlobal = (data: any) => {
