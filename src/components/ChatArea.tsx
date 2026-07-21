@@ -1386,10 +1386,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 console.warn("[Stealth-Call] Discarding stale stego signaling from already ended call:", parsed.callId);
                 return;
               }
-              // Verify timestamp is not too old (allow up to 2 minutes clock skew)
+              // (Clock-skew tolerant warning only)
               if (parsed.timestamp && Math.abs(Date.now() - parsed.timestamp) > 120000) {
-                console.warn("[Stealth-Call] Discarding stale stego signaling payload (age > 120s):", Date.now() - parsed.timestamp);
-                return;
+                console.warn("[Stealth-Call] Received stego signaling payload with large clock skew:", Date.now() - parsed.timestamp);
               }
 
               if (parsed.type === 'stego_call_offer') {
@@ -1488,8 +1487,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         return;
       }
       if (data.timestamp && Math.abs(Date.now() - data.timestamp) > 120000) {
-        console.warn("[Stealth-Call] Ignored stale stego_call_offer (age > 120s):", Date.now() - data.timestamp);
-        return;
+        console.warn("[Stealth-Call] Received stego_call_offer with large clock skew:", Date.now() - data.timestamp);
       }
       
       if (callStateRef.current !== 'idle') {
@@ -1565,8 +1563,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         return;
       }
       if (data.timestamp && Math.abs(Date.now() - data.timestamp) > 120000) {
-        console.warn("[Stealth-Call] Ignored stale stego_call_answer (age > 120s)");
-        return;
+        console.warn("[Stealth-Call] Received stego_call_answer with large clock skew:", Date.now() - data.timestamp);
       }
       if (peerConnectionRef.current) {
         await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(data.answer));
