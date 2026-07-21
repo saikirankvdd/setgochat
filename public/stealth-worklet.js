@@ -17,6 +17,7 @@ class StealthProcessor extends AudioWorkletProcessor {
     
     // Playback buffer for incoming voice samples
     this.playbackQueue = [];
+    this.isPlaying = false;
     
     // WASM Engine instance (to be initialized in Stage 9)
     this.wasmEngine = null;
@@ -58,10 +59,11 @@ class StealthProcessor extends AudioWorkletProcessor {
     } else if (data.type === 'SET_MODE_PLAYBACK') {
       this.mode = 'playback';
       this.playbackQueue = [];
+      this.isPlaying = false;
       console.log("AudioWorklet: Mode set to PLAYBACK.");
     } else if (data.type === 'PUSH_PLAYBACK') {
       this.playbackQueue.push(...data.samples);
-      const maxAllowed = Math.round(0.08 * sampleRate); // 80ms max buffer to prevent lag accumulation
+      const maxAllowed = Math.round(0.15 * sampleRate); // 150ms max buffer to prevent lag accumulation
       if (this.playbackQueue.length > maxAllowed) {
         this.playbackQueue.splice(0, this.playbackQueue.length - maxAllowed);
       }
@@ -76,6 +78,7 @@ class StealthProcessor extends AudioWorkletProcessor {
       this.collectedBits = [];
       this.expectedBitsLength = 0;
       this.playbackQueue = [];
+      this.isPlaying = false;
       console.log("AudioWorklet: Stealth Mode Stopped.");
     }
   }
@@ -237,10 +240,31 @@ class StealthProcessor extends AudioWorkletProcessor {
 
     } else if (this.mode === 'playback') {
       const outputChannel0 = output[0];
-      const chunkToPlay = this.playbackQueue.splice(0, outputLength);
       
-      for (let i = 0; i < outputLength; i++) {
-        outputChannel0[i] = i < chunkToPlay.length ? chunkToPlay[i] : 0;
+      // Jitter buffer threshold: wait to accumulate 45ms of audio before starting playback
+      const threshold = Math.round(0.045 * sampleRate);
+      
+      if (!this.isPlaying) {
+        if (this.playbackQueue.length >= threshold) {
+          this.isPlaying = true;
+        }
+      }
+      
+      if (this.isPlaying) {
+        const chunkToPlay = this.playbackQueue.splice(0, outputLength);
+        for (let i = 0; i < outputLength; i++) {
+          outputChannel0[i] = i < chunkToPlay.length ? chunkToPlay[i] : 0;
+        }
+        
+        // If the queue runs dry, pause playback to rebuild buffer smoothly
+        if (this.playbackQueue.length === 0) {
+          this.isPlaying = false;
+        }
+      } else {
+        // Output silence while buffering
+        for (let i = 0; i < outputLength; i++) {
+          outputChannel0[i] = 0;
+        }
       }
       
       // Copy to other channels
