@@ -14,6 +14,7 @@ import { saveMessageLocal, getMessagesLocal, deleteMessageLocal, getAllMessagesL
 import { generateCoverSong } from '../utils/coverSongGenerator';
 import { VideoStegoEncoder } from '../utils/VideoStegoEncoder';
 import { VideoStegoDecoder } from '../utils/VideoStegoDecoder';
+import { preloadClips } from '../utils/clipFrameLoader';
 import CryptoJS from 'crypto-js';
 
 const hashBufferHex = (buffer: ArrayBuffer): string => {
@@ -800,6 +801,70 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const mainCoverIndexRef = useRef<number>(0);
   const audioSeqRef = useRef<number>(0);
   const audioTsRef = useRef<number>(0);
+
+  const videoSendIntervalRef = useRef<any>(null);
+  const videoSeqRef = useRef<number>(0);
+
+  const startVideoSenderLoop = () => {
+    if (videoSendIntervalRef.current) clearInterval(videoSendIntervalRef.current);
+    videoSeqRef.current = 0;
+    
+    // Send 3 frames per second (every 333ms)
+    videoSendIntervalRef.current = setInterval(() => {
+      if (callStateRef.current !== 'connected') return;
+      
+      const videoEl = localVideoRef.current;
+      if (!videoEl || videoEl.readyState < 2) return;
+      
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = 320;
+        canvas.height = 240;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(videoEl, 0, 0, 320, 240);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.2); // compress at 20% quality
+          const base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+          
+          // Encrypt using PIN
+          const keys = getDerivedKeys(sessionInfo.pin);
+          const iv = CryptoJS.lib.WordArray.create([0, 0, 0, videoSeqRef.current]);
+          const encrypted = fastEncrypt(base64, keys.key, iv);
+          
+          socket.emit('stealth_rtp_packet', {
+            toId: (callerId || targetUser.id).toString(),
+            packet: {
+              type: 'video_stego',
+              payload: encrypted,
+              seq: videoSeqRef.current,
+              timestamp: Date.now()
+            }
+          });
+          videoSeqRef.current = (videoSeqRef.current + 1) & 0xFFFF;
+        }
+      } catch (err) {
+        console.error("[Stealth-Video] Error encoding/sending video frame:", err);
+      }
+    }, 333);
+  };
+
+  const stopVideoSenderLoop = () => {
+    if (videoSendIntervalRef.current) {
+      clearInterval(videoSendIntervalRef.current);
+      videoSendIntervalRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    if (callState === 'connected' && isVideoCall) {
+      startVideoSenderLoop();
+    } else {
+      stopVideoSenderLoop();
+    }
+    return () => {
+      stopVideoSenderLoop();
+    };
+  }, [callState, isVideoCall]);
 
   const [currentResolution, setCurrentResolution] = useState<'240p' | '480p'>('240p');
   const [targetFps, setTargetFpsState] = useState<5 | 10 | 15 | 30>(10);
@@ -2248,44 +2313,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const startStealthVideoDecode = async (remoteStream: MediaStream) => {
-    if (videoDecoderRef.current) {
-      console.log("[Stealth] Video Decode Pipeline already initialized. Skipping.");
-      return;
-    }
-    try {
-      console.log("[Stealth] Initializing Video Decode Pipeline...");
-      if (!decodedVideoCanvasRef.current) {
-        console.warn("[Stealth] Decoded video canvas not ready yet.");
-        return;
-      }
-
-      let attempts = 0;
-      const initDecoder = async () => {
-        if (remoteVideoRef.current && decodedVideoCanvasRef.current) {
-          remoteVideoRef.current.muted = true;
-          const decoder = new VideoStegoDecoder(
-            remoteVideoRef.current,
-            sessionInfo.pin,
-            decodedVideoCanvasRef.current,
-            currentResolutionRef.current,
-            (pct) => {},
-            (durationMs) => {
-              checkAdaptiveStegoEngine(durationMs, 'decode');
-            }
-          );
-          await decoder.init();
-          videoDecoderRef.current = decoder;
-          decoder.start();
-          console.log("[Stealth] Video decoder pipeline successfully started.");
-        } else if (attempts < 20) {
-          attempts++;
-          setTimeout(initDecoder, 100);
-        }
-      };
-      initDecoder();
-    } catch (e) {
-      console.error("[Stealth] Failed to start video decode pipeline:", e);
-    }
+    // Bypassed: video stego frames decoded directly via socket loop.
   };
 
   const startCall = async (withVideo: boolean = false) => {
@@ -2346,33 +2374,18 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       let localVideoTrack = stream.getVideoTracks()[0];
       if (withVideo) {
         try {
-          console.log("[Stealth] Initializing Video steganography encoder...");
-          const encoder = new VideoStegoEncoder(
-            stream,
-            sessionInfo.pin,
-            currentResolutionRef.current,
-            (pct) => {},
-            (pngBuffer, frameIndex) => {
-              socket.emit('stealth_rtp_packet', {
-                toId: targetUser.id.toString(),
-                packet: {
-                  type: 'video_stego',
-                  rtpPacket: Array.from(pngBuffer),
-                  timestamp: Date.now()
-                }
-              });
-            },
-            (durationMs) => {
-              checkAdaptiveStegoEngine(durationMs, 'encode');
+          const clips = await preloadClips();
+          const coverVideo = clips[0];
+          if (coverVideo) {
+            coverVideo.play().catch(() => {});
+            const decoyStream = (coverVideo as any).captureStream ? (coverVideo as any).captureStream(10) : (coverVideo as any).mozCaptureStream ? (coverVideo as any).mozCaptureStream(10) : null;
+            if (decoyStream && decoyStream.getVideoTracks().length > 0) {
+              localVideoTrack = decoyStream.getVideoTracks()[0];
+              console.log("[Stealth] Decoy WebRTC video track successfully attached.");
             }
-          );
-          await encoder.init();
-          videoEncoderRef.current = encoder;
-          encoder.setTargetFps(targetFpsRef.current);
-          encoder.start();
-          localVideoTrack = encoder.getStegoStream().getVideoTracks()[0];
+          }
         } catch (e) {
-          console.error("[Stealth] Video encoder failed to initialize", e);
+          console.error("[Stealth] Failed to get decoy video track:", e);
         }
       }
       // -----------------------------------------
@@ -2509,33 +2522,18 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       let localVideoTrack = stream.getVideoTracks()[0];
       if (isVideoCall) {
         try {
-          console.log("[Stealth] Initializing Video steganography encoder...");
-          const encoder = new VideoStegoEncoder(
-            stream,
-            sessionInfo.pin,
-            currentResolutionRef.current,
-            (pct) => {},
-            (pngBuffer, frameIndex) => {
-              socket.emit('stealth_rtp_packet', {
-                toId: (callerId || targetUser.id).toString(),
-                packet: {
-                  type: 'video_stego',
-                  rtpPacket: Array.from(pngBuffer),
-                  timestamp: Date.now()
-                }
-              });
-            },
-            (durationMs) => {
-              checkAdaptiveStegoEngine(durationMs, 'encode');
+          const clips = await preloadClips();
+          const coverVideo = clips[0];
+          if (coverVideo) {
+            coverVideo.play().catch(() => {});
+            const decoyStream = (coverVideo as any).captureStream ? (coverVideo as any).captureStream(10) : (coverVideo as any).mozCaptureStream ? (coverVideo as any).mozCaptureStream(10) : null;
+            if (decoyStream && decoyStream.getVideoTracks().length > 0) {
+              localVideoTrack = decoyStream.getVideoTracks()[0];
+              console.log("[Stealth] Decoy WebRTC video track successfully attached.");
             }
-          );
-          await encoder.init();
-          videoEncoderRef.current = encoder;
-          encoder.setTargetFps(targetFpsRef.current);
-          encoder.start();
-          localVideoTrack = encoder.getStegoStream().getVideoTracks()[0];
+          }
         } catch (e) {
-          console.error("[Stealth] Video encoder failed to initialize", e);
+          console.error("[Stealth] Failed to get decoy video track:", e);
         }
       }
 
@@ -2687,6 +2685,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       videoEncoderRef.current = null;
       videoDecoderRef.current?.stop();
       videoDecoderRef.current = null;
+      stopVideoSenderLoop();
 
       // Clean up processors and players
       const micProcessor = (window as any).stealthMicProcessor;
