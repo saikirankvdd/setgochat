@@ -1386,9 +1386,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 console.warn("[Stealth-Call] Discarding stale stego signaling from already ended call:", parsed.callId);
                 return;
               }
-              // Verify timestamp is not too old (e.g. > 15s)
-              if (parsed.timestamp && Date.now() - parsed.timestamp > 15000) {
-                console.warn("[Stealth-Call] Discarding stale stego signaling payload (age > 15s):", Date.now() - parsed.timestamp);
+              // Verify timestamp is not too old (allow up to 2 minutes clock skew)
+              if (parsed.timestamp && Math.abs(Date.now() - parsed.timestamp) > 120000) {
+                console.warn("[Stealth-Call] Discarding stale stego signaling payload (age > 120s):", Date.now() - parsed.timestamp);
                 return;
               }
 
@@ -1487,8 +1487,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         console.warn("[Stealth-Call] Ignored stale stego_call_offer with already ended callId:", data.callId);
         return;
       }
-      if (data.timestamp && Date.now() - data.timestamp > 15000) {
-        console.warn("[Stealth-Call] Ignored stale stego_call_offer (age > 15s):", Date.now() - data.timestamp);
+      if (data.timestamp && Math.abs(Date.now() - data.timestamp) > 120000) {
+        console.warn("[Stealth-Call] Ignored stale stego_call_offer (age > 120s):", Date.now() - data.timestamp);
         return;
       }
       
@@ -1564,8 +1564,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         console.warn("[Stealth-Call] Mismatched callId in stego_call_answer. Expected:", callIdRef.current, "Got:", data.callId);
         return;
       }
-      if (data.timestamp && Date.now() - data.timestamp > 15000) {
-        console.warn("[Stealth-Call] Ignored stale stego_call_answer (age > 15s)");
+      if (data.timestamp && Math.abs(Date.now() - data.timestamp) > 120000) {
+        console.warn("[Stealth-Call] Ignored stale stego_call_answer (age > 120s)");
         return;
       }
       if (peerConnectionRef.current) {
