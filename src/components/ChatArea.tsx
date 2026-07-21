@@ -2104,7 +2104,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const downsampled = downsampleAudio(rawFloats, audioCtx.sampleRate, 8000);
           
           const bytes = new Uint8Array(downsampled.length * 2);
-          const micGain = 3.5; // Boost gain factor for voice clarity
+          const micGain = 1.0; // Prevent manual digital clipping distortion, rely on autoGainControl
           for (let i = 0; i < downsampled.length; i++) {
             const boosted = Math.max(-1.0, Math.min(1.0, downsampled[i] * micGain));
             const s16 = Math.max(-32768, Math.min(32767, Math.floor(boosted * 32767)));
@@ -2315,7 +2315,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setIsMuted(false);
       setIsVideoOff(false);
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
         video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false
       });
       
@@ -2464,7 +2468,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setIsMuted(false);
       setIsVideoOff(false);
       const stream = await navigator.mediaDevices.getUserMedia({
-        audio: true,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        },
         video: isVideoCall ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false
       });
       setLocalStream(stream);
