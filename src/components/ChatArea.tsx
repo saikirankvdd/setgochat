@@ -3266,6 +3266,23 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             ref={callOverlayRef}
             className="absolute inset-0 z-50 flex flex-col items-center justify-center animate-fade-in bg-black/60 backdrop-blur-md"
           >
+            {/* Autoplay activation button for mobile devices */}
+            {callState === 'connected' && audioCtxState === 'suspended' && (
+              <div className="absolute top-12 z-50">
+                <button 
+                  onClick={() => {
+                    const audioCtx = stealthAudioCtxRef.current;
+                    if (audioCtx) {
+                      audioCtx.resume().then(() => setAudioCtxState(audioCtx.state)).catch(console.warn);
+                    }
+                  }} 
+                  className="px-5 py-3 bg-[#00a884] hover:bg-[#06cf9c] text-white font-semibold text-sm rounded-2xl flex items-center gap-2 animate-bounce shadow-2xl cursor-pointer transition-colors"
+                >
+                  <Volume2 className="w-4 h-4 text-white" />
+                  Tap to Enable Audio
+                </button>
+              </div>
+            )}
             {/* Remote video — fullscreen behind for video calls */}
             <video 
               ref={remoteVideoRef} 
