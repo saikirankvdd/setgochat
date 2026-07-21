@@ -2303,7 +2303,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     isCallStartingRef.current = true;
     try {
       const isMobile = isMobileDevice();
-      const initialResolution = '480p';
+      const initialResolution = '240p';
       const initialFps = 30;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
@@ -2458,7 +2458,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     isCallAcceptingRef.current = true;
     try {
       const isMobile = isMobileDevice();
-      const initialResolution = '480p';
+      const initialResolution = '240p';
       const initialFps = 30;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;

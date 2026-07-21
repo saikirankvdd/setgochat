@@ -121,6 +121,6 @@ export function getFrameAtIndex(
     return ctx.getImageData(0, 0, width, height);
   }
 
-  ctx.drawImage(videoEl, 0, 0);
+  ctx.drawImage(videoEl, 0, 0, width, height);
   return ctx.getImageData(0, 0, width, height);
 }
