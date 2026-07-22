@@ -2361,8 +2361,23 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               checkAdaptiveStegoEngine(durationMs, 'decode');
             },
             (base64, seq) => {
-              // Push frame to our sync queue map
+              // Push frame to our sync queue map for reference
               videoFrameQueueRef.current.set(seq, base64);
+              
+              // Draw immediately to prevent black screens
+              const img = new Image();
+              img.onload = () => {
+                const canvas = decodedVideoCanvasRef.current;
+                if (canvas) {
+                  const ctx = canvas.getContext('2d');
+                  if (ctx) {
+                    canvas.width = canvas.clientWidth || 320;
+                    canvas.height = canvas.clientHeight || 240;
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                  }
+                }
+              };
+              img.src = 'data:image/jpeg;base64,' + base64;
             }
           );
           await decoder.init();
