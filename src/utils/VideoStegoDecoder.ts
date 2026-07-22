@@ -18,6 +18,7 @@ export class VideoStegoDecoder {
   private isRunning: boolean;
   private wasmEngine: StealthEngine | null;
   private onFrameProcessTime?: (durationMs: number) => void;
+  private onFrameDecoded?: (base64: string, seq: number) => void;
   private lastDecodedFrameIndex: number;
   private masterKey: CryptoJS.lib.WordArray | null = null;
 
@@ -28,7 +29,8 @@ export class VideoStegoDecoder {
     displayCanvas: HTMLCanvasElement,
     resolution: '240p' | '480p' | '1080p',
     onProgress: (pct: number) => void,
-    onFrameProcessTime?: (durationMs: number) => void
+    onFrameProcessTime?: (durationMs: number) => void,
+    onFrameDecoded?: (base64: string, seq: number) => void
   ) {
     this.remoteVideoEl = remoteVideoEl;
     this.pin = pin;
@@ -52,6 +54,7 @@ export class VideoStegoDecoder {
     this.isRunning = false;
     this.wasmEngine = null;
     this.onFrameProcessTime = onFrameProcessTime;
+    this.onFrameDecoded = onFrameDecoded;
     this.lastDecodedFrameIndex = -1;
   }
 
@@ -371,12 +374,16 @@ export class VideoStegoDecoder {
         decryptedBase64 = fastDecrypt(encrypted, this.masterKey!, iv);
 
         if (decryptedBase64) {
-          const img = new Image();
-          img.onload = () => {
-            const displayCtx = displayCanvas.getContext('2d');
-            displayCtx?.drawImage(img, 0, 0, displayCanvas.width, displayCanvas.height);
-          };
-          img.src = 'data:image/jpeg;base64,' + decryptedBase64;
+          if (this.onFrameDecoded) {
+            this.onFrameDecoded(decryptedBase64, frameIndex);
+          } else {
+            const img = new Image();
+            img.onload = () => {
+              const displayCtx = displayCanvas.getContext('2d');
+              displayCtx?.drawImage(img, 0, 0, displayCanvas.width, displayCanvas.height);
+            };
+            img.src = 'data:image/jpeg;base64,' + decryptedBase64;
+          }
         }
       }
 
