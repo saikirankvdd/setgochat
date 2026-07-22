@@ -294,16 +294,17 @@ export class VideoStegoDecoder {
       const totalPixels = this.width * this.height;
       const totalChannels = totalPixels * 3;
       
-      // 1. Extract frame index in JS from first 32 channels (logical channels 0-31)
+      // 1. Extract frame index in JS from first 32 pixel-pairs (logical channels 0-31)
       const encFrameBytes = new Uint8Array(4);
-      let channelIdxIdx = 0;
       for (let i = 0; i < 32; i++) {
-        if (channelIdxIdx % 4 === 3) channelIdxIdx++; // skip alpha
-        const bit = pixels[channelIdxIdx] & 1;
+        const idxA = (2 * i) * 4 + 1; // Green channel of Pixel A
+        const idxB = (2 * i + 1) * 4 + 1; // Green channel of Pixel B
+        const diff = pixels[idxA] - pixels[idxB];
+        const bit = diff > 0 ? 1 : 0;
+
         const byteIdx = Math.floor(i / 8);
         const bitIdx = 7 - (i % 8);
         encFrameBytes[byteIdx] |= (bit << bitIdx);
-        channelIdxIdx++;
       }
       const frameIndex = this.decryptFrameIndexJS(encFrameBytes, this.pin);
 
@@ -331,45 +332,29 @@ export class VideoStegoDecoder {
       }
 
       let bitString = '';
+      const maxUsable = Math.floor(totalPixels / 2) - 64;
 
-      if (this.wasmEngine) {
-        // Use high-performance Rust WASM LSB extraction
-        const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
-        bitString = this.wasmEngine.extract_video_frame(pixelBytes, this.pin, frameIndex);
-      } else {
-        // Fallback: Use JS LSB extraction
-        const maxUsable = totalChannels - 64;
-        let channelIdx = 0;
-        // Skip first 32 channels (frame index already extracted)
-        for (let i = 0; i < 32; i++) {
-          if (channelIdx % 4 === 3) channelIdx++;
-          channelIdx++;
-        }
+      // 2. Extract length header from next 32 pixel-pairs (logical channels 32-63)
+      const encLenBytes = new Uint8Array(4);
+      for (let i = 0; i < 32; i++) {
+        const idxA = (2 * (32 + i)) * 4 + 1;
+        const idxB = (2 * (32 + i) + 1) * 4 + 1;
+        const diff = pixels[idxA] - pixels[idxB];
+        const bit = diff > 0 ? 1 : 0;
 
-        // Read length header from next 32 channels (logical index 32-63)
-        const encLenBytes = new Uint8Array(4);
-        for (let i = 0; i < 32; i++) {
-          if (channelIdx % 4 === 3) channelIdx++; // skip alpha
-          const bit = pixels[channelIdx] & 1;
-          const byteIdx = Math.floor(i / 8);
-          const bitIdx = 7 - (i % 8);
-          encLenBytes[byteIdx] |= (bit << bitIdx);
-          channelIdx++;
-        }
-        const dataLength = this.decryptLengthHeaderJS(encLenBytes, this.pin + '_' + frameIndex);
+        const byteIdx = Math.floor(i / 8);
+        const bitIdx = 7 - (i % 8);
+        encLenBytes[byteIdx] |= (bit << bitIdx);
+      }
+      const dataLength = this.decryptLengthHeaderJS(encLenBytes, this.pin + '_' + frameIndex);
 
-        if (dataLength > 0 && dataLength <= maxUsable) {
-          const stride = Math.floor(maxUsable / dataLength);
-          const prng = new JS_PRNG(this.pin + '_scatter_' + frameIndex);
-
-          for (let i = 0; i < dataLength; i++) {
-            const relativeLogicalIdx = i * stride + Math.floor(prng.next() * stride);
-            const targetLogicalIdx = 64 + relativeLogicalIdx;
-            const actualIdx = targetLogicalIdx + Math.floor(targetLogicalIdx / 3);
-
-            const bit = pixels[actualIdx] & 1;
-            bitString += bit.toString();
-          }
+      if (dataLength > 0 && dataLength <= maxUsable) {
+        for (let i = 0; i < dataLength; i++) {
+          const idxA = (2 * (64 + i)) * 4 + 1;
+          const idxB = (2 * (64 + i) + 1) * 4 + 1;
+          const diff = pixels[idxA] - pixels[idxB];
+          const bit = diff > 0 ? 1 : 0;
+          bitString += bit.toString();
         }
       }
 

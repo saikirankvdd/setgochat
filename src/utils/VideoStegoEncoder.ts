@@ -296,109 +296,67 @@ export class VideoStegoEncoder {
         }
       };
 
-      if (this.videoWorker && this.workerReady) {
-        // Use high-performance Web Worker LSB embedding
-        const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
-        
-        this.videoWorker.onmessage = (e) => {
-          if (!this.isRunning) return;
-          if (e.data.type === 'EMBED_DONE') {
-            if (e.data.pixels) {
-              const modifiedPixels = new Uint8Array(e.data.pixels);
-              outCtx.putImageData(
-                new ImageData(new Uint8ClampedArray(modifiedPixels.buffer), this.width, this.height),
-                0, 0
-              );
-              triggerStegoFrameCallback();
-            } else {
-              // Fail-safe pass-through if worker embedding failed
-              outCtx.putImageData(coverImageData, 0, 0);
-            }
-
-            // Update progress percentage
-            const totalBitsNeeded = 32 + dataBits.length;
-            const usagePct = (totalBitsNeeded / totalChannels) * 100;
-            this.onProgress(Math.min(100, Math.round(usagePct)));
-
-            // Advance frame index
-            this.frameIndex++;
-
-            const duration = performance.now() - startTime;
-            if (this.onFrameProcessTime) {
-              this.onFrameProcessTime(duration);
-            }
-
-            // Loop at dynamic target FPS
-            setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
-          }
-        };
-
-        this.videoWorker.postMessage(
-          { type: 'EMBED_FRAME', pixels: pixelBytes.buffer, dataBits, pin: this.pin, frameIndex: currentFrameIdx },
-          [pixelBytes.buffer] // Transfer ownership (zero-copy)
-        );
-
+      if (false) {
+        // Web Worker LSB disabled to force robust differential fallback
       } else {
-        // Fallback: Use Main Thread JS or WASM embedding if worker is not initialized
-        if (this.wasmEngine) {
-          const pixelBytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength);
-          this.wasmEngine.process_video_frame(pixelBytes, dataBits, this.pin, currentFrameIdx);
-        } else {
-          // JS Fallback
-          const usableChannels = totalChannels - 64;
-          const dataLength = Math.min(dataBits.length, usableChannels);
+        // Spatial Pixel-Pair Differential Steganography (survives H.264 & YUV420p)
+        const totalPixels = this.width * this.height;
+        const maxUsable = Math.floor(totalPixels / 2) - 64;
+        const dataLength = Math.min(dataBits.length, maxUsable);
 
-          // 1. Embed frame index in first 32 channels (logical index 0-31)
-          const encFrameIndex = this.encryptFrameIndexJS(currentFrameIdx, this.pin);
-          let channelIdx = 0;
-          for (let i = 0; i < 32; i++) {
-            if (channelIdx % 4 === 3) channelIdx++; // skip alpha
-            const byteIdx = Math.floor(i / 8);
-            const bitIdx = 7 - (i % 8);
-            const bit = (encFrameIndex[byteIdx] >>> bitIdx) & 1;
-            let val = pixels[channelIdx];
-            if ((val & 1) !== bit) {
-              if (val === 255) val -= 1;
-              else if (val === 0) val += 1;
-              else val += (Math.random() < 0.5 ? 1 : -1);
+        // 1. Generate encrypted frame index bits
+        const encFrameIndex = this.encryptFrameIndexJS(currentFrameIdx, this.pin);
+        const frameIndexBits: number[] = [];
+        for (let i = 0; i < 32; i++) {
+          const byteIdx = Math.floor(i / 8);
+          const bitIdx = 7 - (i % 8);
+          const bit = (encFrameIndex[byteIdx] >>> bitIdx) & 1;
+          frameIndexBits.push(bit);
+        }
+
+        // 2. Generate encrypted length header bits
+        const encLength = this.encryptLengthHeaderJS(dataLength, this.pin + '_' + currentFrameIdx);
+        const lengthBits: number[] = [];
+        for (let i = 0; i < 32; i++) {
+          const byteIdx = Math.floor(i / 8);
+          const bitIdx = 7 - (i % 8);
+          const bit = (encLength[byteIdx] >>> bitIdx) & 1;
+          lengthBits.push(bit);
+        }
+
+        // 3. Assemble all bits sequentially (simplifies decoding & eliminates PRNG sync errors)
+        const allBits: number[] = [];
+        allBits.push(...frameIndexBits);
+        allBits.push(...lengthBits);
+        for (let i = 0; i < dataLength; i++) {
+          allBits.push(parseInt(dataBits[i]));
+        }
+
+        // 4. Embed using green-channel relative differential modulation on pixel-pairs
+        const targetDiff = 12; // Enforce minimum green-channel difference of 12 to survive compression
+        for (let i = 0; i < allBits.length; i++) {
+          const idxA = (2 * i) * 4 + 1; // Green channel of Pixel A
+          const idxB = (2 * i + 1) * 4 + 1; // Green channel of Pixel B
+
+          const bit = allBits[i];
+          const valA = pixels[idxA];
+          const valB = pixels[idxB];
+
+          if (bit === 1) {
+            // We want valA - valB >= targetDiff
+            const currentDiff = valA - valB;
+            if (currentDiff < targetDiff) {
+              const adjust = Math.ceil((targetDiff - currentDiff) / 2);
+              pixels[idxA] = Math.min(255, valA + adjust);
+              pixels[idxB] = Math.max(0, valB - adjust);
             }
-            pixels[channelIdx] = val;
-            channelIdx++;
-          }
-
-          // 2. Embed length header in next 32 channels (logical index 32-63)
-          const encLength = this.encryptLengthHeaderJS(dataLength, this.pin + '_' + currentFrameIdx);
-          for (let i = 0; i < 32; i++) {
-            if (channelIdx % 4 === 3) channelIdx++; // skip alpha
-            const byteIdx = Math.floor(i / 8);
-            const bitIdx = 7 - (i % 8);
-            const bit = (encLength[byteIdx] >>> bitIdx) & 1;
-            let val = pixels[channelIdx];
-            if ((val & 1) !== bit) {
-              if (val === 255) val -= 1;
-              else if (val === 0) val += 1;
-              else val += (Math.random() < 0.5 ? 1 : -1);
-            }
-            pixels[channelIdx] = val;
-            channelIdx++;
-          }
-
-          // 3. Embed payload bits scattered starting at logical channel 64
-          if (dataLength > 0) {
-            const stride = Math.floor(usableChannels / dataLength);
-            const prng = new JS_PRNG(this.pin + '_scatter_' + currentFrameIdx);
-            for (let i = 0; i < dataLength; i++) {
-              const relativeLogicalIdx = i * stride + Math.floor(prng.next() * stride);
-              const targetLogicalIdx = 64 + relativeLogicalIdx;
-              const actualIdx = targetLogicalIdx + Math.floor(targetLogicalIdx / 3);
-              const bitToEmbed = parseInt(dataBits[i]);
-              let val = pixels[actualIdx];
-              if ((val & 1) !== bitToEmbed) {
-                if (val === 255) val -= 1;
-                else if (val === 0) val += 1;
-                else val += (Math.random() < 0.5 ? 1 : -1);
-              }
-              pixels[actualIdx] = val;
+          } else {
+            // We want valB - valA >= targetDiff
+            const currentDiff = valB - valA;
+            if (currentDiff < targetDiff) {
+              const adjust = Math.ceil((targetDiff - currentDiff) / 2);
+              pixels[idxA] = Math.max(0, valA - adjust);
+              pixels[idxB] = Math.min(255, valB + adjust);
             }
           }
         }
