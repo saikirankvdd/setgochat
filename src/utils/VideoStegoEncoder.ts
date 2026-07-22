@@ -227,7 +227,7 @@ export class VideoStegoEncoder {
       // 2. Adaptively compress webcam frame. Start at 20% quality, hard cap at 35%.
       const totalPixels = this.width * this.height;
       const totalChannels = totalPixels * 3; // Red, Green, Blue (skip Alpha)
-      const maxPayloadBits = totalChannels - 32; // Reserve 32 bits for length header
+      const maxPayloadBits = Math.floor(totalPixels / 4) - 64; // Redundant pixel-pair stego capacity
 
       let base64 = '';
       let encrypted = '';
@@ -301,7 +301,7 @@ export class VideoStegoEncoder {
       } else {
         // Spatial Pixel-Pair Differential Steganography (survives H.264 & YUV420p)
         const totalPixels = this.width * this.height;
-        const maxUsable = Math.floor(totalPixels / 2) - 64;
+        const maxUsable = Math.floor(totalPixels / 4) - 64;
         const dataLength = Math.min(dataBits.length, maxUsable);
 
         // 1. Generate encrypted frame index bits
@@ -332,31 +332,50 @@ export class VideoStegoEncoder {
           allBits.push(parseInt(dataBits[i]));
         }
 
-        // 4. Embed using green-channel relative differential modulation on pixel-pairs
-        const targetDiff = 12; // Enforce minimum green-channel difference of 12 to survive compression
+        // 4. Embed using green-channel relative differential modulation on 2x redundant pixel-pairs
+        const targetDiff = 30; // Enforce minimum green-channel difference of 30 to survive compression and gradients
         for (let i = 0; i < allBits.length; i++) {
-          const idxA = (2 * i) * 4 + 1; // Green channel of Pixel A
-          const idxB = (2 * i + 1) * 4 + 1; // Green channel of Pixel B
-
           const bit = allBits[i];
-          const valA = pixels[idxA];
-          const valB = pixels[idxB];
-
+          
+          // Embed in Pair 1
+          const idxA1 = (4 * i) * 4 + 1;
+          const idxB1 = (4 * i + 1) * 4 + 1;
+          const valA1 = pixels[idxA1];
+          const valB1 = pixels[idxB1];
           if (bit === 1) {
-            // We want valA - valB >= targetDiff
-            const currentDiff = valA - valB;
+            const currentDiff = valA1 - valB1;
             if (currentDiff < targetDiff) {
               const adjust = Math.ceil((targetDiff - currentDiff) / 2);
-              pixels[idxA] = Math.min(255, valA + adjust);
-              pixels[idxB] = Math.max(0, valB - adjust);
+              pixels[idxA1] = Math.min(255, valA1 + adjust);
+              pixels[idxB1] = Math.max(0, valB1 - adjust);
             }
           } else {
-            // We want valB - valA >= targetDiff
-            const currentDiff = valB - valA;
+            const currentDiff = valB1 - valA1;
             if (currentDiff < targetDiff) {
               const adjust = Math.ceil((targetDiff - currentDiff) / 2);
-              pixels[idxA] = Math.max(0, valA - adjust);
-              pixels[idxB] = Math.min(255, valB + adjust);
+              pixels[idxA1] = Math.max(0, valA1 - adjust);
+              pixels[idxB1] = Math.min(255, valB1 + adjust);
+            }
+          }
+
+          // Embed in Pair 2
+          const idxA2 = (4 * i + 2) * 4 + 1;
+          const idxB2 = (4 * i + 3) * 4 + 1;
+          const valA2 = pixels[idxA2];
+          const valB2 = pixels[idxB2];
+          if (bit === 1) {
+            const currentDiff = valA2 - valB2;
+            if (currentDiff < targetDiff) {
+              const adjust = Math.ceil((targetDiff - currentDiff) / 2);
+              pixels[idxA2] = Math.min(255, valA2 + adjust);
+              pixels[idxB2] = Math.max(0, valB2 - adjust);
+            }
+          } else {
+            const currentDiff = valB2 - valA2;
+            if (currentDiff < targetDiff) {
+              const adjust = Math.ceil((targetDiff - currentDiff) / 2);
+              pixels[idxA2] = Math.max(0, valA2 - adjust);
+              pixels[idxB2] = Math.min(255, valB2 + adjust);
             }
           }
         }
