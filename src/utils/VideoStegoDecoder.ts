@@ -272,8 +272,15 @@ export class VideoStegoDecoder {
 
       // Check if incoming resolution changed/mismatches decoder resolution
       if (video.videoWidth !== this.width || video.videoHeight !== this.height) {
-        const res = video.videoWidth === 320 ? '240p' : '480p';
-        this.setResolution(res);
+        if (video.videoWidth === 320) {
+          this.setResolution('240p');
+        } else if (video.videoWidth === 640) {
+          this.setResolution('480p');
+        } else {
+          // Skip processing this frame and wait for video track resolution to stabilize
+          requestAnimationFrame(this.processFrame);
+          return;
+        }
       }
 
       const decCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
