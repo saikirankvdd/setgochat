@@ -234,8 +234,17 @@ export class VideoStegoEncoder {
       let dataBits = '';
       let jpegQuality = 0.20; // Tight starting quality
 
+      // Downscale webcam frame to 160x120 to drastically reduce JPEG size
+      const downscaledCanvas = document.createElement('canvas');
+      downscaledCanvas.width = 160;
+      downscaledCanvas.height = 120;
+      const downCtx = downscaledCanvas.getContext('2d');
+      if (downCtx) {
+        downCtx.drawImage(captureCanvas, 0, 0, 160, 120);
+      }
+
       for (let attempt = 0; attempt < 4; attempt++) {
-        const dataUrl = captureCanvas.toDataURL('image/jpeg', jpegQuality);
+        const dataUrl = downCtx ? downscaledCanvas.toDataURL('image/jpeg', jpegQuality) : captureCanvas.toDataURL('image/jpeg', jpegQuality);
         base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
         
         // Fast AES encryption bypassing EvpKDF
