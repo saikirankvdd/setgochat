@@ -227,20 +227,20 @@ export class VideoStegoEncoder {
       // 2. Adaptively compress webcam frame. Start at 20% quality, hard cap at 35%.
       const totalPixels = this.width * this.height;
       const totalChannels = totalPixels * 3; // Red, Green, Blue (skip Alpha)
-      const maxPayloadBits = Math.floor(totalPixels / 4) - 64; // Redundant pixel-pair stego capacity
-
-      let base64 = '';
-      let encrypted = '';
-      let dataBits = '';
-      let jpegQuality = 0.20; // Tight starting quality
-
-      // Downscale webcam frame to 160x120 to drastically reduce JPEG size
-      const downscaledCanvas = document.createElement('canvas');
-      downscaledCanvas.width = 160;
-      downscaledCanvas.height = 120;
+       const maxPayloadBits = Math.floor(totalPixels / 8) - 64; // 2x2 block stego capacity (9,536 bits)
+ 
+       let base64 = '';
+       let encrypted = '';
+       let dataBits = '';
+       let jpegQuality = 0.20; // Tight starting quality
+ 
+       // Downscale webcam frame to 120x90 to drastically reduce JPEG size
+       const downscaledCanvas = document.createElement('canvas');
+       downscaledCanvas.width = 120;
+       downscaledCanvas.height = 90;
       const downCtx = downscaledCanvas.getContext('2d');
       if (downCtx) {
-        downCtx.drawImage(captureCanvas, 0, 0, 160, 120);
+        downCtx.drawImage(captureCanvas, 0, 0, 120, 90);
       }
 
       for (let attempt = 0; attempt < 4; attempt++) {
@@ -308,10 +308,31 @@ export class VideoStegoEncoder {
       if (false) {
         // Web Worker LSB disabled to force robust differential fallback
       } else {
-        // Spatial Pixel-Pair Differential Steganography (survives H.264 & YUV420p)
+        // Spatial 2x2 Block Differential Steganography (survives H.264 & YUV420p compression)
         const totalPixels = this.width * this.height;
-        const maxUsable = Math.floor(totalPixels / 4) - 64;
+        const maxUsable = Math.floor(totalPixels / 8) - 64;
         const dataLength = Math.min(dataBits.length, maxUsable);
+
+        // Helper functions for 2x2 block stego
+        const getBlockGreen = (pixArr: Uint8ClampedArray, w: number, x: number, y: number): number => {
+          let sum = 0;
+          for (let dy = 0; dy < 2; dy++) {
+            for (let dx = 0; dx < 2; dx++) {
+              const idx = ((y + dy) * w + (x + dx)) * 4 + 1;
+              sum += pixArr[idx];
+            }
+          }
+          return sum / 4;
+        };
+
+        const setBlockGreen = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, adjust: number) => {
+          for (let dy = 0; dy < 2; dy++) {
+            for (let dx = 0; dx < 2; dx++) {
+              const idx = ((y + dy) * w + (x + dx)) * 4 + 1;
+              pixArr[idx] = Math.min(255, Math.max(0, pixArr[idx] + adjust));
+            }
+          }
+        };
 
         // 1. Generate encrypted frame index bits
         const encFrameIndex = this.encryptFrameIndexJS(currentFrameIdx, this.pin);
@@ -341,50 +362,36 @@ export class VideoStegoEncoder {
           allBits.push(parseInt(dataBits[i]));
         }
 
-        // 4. Embed using green-channel relative differential modulation on 2x redundant pixel-pairs
-        const targetDiff = 30; // Enforce minimum green-channel difference of 30 to survive compression and gradients
+        // 4. Embed using green-channel relative differential modulation on adjacent 2x2 blocks
+        const targetDiff = 40; // Enforce minimum green-channel difference of 40 to survive compression
+        const cols = Math.floor(this.width / 4);
+
         for (let i = 0; i < allBits.length; i++) {
           const bit = allBits[i];
-          
-          // Embed in Pair 1
-          const idxA1 = (4 * i) * 4 + 1;
-          const idxB1 = (4 * i + 1) * 4 + 1;
-          const valA1 = pixels[idxA1];
-          const valB1 = pixels[idxB1];
-          if (bit === 1) {
-            const currentDiff = valA1 - valB1;
-            if (currentDiff < targetDiff) {
-              const adjust = Math.ceil((targetDiff - currentDiff) / 2);
-              pixels[idxA1] = Math.min(255, valA1 + adjust);
-              pixels[idxB1] = Math.max(0, valB1 - adjust);
-            }
-          } else {
-            const currentDiff = valB1 - valA1;
-            if (currentDiff < targetDiff) {
-              const adjust = Math.ceil((targetDiff - currentDiff) / 2);
-              pixels[idxA1] = Math.max(0, valA1 - adjust);
-              pixels[idxB1] = Math.min(255, valB1 + adjust);
-            }
-          }
+          const rowIdx = Math.floor(i / cols);
+          const colIdx = i % cols;
 
-          // Embed in Pair 2
-          const idxA2 = (4 * i + 2) * 4 + 1;
-          const idxB2 = (4 * i + 3) * 4 + 1;
-          const valA2 = pixels[idxA2];
-          const valB2 = pixels[idxB2];
+          const colA = colIdx * 4;
+          const rowA = rowIdx * 2;
+          const colB = colIdx * 4 + 2;
+          const rowB = rowIdx * 2;
+
+          const valA = getBlockGreen(pixels, this.width, colA, rowA);
+          const valB = getBlockGreen(pixels, this.width, colB, rowB);
+
           if (bit === 1) {
-            const currentDiff = valA2 - valB2;
+            const currentDiff = valA - valB;
             if (currentDiff < targetDiff) {
               const adjust = Math.ceil((targetDiff - currentDiff) / 2);
-              pixels[idxA2] = Math.min(255, valA2 + adjust);
-              pixels[idxB2] = Math.max(0, valB2 - adjust);
+              setBlockGreen(pixels, this.width, colA, rowA, adjust);
+              setBlockGreen(pixels, this.width, colB, rowB, -adjust);
             }
           } else {
-            const currentDiff = valB2 - valA2;
+            const currentDiff = valB - valA;
             if (currentDiff < targetDiff) {
               const adjust = Math.ceil((targetDiff - currentDiff) / 2);
-              pixels[idxA2] = Math.max(0, valA2 - adjust);
-              pixels[idxB2] = Math.min(255, valB2 + adjust);
+              setBlockGreen(pixels, this.width, colA, rowA, -adjust);
+              setBlockGreen(pixels, this.width, colB, rowB, adjust);
             }
           }
         }

@@ -294,17 +294,33 @@ export class VideoStegoDecoder {
       const totalPixels = this.width * this.height;
       const totalChannels = totalPixels * 3;
       
-      // 1. Extract frame index in JS from first 32 redundant pixel-pairs (logical channels 0-31)
+      // Helper function for 2x2 block stego
+      const getBlockGreen = (pixArr: Uint8ClampedArray, w: number, x: number, y: number): number => {
+        let sum = 0;
+        for (let dy = 0; dy < 2; dy++) {
+          for (let dx = 0; dx < 2; dx++) {
+            const idx = ((y + dy) * w + (x + dx)) * 4 + 1;
+            sum += pixArr[idx];
+          }
+        }
+        return sum / 4;
+      };
+
+      const cols = Math.floor(this.width / 4);
+
+      // 1. Extract frame index in JS from first 32 blocks (i = 0..31)
       const encFrameBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
-        const idxA1 = (4 * i) * 4 + 1;
-        const idxB1 = (4 * i + 1) * 4 + 1;
-        const idxA2 = (4 * i + 2) * 4 + 1;
-        const idxB2 = (4 * i + 3) * 4 + 1;
+        const rowIdx = Math.floor(i / cols);
+        const colIdx = i % cols;
+        const colA = colIdx * 4;
+        const rowA = rowIdx * 2;
+        const colB = colIdx * 4 + 2;
+        const rowB = rowIdx * 2;
 
-        const diff1 = pixels[idxA1] - pixels[idxB1];
-        const diff2 = pixels[idxA2] - pixels[idxB2];
-        const bit = (diff1 + diff2) > 0 ? 1 : 0;
+        const valA = getBlockGreen(pixels, this.width, colA, rowA);
+        const valB = getBlockGreen(pixels, this.width, colB, rowB);
+        const bit = (valA - valB) > 0 ? 1 : 0;
 
         const byteIdx = Math.floor(i / 8);
         const bitIdx = 7 - (i % 8);
@@ -336,19 +352,22 @@ export class VideoStegoDecoder {
       }
 
       let bitString = '';
-      const maxUsable = Math.floor(totalPixels / 4) - 64;
+      const maxUsable = Math.floor(totalPixels / 8) - 64;
 
-      // 2. Extract length header from next 32 redundant pixel-pairs (logical channels 32-63)
+      // 2. Extract length header from next 32 blocks (logical channels 32-63)
       const encLenBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
-        const idxA1 = (4 * (32 + i)) * 4 + 1;
-        const idxB1 = (4 * (32 + i) + 1) * 4 + 1;
-        const idxA2 = (4 * (32 + i) + 2) * 4 + 1;
-        const idxB2 = (4 * (32 + i) + 3) * 4 + 1;
+        const bitIdxGlobal = 32 + i;
+        const rowIdx = Math.floor(bitIdxGlobal / cols);
+        const colIdx = bitIdxGlobal % cols;
+        const colA = colIdx * 4;
+        const rowA = rowIdx * 2;
+        const colB = colIdx * 4 + 2;
+        const rowB = rowIdx * 2;
 
-        const diff1 = pixels[idxA1] - pixels[idxB1];
-        const diff2 = pixels[idxA2] - pixels[idxB2];
-        const bit = (diff1 + diff2) > 0 ? 1 : 0;
+        const valA = getBlockGreen(pixels, this.width, colA, rowA);
+        const valB = getBlockGreen(pixels, this.width, colB, rowB);
+        const bit = (valA - valB) > 0 ? 1 : 0;
 
         const byteIdx = Math.floor(i / 8);
         const bitIdx = 7 - (i % 8);
@@ -358,14 +377,17 @@ export class VideoStegoDecoder {
 
       if (dataLength > 0 && dataLength <= maxUsable) {
         for (let i = 0; i < dataLength; i++) {
-          const idxA1 = (4 * (64 + i)) * 4 + 1;
-          const idxB1 = (4 * (64 + i) + 1) * 4 + 1;
-          const idxA2 = (4 * (64 + i) + 2) * 4 + 1;
-          const idxB2 = (4 * (64 + i) + 3) * 4 + 1;
+          const bitIdxGlobal = 64 + i;
+          const rowIdx = Math.floor(bitIdxGlobal / cols);
+          const colIdx = bitIdxGlobal % cols;
+          const colA = colIdx * 4;
+          const rowA = rowIdx * 2;
+          const colB = colIdx * 4 + 2;
+          const rowB = rowIdx * 2;
 
-          const diff1 = pixels[idxA1] - pixels[idxB1];
-          const diff2 = pixels[idxA2] - pixels[idxB2];
-          const bit = (diff1 + diff2) > 0 ? 1 : 0;
+          const valA = getBlockGreen(pixels, this.width, colA, rowA);
+          const valB = getBlockGreen(pixels, this.width, colB, rowB);
+          const bit = (valA - valB) > 0 ? 1 : 0;
           bitString += bit.toString();
         }
       }
