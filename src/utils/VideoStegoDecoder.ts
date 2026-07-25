@@ -405,8 +405,8 @@ export class VideoStegoDecoder {
             const compressed = base64ToUint8(decryptedBase64);
             const rgbBytes = gunzipSync(compressed);
             
-            const W = 60;
-            const H = 45;
+            const W = 40;
+            const H = 30;
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = W;
             tempCanvas.height = H;
@@ -415,6 +415,7 @@ export class VideoStegoDecoder {
               const imgData = tempCtx.createImageData(W, H);
               let rgbIdx = 0;
               for (let i = 0; i < imgData.data.length; i += 4) {
+                if (rgbIdx + 2 >= rgbBytes.length) break;
                 imgData.data[i]     = rgbBytes[rgbIdx++]; // R
                 imgData.data[i + 1] = rgbBytes[rgbIdx++]; // G
                 imgData.data[i + 2] = rgbBytes[rgbIdx++]; // B

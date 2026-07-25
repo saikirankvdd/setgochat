@@ -233,24 +233,27 @@ export class VideoStegoEncoder {
       let encrypted = '';
       let dataBits = '';
 
-      // Downscale webcam frame to 60x45 to drastically reduce data size
-      const W = 60;
-      const H = 45;
+      // Downscale webcam frame to 40x30 to drastically reduce data size
+      const W = 40;
+      const H = 30;
       const downscaledCanvas = document.createElement('canvas');
       downscaledCanvas.width = W;
       downscaledCanvas.height = H;
       const downCtx = downscaledCanvas.getContext('2d');
+      
+      let imgPixels: Uint8ClampedArray;
       if (downCtx) {
         downCtx.drawImage(captureCanvas, 0, 0, W, H);
+        imgPixels = downCtx.getImageData(0, 0, W, H).data;
+      } else {
+        imgPixels = capCtx.getImageData(0, 0, W, H).data;
       }
-      
-      const downImgData = downCtx ? downCtx.getImageData(0, 0, W, H) : capCtx.getImageData(0, 0, this.width, this.height);
-      const imgPixels = downImgData.data;
       
       // Extract raw RGB bytes (skip Alpha channel to save 25% space)
       const rgbBytes = new Uint8Array(W * H * 3);
       let rgbIdx = 0;
       for (let i = 0; i < imgPixels.length; i += 4) {
+        if (rgbIdx >= rgbBytes.length) break;
         rgbBytes[rgbIdx++] = imgPixels[i];     // R
         rgbBytes[rgbIdx++] = imgPixels[i + 1]; // G
         rgbBytes[rgbIdx++] = imgPixels[i + 2]; // B
