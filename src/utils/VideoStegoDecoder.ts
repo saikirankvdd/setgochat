@@ -1,4 +1,5 @@
-import { decryptData, binaryToString, getSha256Key, fastDecrypt } from './crypto';
+import { decryptData, binaryToString, getSha256Key, fastDecrypt, base64ToUint8 } from './crypto';
+import { gunzipSync } from 'fflate';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
 import CryptoJS from 'crypto-js';
@@ -400,15 +401,38 @@ export class VideoStegoDecoder {
         decryptedBase64 = fastDecrypt(encrypted, this.masterKey!, iv);
 
         if (decryptedBase64) {
+          try {
+            const compressed = base64ToUint8(decryptedBase64);
+            const rgbBytes = gunzipSync(compressed);
+            
+            const W = 60;
+            const H = 45;
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = W;
+            tempCanvas.height = H;
+            const tempCtx = tempCanvas.getContext('2d');
+            if (tempCtx) {
+              const imgData = tempCtx.createImageData(W, H);
+              let rgbIdx = 0;
+              for (let i = 0; i < imgData.data.length; i += 4) {
+                imgData.data[i]     = rgbBytes[rgbIdx++]; // R
+                imgData.data[i + 1] = rgbBytes[rgbIdx++]; // G
+                imgData.data[i + 2] = rgbBytes[rgbIdx++]; // B
+                imgData.data[i + 3] = 255;                // A
+              }
+              tempCtx.putImageData(imgData, 0, 0);
+              
+              const displayCtx = displayCanvas.getContext('2d');
+              if (displayCtx) {
+                displayCtx.drawImage(tempCanvas, 0, 0, displayCanvas.width, displayCanvas.height);
+              }
+            }
+          } catch (err) {
+            console.error("[Stealth-Video-Decoder] Failed to decompress/render frame:", err);
+          }
+
           if (this.onFrameDecoded) {
             this.onFrameDecoded(decryptedBase64, frameIndex);
-          } else {
-            const img = new Image();
-            img.onload = () => {
-              const displayCtx = displayCanvas.getContext('2d');
-              displayCtx?.drawImage(img, 0, 0, displayCanvas.width, displayCanvas.height);
-            };
-            img.src = 'data:image/jpeg;base64,' + decryptedBase64;
           }
         }
       }

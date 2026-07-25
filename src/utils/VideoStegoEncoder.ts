@@ -1,4 +1,5 @@
-import { encryptData, stringToBinary, getSha256Key, fastEncrypt } from './crypto';
+import { encryptData, stringToBinary, getSha256Key, fastEncrypt, uint8ToBase64 } from './crypto';
+import { gzipSync } from 'fflate';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
 import CryptoJS from 'crypto-js';
@@ -224,47 +225,52 @@ export class VideoStegoEncoder {
       this.lastFrameHash = hashStr;
       this.frameSkipCounter = 0;
 
-      // 2. Adaptively compress webcam frame. Start at 20% quality, hard cap at 35%.
+      // 2. Extract and compress raw RGB bytes (60x45) using gzipSync
       const totalPixels = this.width * this.height;
-      const totalChannels = totalPixels * 3; // Red, Green, Blue (skip Alpha)
-       const maxPayloadBits = Math.floor(totalPixels / 8) - 64; // 2x2 block stego capacity (9,536 bits)
- 
-       let base64 = '';
-       let encrypted = '';
-       let dataBits = '';
-       let jpegQuality = 0.20; // Tight starting quality
- 
-       // Downscale webcam frame to 120x90 to drastically reduce JPEG size
-       const downscaledCanvas = document.createElement('canvas');
-       downscaledCanvas.width = 120;
-       downscaledCanvas.height = 90;
+      const maxPayloadBits = Math.floor(totalPixels / 8) - 64; // 2x2 block stego capacity (9,536 bits)
+
+      let base64 = '';
+      let encrypted = '';
+      let dataBits = '';
+
+      // Downscale webcam frame to 60x45 to drastically reduce data size
+      const W = 60;
+      const H = 45;
+      const downscaledCanvas = document.createElement('canvas');
+      downscaledCanvas.width = W;
+      downscaledCanvas.height = H;
       const downCtx = downscaledCanvas.getContext('2d');
       if (downCtx) {
-        downCtx.drawImage(captureCanvas, 0, 0, 120, 90);
+        downCtx.drawImage(captureCanvas, 0, 0, W, H);
+      }
+      
+      const downImgData = downCtx ? downCtx.getImageData(0, 0, W, H) : capCtx.getImageData(0, 0, this.width, this.height);
+      const imgPixels = downImgData.data;
+      
+      // Extract raw RGB bytes (skip Alpha channel to save 25% space)
+      const rgbBytes = new Uint8Array(W * H * 3);
+      let rgbIdx = 0;
+      for (let i = 0; i < imgPixels.length; i += 4) {
+        rgbBytes[rgbIdx++] = imgPixels[i];     // R
+        rgbBytes[rgbIdx++] = imgPixels[i + 1]; // G
+        rgbBytes[rgbIdx++] = imgPixels[i + 2]; // B
       }
 
-      for (let attempt = 0; attempt < 4; attempt++) {
-        const dataUrl = downCtx ? downscaledCanvas.toDataURL('image/jpeg', jpegQuality) : captureCanvas.toDataURL('image/jpeg', jpegQuality);
-        base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
-        
-        // Fast AES encryption bypassing EvpKDF
-        const iv = CryptoJS.lib.WordArray.create([0, 0, 0, this.frameIndex]);
-        encrypted = fastEncrypt(base64, this.masterKey!, iv);
+      // Compress raw RGB bytes using gzip
+      const compressedBytes = gzipSync(rgbBytes);
+      base64 = uint8ToBase64(compressedBytes);
 
-        dataBits = stringToBinary(encrypted);
+      // Fast AES encryption bypassing EvpKDF
+      const iv = CryptoJS.lib.WordArray.create([0, 0, 0, this.frameIndex]);
+      encrypted = fastEncrypt(base64, this.masterKey!, iv);
 
-        if (dataBits.length <= maxPayloadBits) {
-          break; // Payload fits — proceed
-        }
+      dataBits = stringToBinary(encrypted);
 
-        // Reduce quality slightly and retry (unlikely to need this, but good safety)
-        jpegQuality = Math.max(0.10, jpegQuality - 0.05);
-        if (attempt === 3) {
-          console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large even at ${jpegQuality * 100}% quality. Skipping.`);
-          this.frameIndex++;
-          setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
-          return;
-        }
+      if (dataBits.length > maxPayloadBits) {
+        console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large (${dataBits.length} bits). Max is ${maxPayloadBits}. Skipping.`);
+        this.frameIndex++;
+        setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
+        return;
       }
 
       // 3. Get active cover clip and extract its frame
@@ -402,7 +408,7 @@ export class VideoStegoEncoder {
 
         // Update progress percentage
         const totalBitsNeeded = 32 + dataBits.length;
-        const usagePct = (totalBitsNeeded / totalChannels) * 100;
+        const usagePct = (totalBitsNeeded / maxUsable) * 100;
         this.onProgress(Math.min(100, Math.round(usagePct)));
 
         // Advance frame index

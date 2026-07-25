@@ -2310,27 +2310,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const videoFrameQueueRef = useRef<Map<number, string>>(new Map());
 
   const syncVideoFrame = (seq: number) => {
-    const frameBase64 = videoFrameQueueRef.current.get(seq);
-    if (frameBase64) {
-      const img = new Image();
-      img.onload = () => {
-        const canvas = decodedVideoCanvasRef.current;
-        if (canvas) {
-          const ctx = canvas.getContext('2d');
-          if (ctx) {
-            canvas.width = canvas.clientWidth || 320;
-            canvas.height = canvas.clientHeight || 240;
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          }
-        }
-      };
-      img.src = 'data:image/jpeg;base64,' + frameBase64;
-      
-      // Clean up old frames to save memory
-      for (const oldSeq of videoFrameQueueRef.current.keys()) {
-        if (oldSeq <= seq) {
-          videoFrameQueueRef.current.delete(oldSeq);
-        }
+    // Clean up old frames to save memory
+    for (const oldSeq of videoFrameQueueRef.current.keys()) {
+      if (oldSeq <= seq) {
+        videoFrameQueueRef.current.delete(oldSeq);
       }
     }
   };
@@ -2363,21 +2346,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             (base64, seq) => {
               // Push frame to our sync queue map for reference
               videoFrameQueueRef.current.set(seq, base64);
-              
-              // Draw immediately to prevent black screens
-              const img = new Image();
-              img.onload = () => {
-                const canvas = decodedVideoCanvasRef.current;
-                if (canvas) {
-                  const ctx = canvas.getContext('2d');
-                  if (ctx) {
-                    canvas.width = canvas.clientWidth || 320;
-                    canvas.height = canvas.clientHeight || 240;
-                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                  }
-                }
-              };
-              img.src = 'data:image/jpeg;base64,' + base64;
             }
           );
           await decoder.init();
