@@ -357,22 +357,22 @@ export class VideoStegoEncoder {
         const dataLength = Math.min(dataBits.length, maxUsable);
 
         // Helper functions for 2x2 block stego
-        const getBlockGreen = (pixArr: Uint8ClampedArray, w: number, x: number, y: number): number => {
+        const getBlockChannel = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, channelOffset: number): number => {
           let sum = 0;
-          for (let dy = 0; dy < 2; dy++) {
-            for (let dx = 0; dx < 2; dx++) {
-              const idx = ((y + dy) * w + (x + dx)) * 4 + 1;
+          for (let dy = 0; dy < 4; dy++) {
+            for (let dx = 0; dx < 4; dx++) {
+              const idx = ((y + dy) * w + (x + dx)) * 4 + channelOffset;
               sum += pixArr[idx];
             }
           }
-          return sum / 4;
+          return sum / 16;
         };
 
-        const setBlockGreenAbsolute = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, val: number) => {
+        const setBlockChannelAbsolute = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, channelOffset: number, val: number) => {
           const clamped = Math.min(255, Math.max(0, val));
-          for (let dy = 0; dy < 2; dy++) {
-            for (let dx = 0; dx < 2; dx++) {
-              const idx = ((y + dy) * w + (x + dx)) * 4 + 1;
+          for (let dy = 0; dy < 4; dy++) {
+            for (let dx = 0; dx < 4; dx++) {
+              const idx = ((y + dy) * w + (x + dx)) * 4 + channelOffset;
               pixArr[idx] = clamped;
             }
           }
@@ -399,22 +399,25 @@ export class VideoStegoEncoder {
         }
         allBits.set(dataBitsArr, 64);
 
-        // 4. Embed using green-channel relative differential modulation on adjacent 2x2 blocks
-        const targetDiff = 100; // Enforce minimum green-channel difference of 100 to survive heavy WebRTC compression
-        const cols = Math.floor(this.width / 4);
+        // 4. Embed using RGB relative differential modulation on adjacent 4x4 blocks (8x4 pair)
+        const targetDiff = 100; // Enforce minimum channel difference of 100 to survive heavy WebRTC compression
+        const cols = Math.floor(this.width / 8);
 
         for (let i = 0; i < allBits.length; i++) {
           const bit = allBits[i];
-          const rowIdx = Math.floor(i / cols);
-          const colIdx = i % cols;
+          const pairIdx = Math.floor(i / 3);
+          const channelOffset = i % 3; // 0=R, 1=G, 2=B
+          
+          const rowIdx = Math.floor(pairIdx / cols);
+          const colIdx = pairIdx % cols;
 
-          const colA = colIdx * 4;
-          const rowA = rowIdx * 2;
-          const colB = colIdx * 4 + 2;
-          const rowB = rowIdx * 2;
+          const colA = colIdx * 8;
+          const rowA = rowIdx * 4;
+          const colB = colIdx * 8 + 4;
+          const rowB = rowIdx * 4;
 
-          const valA = getBlockGreen(pixels, this.width, colA, rowA);
-          const valB = getBlockGreen(pixels, this.width, colB, rowB);
+          const valA = getBlockChannel(pixels, this.width, colA, rowA, channelOffset);
+          const valB = getBlockChannel(pixels, this.width, colB, rowB, channelOffset);
 
           if (bit === 1) {
             let currentDiff = valA - valB;
@@ -431,12 +434,12 @@ export class VideoStegoEncoder {
                 newValA += (0 - newValB);
                 newValB = 0;
               }
-              setBlockGreenAbsolute(pixels, this.width, colA, rowA, newValA);
-              setBlockGreenAbsolute(pixels, this.width, colB, rowB, newValB);
+              setBlockChannelAbsolute(pixels, this.width, colA, rowA, channelOffset, newValA);
+              setBlockChannelAbsolute(pixels, this.width, colB, rowB, channelOffset, newValB);
             } else {
               // Homogenize block to survive compression even if diff is already good
-              setBlockGreenAbsolute(pixels, this.width, colA, rowA, valA);
-              setBlockGreenAbsolute(pixels, this.width, colB, rowB, valB);
+              setBlockChannelAbsolute(pixels, this.width, colA, rowA, channelOffset, valA);
+              setBlockChannelAbsolute(pixels, this.width, colB, rowB, channelOffset, valB);
             }
           } else {
             let currentDiff = valB - valA;
@@ -453,12 +456,12 @@ export class VideoStegoEncoder {
                 newValB += (0 - newValA);
                 newValA = 0;
               }
-              setBlockGreenAbsolute(pixels, this.width, colA, rowA, newValA);
-              setBlockGreenAbsolute(pixels, this.width, colB, rowB, newValB);
+              setBlockChannelAbsolute(pixels, this.width, colA, rowA, channelOffset, newValA);
+              setBlockChannelAbsolute(pixels, this.width, colB, rowB, channelOffset, newValB);
             } else {
               // Homogenize block
-              setBlockGreenAbsolute(pixels, this.width, colA, rowA, valA);
-              setBlockGreenAbsolute(pixels, this.width, colB, rowB, valB);
+              setBlockChannelAbsolute(pixels, this.width, colA, rowA, channelOffset, valA);
+              setBlockChannelAbsolute(pixels, this.width, colB, rowB, channelOffset, valB);
             }
           }
         }

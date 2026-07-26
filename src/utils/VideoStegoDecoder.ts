@@ -327,29 +327,33 @@ export class VideoStegoDecoder {
       // Helper function for 2x2 block stego
       const getBlockGreen = (pixArr: Uint8ClampedArray, w: number, x: number, y: number): number => {
         let sum = 0;
-        for (let dy = 0; dy < 2; dy++) {
-          for (let dx = 0; dx < 2; dx++) {
-            const idx = ((y + dy) * w + (x + dx)) * 4 + 1;
+      const getBlockChannel = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, channelOffset: number): number => {
+        let sum = 0;
+        for (let dy = 0; dy < 4; dy++) {
+          for (let dx = 0; dx < 4; dx++) {
+            const idx = ((y + dy) * w + (x + dx)) * 4 + channelOffset;
             sum += pixArr[idx];
           }
         }
-        return sum / 4;
+        return sum / 16;
       };
 
-      const cols = Math.floor(this.width / 4);
+      const cols = Math.floor(this.width / 8);
 
-      // 1. Extract frame index in JS from first 32 blocks (i = 0..31)
+      // 1. Extract frame index in JS from first 32 bits (i = 0..31)
       const encFrameBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
-        const rowIdx = Math.floor(i / cols);
-        const colIdx = i % cols;
-        const colA = colIdx * 4;
-        const rowA = rowIdx * 2;
-        const colB = colIdx * 4 + 2;
-        const rowB = rowIdx * 2;
+        const pairIdx = Math.floor(i / 3);
+        const channelOffset = i % 3;
+        const rowIdx = Math.floor(pairIdx / cols);
+        const colIdx = pairIdx % cols;
+        const colA = colIdx * 8;
+        const rowA = rowIdx * 4;
+        const colB = colIdx * 8 + 4;
+        const rowB = rowIdx * 4;
 
-        const valA = getBlockGreen(pixels, this.width, colA, rowA);
-        const valB = getBlockGreen(pixels, this.width, colB, rowB);
+        const valA = getBlockChannel(pixels, this.width, colA, rowA, channelOffset);
+        const valB = getBlockChannel(pixels, this.width, colB, rowB, channelOffset);
         const bit = (valA - valB) > 0 ? 1 : 0;
 
         const byteIdx = Math.floor(i / 8);
@@ -388,21 +392,24 @@ export class VideoStegoDecoder {
       }
 
 
-      const maxUsable = Math.floor(totalPixels / 8) - 64;
+      const totalPairs = cols * Math.floor(this.height / 4);
+      const maxUsable = (totalPairs * 3) - 64;
 
-      // 2. Extract length header from next 32 blocks (logical channels 32-63)
+      // 2. Extract length header from next 32 bits (i = 32..63)
       const encLenBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
         const bitIdxGlobal = 32 + i;
-        const rowIdx = Math.floor(bitIdxGlobal / cols);
-        const colIdx = bitIdxGlobal % cols;
-        const colA = colIdx * 4;
-        const rowA = rowIdx * 2;
-        const colB = colIdx * 4 + 2;
-        const rowB = rowIdx * 2;
+        const pairIdx = Math.floor(bitIdxGlobal / 3);
+        const channelOffset = bitIdxGlobal % 3;
+        const rowIdx = Math.floor(pairIdx / cols);
+        const colIdx = pairIdx % cols;
+        const colA = colIdx * 8;
+        const rowA = rowIdx * 4;
+        const colB = colIdx * 8 + 4;
+        const rowB = rowIdx * 4;
 
-        const valA = getBlockGreen(pixels, this.width, colA, rowA);
-        const valB = getBlockGreen(pixels, this.width, colB, rowB);
+        const valA = getBlockChannel(pixels, this.width, colA, rowA, channelOffset);
+        const valB = getBlockChannel(pixels, this.width, colB, rowB, channelOffset);
         const bit = (valA - valB) > 0 ? 1 : 0;
 
         const byteIdx = Math.floor(i / 8);
@@ -422,15 +429,17 @@ export class VideoStegoDecoder {
           const offset = i * 8;
           for (let j = 0; j < 8; j++) {
             const bitIdxGlobal = 64 + offset + j;
-            const rowIdx = Math.floor(bitIdxGlobal / cols);
-            const colIdx = bitIdxGlobal % cols;
-            const colA = colIdx * 4;
-            const rowA = rowIdx * 2;
-            const colB = colIdx * 4 + 2;
-            const rowB = rowIdx * 2;
+            const pairIdx = Math.floor(bitIdxGlobal / 3);
+            const channelOffset = bitIdxGlobal % 3;
+            const rowIdx = Math.floor(pairIdx / cols);
+            const colIdx = pairIdx % cols;
+            const colA = colIdx * 8;
+            const rowA = rowIdx * 4;
+            const colB = colIdx * 8 + 4;
+            const rowB = rowIdx * 4;
 
-            const valA = getBlockGreen(pixels, this.width, colA, rowA);
-            const valB = getBlockGreen(pixels, this.width, colB, rowB);
+            const valA = getBlockChannel(pixels, this.width, colA, rowA, channelOffset);
+            const valB = getBlockChannel(pixels, this.width, colB, rowB, channelOffset);
             const bit = (valA - valB) > 0 ? 1 : 0;
             
             if (bit === 1) {
