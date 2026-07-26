@@ -343,6 +343,14 @@ export class VideoStegoDecoder {
         return;
       }
 
+      // ALWAYS draw the received stego frame to display — this IS the other person's face video
+      // The WebGL decoding runs on top; the visual output is always the received stream
+      const displayCtx = displayCanvas.getContext('2d');
+      if (displayCtx) {
+        displayCtx.drawImage(video, 0, 0, displayCanvas.width, displayCanvas.height);
+      }
+
+
       // 1. Parse frame index (bits 0..31)
       const encFrameBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
