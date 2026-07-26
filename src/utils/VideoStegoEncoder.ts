@@ -368,11 +368,12 @@ export class VideoStegoEncoder {
           return sum / 4;
         };
 
-        const setBlockGreen = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, adjust: number) => {
+        const setBlockGreenAbsolute = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, val: number) => {
+          const clamped = Math.min(255, Math.max(0, val));
           for (let dy = 0; dy < 2; dy++) {
             for (let dx = 0; dx < 2; dx++) {
               const idx = ((y + dy) * w + (x + dx)) * 4 + 1;
-              pixArr[idx] = Math.min(255, Math.max(0, pixArr[idx] + adjust));
+              pixArr[idx] = clamped;
             }
           }
         };
@@ -416,18 +417,48 @@ export class VideoStegoEncoder {
           const valB = getBlockGreen(pixels, this.width, colB, rowB);
 
           if (bit === 1) {
-            const currentDiff = valA - valB;
+            let currentDiff = valA - valB;
             if (currentDiff < targetDiff) {
-              const adjust = Math.ceil((targetDiff - currentDiff) / 2);
-              setBlockGreen(pixels, this.width, colA, rowA, adjust);
-              setBlockGreen(pixels, this.width, colB, rowB, -adjust);
+              const shortfall = targetDiff - currentDiff;
+              let newValA = valA + Math.ceil(shortfall / 2);
+              let newValB = valB - Math.floor(shortfall / 2);
+              
+              // Shift shortfall if clipping occurs
+              if (newValA > 255) {
+                newValB -= (newValA - 255);
+                newValA = 255;
+              } else if (newValB < 0) {
+                newValA += (0 - newValB);
+                newValB = 0;
+              }
+              setBlockGreenAbsolute(pixels, this.width, colA, rowA, newValA);
+              setBlockGreenAbsolute(pixels, this.width, colB, rowB, newValB);
+            } else {
+              // Homogenize block to survive compression even if diff is already good
+              setBlockGreenAbsolute(pixels, this.width, colA, rowA, valA);
+              setBlockGreenAbsolute(pixels, this.width, colB, rowB, valB);
             }
           } else {
-            const currentDiff = valB - valA;
+            let currentDiff = valB - valA;
             if (currentDiff < targetDiff) {
-              const adjust = Math.ceil((targetDiff - currentDiff) / 2);
-              setBlockGreen(pixels, this.width, colA, rowA, -adjust);
-              setBlockGreen(pixels, this.width, colB, rowB, adjust);
+              const shortfall = targetDiff - currentDiff;
+              let newValB = valB + Math.ceil(shortfall / 2);
+              let newValA = valA - Math.floor(shortfall / 2);
+              
+              // Shift shortfall if clipping occurs
+              if (newValB > 255) {
+                newValA -= (newValB - 255);
+                newValB = 255;
+              } else if (newValA < 0) {
+                newValB += (0 - newValA);
+                newValA = 0;
+              }
+              setBlockGreenAbsolute(pixels, this.width, colA, rowA, newValA);
+              setBlockGreenAbsolute(pixels, this.width, colB, rowB, newValB);
+            } else {
+              // Homogenize block
+              setBlockGreenAbsolute(pixels, this.width, colA, rowA, valA);
+              setBlockGreenAbsolute(pixels, this.width, colB, rowB, valB);
             }
           }
         }
