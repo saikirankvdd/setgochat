@@ -403,7 +403,10 @@ export class VideoStegoDecoder {
       const maxUsable = ((cols * rows) - 64) * 3; // ~28,608 bits at 640x480
 
       // DEBUG: Count how many bits are 1 vs 0 in header
-      const headerBitCount = Array.from(extractedBits.slice(0, 64)).filter(b => b === 1).length;
+      let headerBitCount = 0;
+      try {
+        headerBitCount = Array.from(extractedBits.subarray(0, 64)).filter(b => b === 1).length;
+      } catch (err) {}
       console.log(`[Stego-Debug] Frame ${frameIndex}: Header bits (0-63) = ${headerBitCount} ones out of 64. maxUsable=${maxUsable}`);
 
       // 2. Parse length header (bits 32..63)
@@ -518,7 +521,7 @@ export class VideoStegoDecoder {
         this.frameIndex++;
       }
     } catch (e) {
-      // Silently catch unexpected errors
+      console.error("[Stealth-Video-Decoder] CRASH inside processFrame:", e);
     }
 
     this.isProcessingFrame = false;
