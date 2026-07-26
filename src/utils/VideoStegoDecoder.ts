@@ -324,9 +324,6 @@ export class VideoStegoDecoder {
       const totalPixels = this.width * this.height;
       const totalChannels = totalPixels * 3;
       
-      // Helper function for 2x2 block stego
-      const getBlockGreen = (pixArr: Uint8ClampedArray, w: number, x: number, y: number): number => {
-        let sum = 0;
       const getBlockChannel = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, channelOffset: number): number => {
         let sum = 0;
         for (let dy = 0; dy < 4; dy++) {
