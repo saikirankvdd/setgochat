@@ -402,6 +402,10 @@ export class VideoStegoDecoder {
       // 3-channel capacity: data region uses R/G/B = 3 bits per block pair
       const maxUsable = ((cols * rows) - 64) * 3; // ~28,608 bits at 640x480
 
+      // DEBUG: Count how many bits are 1 vs 0 in header
+      const headerBitCount = Array.from(extractedBits.slice(0, 64)).filter(b => b === 1).length;
+      console.log(`[Stego-Debug] Frame ${frameIndex}: Header bits (0-63) = ${headerBitCount} ones out of 64. maxUsable=${maxUsable}`);
+
       // 2. Parse length header (bits 32..63)
       const encLenBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
@@ -409,7 +413,9 @@ export class VideoStegoDecoder {
         const bitIdx = 7 - (i % 8);
         encLenBytes[byteIdx] |= (extractedBits[32 + i] << bitIdx);
       }
+      const rawEncLen = Array.from(encLenBytes).map(b => b.toString(16).padStart(2,'0')).join(' ');
       let dataLength = this.decryptLengthHeaderJS(encLenBytes, this.pin + '_' + frameIndex);
+      console.log(`[Stego-Debug] Frame ${frameIndex}: encLenBytes=[${rawEncLen}] decryptedDataLength=${dataLength} pin_key='${this.pin}_${frameIndex}'`);
 
       let frameDecodedSuccess = false;
       if (dataLength > 0 && dataLength <= maxUsable) {

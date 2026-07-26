@@ -453,6 +453,9 @@ export class VideoStegoEncoder {
           if (outCtx) {
             outCtx.putImageData(stegoImageData, 0, 0);
           }
+          // DEBUG: Log what encoder is embedding
+          const encLenHex = Array.from(encLength).map(b => b.toString(16).padStart(2,'0')).join(' ');
+          console.log(`[Stego-Debug-ENC] Frame ${currentFrameIdx}: dataLength=${dataLength} encLength=[${encLenHex}] allBits.length=${allBits.length} pin_key='${this.pin}_${currentFrameIdx}'`);
         } else {
           console.error("WebGLStego not available! Fallback missing.");
         }
