@@ -923,8 +923,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const currentProfileIdx = profiles.findIndex(p => p.resolution === currentResolutionRef.current && p.fps === targetFpsRef.current);
 
-    const isCpuOverloaded = frameDurationMs > 25;
-    const isNetworkCongested = rtt > 180;
+    // 3-channel stego loop takes ~30-50ms per frame — raise thresholds accordingly
+    const isCpuOverloaded = frameDurationMs > 60;
+    // RTT of 215-237ms is normal for intercontinental stego calls — only flag extreme congestion
+    const isNetworkCongested = rtt > 350;
 
     if (isCpuOverloaded || isNetworkCongested) {
       consecutiveSlowFramesRef.current += 1;
@@ -937,7 +939,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
       }
     } else {
-      if (frameDurationMs < 12 && rtt < 100 && (batteryCharging || batteryLevel > 0.4)) {
+      if (frameDurationMs < 20 && rtt < 280 && (batteryCharging || batteryLevel > 0.4)) {
         consecutiveSlowFramesRef.current = 0;
         if (timeSinceLastChange > cooldownTime && currentProfileIdx >= 0 && currentProfileIdx < profiles.length - 1) {
           const nextProfile = profiles[currentProfileIdx + 1];

@@ -420,7 +420,8 @@ export class VideoStegoEncoder {
         // Web Worker LSB disabled to force robust differential fallback
       } else {
         // Spatial 2x2 Block Differential Steganography (survives H.264 & YUV420p compression)
-        const maxUsable = (cols * rows) - 64;
+        // 3-channel capacity: data region uses R/G/B = 3 bits per block pair = 28,608 bits total
+        const maxUsable = ((cols * rows) - 64) * 3;
         const dataLength = Math.min(dataBitsArr.length, maxUsable);
 
         // Helper: read average of a single channel (R=0, G=1, B=2) from a 4x4 block
