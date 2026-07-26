@@ -26,6 +26,7 @@ export class VideoStegoEncoder {
   private targetFps: number = 30; // Default to 30 FPS for smooth video
   private masterKey: CryptoJS.lib.WordArray | null = null;
   private isProcessingFrame: boolean = false; // Re-entrancy guard to prevent timer queue flooding
+  private intervalId: ReturnType<typeof setInterval> | null = null;
 
   // Web Worker for non-blocking pixel LSB embedding
   private videoWorker: Worker | null = null;
@@ -164,11 +165,17 @@ export class VideoStegoEncoder {
     if (this.isRunning) return;
     this.isRunning = true;
     this.frameIndex = 0;
-    this.processFrame();
+    // Use setInterval instead of recursive setTimeout to prevent async chain memory growth
+    const intervalMs = Math.max(100, Math.floor(1000 / this.targetFps));
+    this.intervalId = setInterval(this.processFrame, intervalMs);
   }
 
   stop(): void {
     this.isRunning = false;
+    if (this.intervalId !== null) {
+      clearInterval(this.intervalId);
+      this.intervalId = null;
+    }
     if (this.webcamVideoEl) {
       this.webcamVideoEl.pause();
       this.webcamVideoEl.srcObject = null;
@@ -192,7 +199,7 @@ export class VideoStegoEncoder {
 
   private processFrame = (): void => {
     if (!this.isRunning) return;
-    // Re-entrancy guard: if previous frame is still processing, skip this tick
+    // Re-entrancy guard: skip this tick if previous frame still processing
     if (this.isProcessingFrame) return;
     this.isProcessingFrame = true;
     const startTime = performance.now();
@@ -226,9 +233,8 @@ export class VideoStegoEncoder {
       if (hashStr === this.lastFrameHash) {
         this.frameSkipCounter++;
         if (this.frameSkipCounter < 3) {
-          // Skip frame: schedule next frame — never faster than 100ms to avoid timer flood
+          // Skip identical frame — just release the lock, interval will fire next tick
           this.isProcessingFrame = false;
-          setTimeout(this.processFrame, Math.max(100, Math.floor(1000 / this.targetFps)));
           return;
         }
       }
@@ -301,8 +307,7 @@ export class VideoStegoEncoder {
         console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large (${dataBitsArr.length} bits). Max is ${maxPayloadBits}. Skipping.`);
         this.frameIndex++;
         this.isProcessingFrame = false;
-        setTimeout(this.processFrame, Math.max(100, Math.floor(1000 / this.targetFps)));
-        return;
+        return; // interval will fire next tick
       }
 
       // 3. Get active cover clip and extract its frame
@@ -443,16 +448,12 @@ export class VideoStegoEncoder {
         if (this.onFrameProcessTime) {
           this.onFrameProcessTime(duration);
         }
-
-        // Loop at dynamic target FPS — schedule AFTER clearing guard so next tick can run
+        // Release guard — interval will fire next tick automatically
         this.isProcessingFrame = false;
-        const frameDelay = Math.max(100, Math.floor(1000 / this.targetFps));
-        setTimeout(this.processFrame, frameDelay);
       }
     } catch (e) {
-      // Fail-safe: release lock and schedule next frame slowly
+      // Fail-safe: release lock, interval will continue
       this.isProcessingFrame = false;
-      setTimeout(this.processFrame, 200);
     }
   };
 
@@ -482,6 +483,11 @@ export class VideoStegoEncoder {
   setTargetFps(fps: number): void {
     this.targetFps = fps;
     console.log(`[Stealth-Video-Encoder] Target FPS dynamically adjusted to ${fps}`);
+    // Restart interval at new rate if currently running
+    if (this.isRunning && this.intervalId !== null) {
+      clearInterval(this.intervalId);
+      this.intervalId = setInterval(this.processFrame, Math.max(100, Math.floor(1000 / fps)));
+    }
   }
 
   getResolution(): '240p' | '480p' {
