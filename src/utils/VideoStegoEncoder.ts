@@ -352,9 +352,10 @@ export class VideoStegoEncoder {
         // Web Worker LSB disabled to force robust differential fallback
       } else {
         // Spatial 2x2 Block Differential Steganography (survives H.264 & YUV420p compression)
-        const totalPixels = this.width * this.height;
-        const maxUsable = Math.floor(totalPixels / 8) - 64;
-        const dataLength = Math.min(dataBits.length, maxUsable);
+        const cols = Math.floor(this.width / 8);
+        const rows = Math.floor(this.height / 4);
+        const maxUsable = (cols * rows) - 64;
+        const dataLength = Math.min(dataBitsArr.length, maxUsable);
 
         // Helper functions for 4x4 Luma block stego
         const getBlockLuma = (pixArr: Uint8ClampedArray, w: number, x: number, y: number): number => {
@@ -403,8 +404,6 @@ export class VideoStegoEncoder {
 
         // 4. Embed using Luma relative differential modulation on adjacent 4x4 blocks (8x4 pair)
         const targetDiff = 100; // Enforce minimum Luma difference of 100 to survive heavy WebRTC compression
-        const cols = Math.floor(this.width / 8);
-
         for (let i = 0; i < allBits.length; i++) {
           const bit = allBits[i];
           const rowIdx = Math.floor(i / cols);

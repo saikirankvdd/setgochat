@@ -387,8 +387,8 @@ export class VideoStegoDecoder {
       }
 
 
-      const totalPairs = cols * rows;
-      const maxUsable = totalPairs - 64;
+
+      const maxUsable = (cols * rows) - 64;
 
       // 2. Extract length header from next 32 bits (i = 32..63)
       const encLenBytes = new Uint8Array(4);
