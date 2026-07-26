@@ -267,7 +267,7 @@ export class VideoStegoDecoder {
         const displayCtx = displayCanvas.getContext('2d');
         displayCtx?.putImageData(coverImageData, 0, 0);
         // Do not increment this.frameIndex when skipping frames due to low resolution (<320x240)
-        requestAnimationFrame(this.processFrame);
+        setTimeout(this.processFrame, 66);
         return;
       }
 
@@ -279,7 +279,7 @@ export class VideoStegoDecoder {
           this.setResolution('480p');
         } else {
           // Skip processing this frame and wait for video track resolution to stabilize
-          requestAnimationFrame(this.processFrame);
+          setTimeout(this.processFrame, 66);
           return;
         }
       }
@@ -342,13 +342,13 @@ export class VideoStegoDecoder {
         const displayCtx = displayCanvas.getContext('2d');
         displayCtx?.putImageData(coverImageData, 0, 0);
         this.frameIndex++;
-        requestAnimationFrame(this.processFrame);
+        setTimeout(this.processFrame, 66);
         return;
       }
 
       if (frameIndex === this.lastDecodedFrameIndex) {
         // Skip decoding that loop to save CPU and prevent duplicate processing.
-        requestAnimationFrame(this.processFrame);
+        setTimeout(this.processFrame, 66);
         return;
       }
 
@@ -415,37 +415,47 @@ export class VideoStegoDecoder {
         const decryptedWA = CryptoJS.AES.decrypt(cipherParams, this.masterKey!, { iv: iv });
 
         const sigBytes = decryptedWA.sigBytes;
-        if (sigBytes > 0 && sigBytes < 500000) {
+        if (sigBytes > 4 && sigBytes < 500000) {
           try {
             const compressed = wordArrayToUint8(decryptedWA);
-            const rgbBytes = gunzipSync(compressed);
+            const decompressed = gunzipSync(compressed);
             
-            const W = 32;
-            const H = 24;
-            const tempCanvas = document.createElement('canvas');
-            tempCanvas.width = W;
-            tempCanvas.height = H;
-            const tempCtx = tempCanvas.getContext('2d');
-            if (tempCtx) {
-              const imgData = tempCtx.createImageData(W, H);
-              let rgbIdx = 0;
-              for (let i = 0; i < imgData.data.length; i += 4) {
-                if (rgbIdx + 2 >= rgbBytes.length) break;
-                imgData.data[i]     = rgbBytes[rgbIdx++]; // R
-                imgData.data[i + 1] = rgbBytes[rgbIdx++]; // G
-                imgData.data[i + 2] = rgbBytes[rgbIdx++]; // B
-                imgData.data[i + 3] = 255;                // A
+            // Check 4-byte magic header 'STEG' [0x53, 0x54, 0x45, 0x47]
+            if (
+              decompressed.length >= 4 &&
+              decompressed[0] === 0x53 &&
+              decompressed[1] === 0x54 &&
+              decompressed[2] === 0x45 &&
+              decompressed[3] === 0x47
+            ) {
+              const rgbBytes = decompressed.subarray(4);
+              const W = 32;
+              const H = 24;
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = W;
+              tempCanvas.height = H;
+              const tempCtx = tempCanvas.getContext('2d');
+              if (tempCtx) {
+                const imgData = tempCtx.createImageData(W, H);
+                let rgbIdx = 0;
+                for (let i = 0; i < imgData.data.length; i += 4) {
+                  if (rgbIdx + 2 >= rgbBytes.length) break;
+                  imgData.data[i]     = rgbBytes[rgbIdx++]; // R
+                  imgData.data[i + 1] = rgbBytes[rgbIdx++]; // G
+                  imgData.data[i + 2] = rgbBytes[rgbIdx++]; // B
+                  imgData.data[i + 3] = 255;                // A
+                }
+                tempCtx.putImageData(imgData, 0, 0);
+                
+                const displayCtx = displayCanvas.getContext('2d');
+                if (displayCtx) {
+                  displayCtx.drawImage(tempCanvas, 0, 0, displayCanvas.width, displayCanvas.height);
+                }
               }
-              tempCtx.putImageData(imgData, 0, 0);
-              
-              const displayCtx = displayCanvas.getContext('2d');
-              if (displayCtx) {
-                displayCtx.drawImage(tempCanvas, 0, 0, displayCanvas.width, displayCanvas.height);
-              }
+              frameDecodedSuccess = true;
             }
-            frameDecodedSuccess = true;
           } catch (err) {
-            console.error("[Stealth-Video-Decoder] Failed to decompress/render frame:", err);
+            // Silently drop H.264 corrupted frame — no console flood or tab crash
           }
 
           if (this.onFrameDecoded && frameDecodedSuccess) {
@@ -462,7 +472,7 @@ export class VideoStegoDecoder {
         const usagePct = ((64 + bitString.length) / totalChannels) * 100;
         this.onProgress(Math.min(100, Math.round(usagePct)));
       } else {
-        // If decryption failed or is corrupted, clear local display or show cover frame
+        // If decryption failed or is corrupted, show cover frame
         const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
         const coverVideo = this.videoEls[clipIdx];
         const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
@@ -471,10 +481,10 @@ export class VideoStegoDecoder {
         this.frameIndex++;
       }
     } catch (e) {
-      console.error("Error decoding video stego frame:", e);
+      // Silently catch unexpected errors
     }
 
-    requestAnimationFrame(this.processFrame);
+    setTimeout(this.processFrame, 66);
   };
 
   private decryptFrameIndexJS(encBytes: Uint8Array, pin: string): number {

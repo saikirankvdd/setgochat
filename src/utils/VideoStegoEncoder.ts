@@ -259,8 +259,16 @@ export class VideoStegoEncoder {
         rgbBytes[rgbIdx++] = imgPixels[i + 2]; // B
       }
 
+      // Add 4-byte magic header 'STEG' [0x53, 0x54, 0x45, 0x47] before compression
+      const rawWithHeader = new Uint8Array(4 + rgbBytes.length);
+      rawWithHeader[0] = 0x53;
+      rawWithHeader[1] = 0x54;
+      rawWithHeader[2] = 0x45;
+      rawWithHeader[3] = 0x47;
+      rawWithHeader.set(rgbBytes, 4);
+
       // Compress raw RGB bytes using gzip
-      const compressedBytes = gzipSync(rgbBytes);
+      const compressedBytes = gzipSync(rawWithHeader);
       const compressedWA = uint8ToWordArray(compressedBytes);
 
       // Fast AES encryption bypassing EvpKDF & Base64 expansion
