@@ -1,4 +1,4 @@
-import { encryptData, stringToBinary, getSha256Key, fastEncrypt, uint8ToBase64, uint8ToWordArray, wordArrayToUint8 } from './crypto';
+import { encryptData, stringToBinary, getSha256Key, fastEncrypt, uint8ToBase64, uint8ToWordArray, wordArrayToUint8, fastVideoEncrypt } from './crypto';
 import { gzipSync } from 'fflate';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
@@ -264,18 +264,16 @@ export class VideoStegoEncoder {
         downscaledCanvas.height = H;
       }
       const downCtx = downscaledCanvas.getContext('2d', { willReadFrequently: true });
-
       if (!downCtx) {
         this.isProcessingFrame = false;
         return;
       }
 
-      // Encode face using an adaptive synchronous loop (WebP compresses better than JPEG)
+      // Adaptive encoder loop: find highest quality that fits in maxPayloadBits
+      // using async toBlob() to avoid Base64 string allocation
       let scale = 1.0;
-      let quality = 0.65; // Start at 0.65 quality for the best possible clarity at 160x120
-      let encodedBytes = new Uint8Array(0);
-      const isWebPSupported = downscaledCanvas.toDataURL('image/webp').indexOf('data:image/webp') === 0;
-      const mimeType = isWebPSupported ? 'image/webp' : 'image/jpeg';
+      let quality = 0.80;
+      let dataBitsArr = new Uint8Array(0);
 
       while (scale >= 0.25) {
         const currentW = Math.floor(W * scale);
@@ -283,84 +281,54 @@ export class VideoStegoEncoder {
         
         downscaledCanvas.width = currentW;
         downscaledCanvas.height = currentH;
-        // Important: we must draw from captureCanvas (which has the unscaled webcam image)
         downCtx.drawImage(captureCanvas, 0, 0, currentW, currentH);
 
         while (quality >= 0.05) {
-          const b64 = downscaledCanvas.toDataURL(mimeType, quality);
-          const binStr = atob(b64.split(',')[1]);
+          const blob = await new Promise<Blob | null>(resolve => {
+            downscaledCanvas.toBlob(resolve, 'image/webp', quality);
+          });
           
-          // Fast check before allocating Uint8Array
-          const payloadSize = binStr.length + 4; // +4 for STEG header
-          const aesPaddedSize = Math.ceil(payloadSize / 16) * 16;
-          const totalBits = aesPaddedSize * 8;
-          
-          if (totalBits <= maxPayloadBits) {
-            const tempBytes = new Uint8Array(binStr.length);
-            for (let i = 0; i < binStr.length; i++) {
-              tempBytes[i] = binStr.charCodeAt(i);
+          if (!blob) break;
+          const arrayBuffer = await blob.arrayBuffer();
+          const encodedBytes = new Uint8Array(arrayBuffer);
+
+          // Add 4-byte magic header 'STEG' before encryption
+          const rawWithHeader = new Uint8Array(4 + encodedBytes.length);
+          rawWithHeader[0] = 0x53; // 'S'
+          rawWithHeader[1] = 0x54; // 'T'
+          rawWithHeader[2] = 0x45; // 'E'
+          rawWithHeader[3] = 0x47; // 'G'
+          rawWithHeader.set(encodedBytes, 4);
+
+          // Hardware-accelerated AES-GCM encryption (fast, non-blocking)
+          const cipherBytes = await fastVideoEncrypt(rawWithHeader, this.pin, this.frameIndex);
+
+          // Convert ciphertext directly to a Uint8Array of bits (0 or 1)
+          const sigBytes = cipherBytes.length;
+          const tempBitsArr = new Uint8Array(sigBytes * 8);
+          for (let i = 0; i < sigBytes; i++) {
+            const b = cipherBytes[i];
+            for (let bit = 7; bit >= 0; bit--) {
+              tempBitsArr[i * 8 + (7 - bit)] = (b >>> bit) & 1;
             }
-            encodedBytes = tempBytes;
-            break; // Fits perfectly!
+          }
+
+          if (tempBitsArr.length <= maxPayloadBits) {
+            dataBitsArr = tempBitsArr;
+            break; // Fits within payload budget!
           }
           quality -= 0.15; // Reduce quality and try again
         }
-        
-        if (encodedBytes.length > 0) {
+
+        if (dataBitsArr.length > 0) {
           break; // Found a working scale and quality!
         }
         
-        // If it didn't fit even at 0.05 quality, reduce resolution scale and restart quality loop
         scale -= 0.25;
-        quality = 0.60; // We can use slightly higher quality for the smaller resolution
+        quality = 0.60;
       }
 
-      if (encodedBytes.length === 0) {
-        // Even at minimum quality it's too large (highly complex frame). Skip embedding.
-        console.warn(`[Stealth-Video] Frame ${this.frameIndex} too complex to compress under ${maxPayloadBits} bits. Skipping.`);
-        const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
-        const coverVideo = this.videoEls[clipIdx];
-        if (coverVideo) {
-            try {
-              if (coverVideo.paused) coverVideo.play().catch(() => {});
-              const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
-              const outCtx = outputCanvas.getContext('2d');
-              if (outCtx) outCtx.putImageData(coverImageData, 0, 0);
-            } catch (err) {}
-        }
-        this.frameIndex++;
-        this.isProcessingFrame = false;
-        return;
-      }
-
-      // Add 4-byte magic header 'STEG' before encryption
-      const rawWithHeader = new Uint8Array(4 + encodedBytes.length);
-      rawWithHeader[0] = 0x53; // 'S'
-      rawWithHeader[1] = 0x54; // 'T'
-      rawWithHeader[2] = 0x45; // 'E'
-      rawWithHeader[3] = 0x47; // 'G'
-      rawWithHeader.set(encodedBytes, 4);
-
-      // AES encrypt directly without gzip (JPEG is already compressed)
-      const payloadWA = uint8ToWordArray(rawWithHeader);
-      const iv = CryptoJS.lib.WordArray.create([0, 0, 0, this.frameIndex]);
-      const encryptedWA = CryptoJS.AES.encrypt(payloadWA, this.masterKey!, { iv: iv });
-      const cipherWA = encryptedWA.ciphertext;
-
-      // Convert encrypted bytes directly to a Uint8Array of bits (0 or 1) — avoids string allocation
-      const words = cipherWA.words;
-      const sigBytes = cipherWA.sigBytes;
-      const dataBitsArr = new Uint8Array(sigBytes * 8);
-      for (let i = 0; i < sigBytes; i++) {
-        const wordIdx = i >>> 2;
-        const byteIdx = 3 - (i % 4);
-        const b = (words[wordIdx] >>> (byteIdx * 8)) & 0xff;
-        for (let bit = 7; bit >= 0; bit--) {
-          dataBitsArr[i * 8 + (7 - bit)] = (b >>> bit) & 1;
-        }
-      }
-
-      if (dataBitsArr.length > maxPayloadBits) {
+      if (dataBitsArr.length === 0 || dataBitsArr.length > maxPayloadBits) {
         console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large (${dataBitsArr.length} bits). Max is ${maxPayloadBits}. Skipping.`);
         // Draw the unmodified cover frame so the WebRTC stream doesn't freeze
         const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);

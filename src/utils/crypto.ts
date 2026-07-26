@@ -161,3 +161,61 @@ export const wordArrayToUint8 = (wa: CryptoJS.lib.WordArray): Uint8Array => {
   return u8;
 };
 
+const webCryptoKeyCache = new Map<string, CryptoKey>();
+
+/**
+ * Derives a fast hardware-accelerated CryptoKey for video frames
+ */
+export const getWebCryptoKey = async (pin: string): Promise<CryptoKey> => {
+  let cached = webCryptoKeyCache.get(pin);
+  if (!cached) {
+    const enc = new TextEncoder();
+    // Use SHA-256 to hash the PIN into a 256-bit raw key for AES directly (fastest derivation)
+    const hashBuffer = await crypto.subtle.digest('SHA-256', enc.encode(pin));
+    cached = await crypto.subtle.importKey(
+      "raw",
+      hashBuffer,
+      { name: "AES-GCM" },
+      false,
+      ["encrypt", "decrypt"]
+    );
+    webCryptoKeyCache.set(pin, cached);
+  }
+  return cached;
+};
+
+/**
+ * Hardware-accelerated AES-GCM encryption for raw video frame bytes (NO Base64 overhead)
+ */
+export const fastVideoEncrypt = async (data: Uint8Array, pin: string, frameIndex: number): Promise<Uint8Array> => {
+  const key = await getWebCryptoKey(pin);
+  // IV must be 12 bytes for AES-GCM
+  const iv = new Uint8Array(12);
+  const view = new DataView(iv.buffer);
+  view.setUint32(0, frameIndex, false); // Use frame index to guarantee unique IV per frame
+
+  const encryptedBuffer = await crypto.subtle.encrypt(
+    { name: "AES-GCM", iv: iv },
+    key,
+    data
+  );
+  return new Uint8Array(encryptedBuffer);
+};
+
+/**
+ * Hardware-accelerated AES-GCM decryption for raw video frame bytes
+ */
+export const fastVideoDecrypt = async (ciphertext: Uint8Array, pin: string, frameIndex: number): Promise<Uint8Array> => {
+  const key = await getWebCryptoKey(pin);
+  const iv = new Uint8Array(12);
+  const view = new DataView(iv.buffer);
+  view.setUint32(0, frameIndex, false);
+
+  const decryptedBuffer = await crypto.subtle.decrypt(
+    { name: "AES-GCM", iv: iv },
+    key,
+    ciphertext
+  );
+  return new Uint8Array(decryptedBuffer);
+};
+

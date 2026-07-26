@@ -1,4 +1,4 @@
-import { decryptData, binaryToString, getSha256Key, fastDecrypt, base64ToUint8, uint8ToWordArray, wordArrayToUint8 } from './crypto';
+import { decryptData, binaryToString, getSha256Key, fastDecrypt, base64ToUint8, uint8ToWordArray, wordArrayToUint8, fastVideoDecrypt } from './crypto';
 import { gunzipSync } from 'fflate';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
@@ -261,7 +261,7 @@ export class VideoStegoDecoder {
     return this.width === 320 ? '240p' : '480p';
   }
 
-  private processFrame = (): void => {
+  private processFrame = async (): Promise<void> => {
     if (!this.isRunning) return;
     // Re-entrancy guard: if previous frame is still processing, skip this tick
     if (this.isProcessingFrame) return;
@@ -441,18 +441,12 @@ export class VideoStegoDecoder {
           ciphertextBytes[byteIdx] |= (bit << bitIdx);
         }
 
-        // 4. Decrypt with AES WordArray and decompress raw RGB
+        // 4. Decrypt with AES WebCrypto and decompress raw RGB
 
-        const cipherWA = uint8ToWordArray(ciphertextBytes);
-        const cipherParams = CryptoJS.lib.CipherParams.create({ ciphertext: cipherWA });
-        const iv = CryptoJS.lib.WordArray.create([0, 0, 0, frameIndex]);
-        const decryptedWA = CryptoJS.AES.decrypt(cipherParams, this.masterKey!, { iv: iv });
+        const decryptedBytes = await fastVideoDecrypt(ciphertextBytes, this.pin, frameIndex);
 
-        const sigBytes = decryptedWA.sigBytes;
-        if (sigBytes > 4 && sigBytes < 500000) {
+        if (decryptedBytes.length > 4 && decryptedBytes.length < 500000) {
           try {
-            // Payload is raw decrypted bytes: [STEG header 4 bytes][JPEG data]
-            const decryptedBytes = wordArrayToUint8(decryptedWA);
             // Check 4-byte magic header 'STEG' [0x53, 0x54, 0x45, 0x47]
             if (
               decryptedBytes.length >= 4 &&
@@ -461,10 +455,8 @@ export class VideoStegoDecoder {
               decryptedBytes[2] === 0x45 &&
               decryptedBytes[3] === 0x47
             ) {
-              // Alias as decompressed for the JPEG extraction below
-              const decompressed = decryptedBytes;
               // Payload is a compressed image blob (WebP or JPEG)
-              const imgBytes = decompressed.subarray(4);
+              const imgBytes = decryptedBytes.subarray(4);
               // createImageBitmap automatically detects format from binary headers
               const blob = new Blob([imgBytes]);
               // Use browser-native high-quality upscaling by requesting target resolution directly
@@ -479,8 +471,9 @@ export class VideoStegoDecoder {
                   displayCtx.imageSmoothingEnabled = true;
                   displayCtx.imageSmoothingQuality = 'high';
                   displayCtx.drawImage(bmp, 0, 0, displayCanvas.width, displayCanvas.height);
-                  bmp.close();
                 }
+                bmp.close();
+                this.isProcessingFrame = false;
               }).catch(() => {
                 // Fallback: try without resize options if browser doesn't support them
                 createImageBitmap(blob).then((bmp) => {
@@ -489,12 +482,17 @@ export class VideoStegoDecoder {
                     displayCtx.imageSmoothingEnabled = true;
                     displayCtx.imageSmoothingQuality = 'high';
                     displayCtx.drawImage(bmp, 0, 0, displayCanvas.width, displayCanvas.height);
-                    bmp.close();
                   }
-                }).catch(() => {});
+                  bmp.close();
+                  this.isProcessingFrame = false;
+                }).catch(() => {
+                  this.isProcessingFrame = false;
+                });
               });
               frameDecodedSuccess = true;
+              return; // We return early here because the bitmap decode is async
             }
+
           } catch (err) {
             // Temporarily log errors to debug decoding failure
             console.error('[Stealth-Video-Decoder] Payload decryption/decompression failed:', err);

@@ -831,10 +831,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             params.encodings = [{}];
           }
           params.encodings[0].maxBitrate = 1500000; // 1.5 Mbps
-          params.encodings[0].maxFramerate = 3;     // 3 FPS
+          params.encodings[0].maxFramerate = 20;    // 20 FPS max for optimized fast WebCrypto engine
           params.degradationPreference = "maintain-resolution";
           videoSender.setParameters(params)
-            .then(() => console.log("[Stealth-Call] WebRTC video sender parameters optimized for high-fidelity LSB stego (1.5 Mbps, 3 FPS)."))
+            .then(() => console.log("[Stealth-Call] WebRTC video sender parameters optimized for high-fidelity LSB stego (1.5 Mbps, 20 FPS)."))
             .catch(err => console.error("[Stealth-Call] Failed to set WebRTC video sender parameters:", err));
         }
       }
@@ -842,9 +842,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   }, [callState, isVideoCall]);
 
   const [currentResolution, setCurrentResolution] = useState<'240p' | '480p'>('240p');
-  const [targetFps, setTargetFpsState] = useState<5 | 10 | 15 | 30>(10);
+  const [targetFps, setTargetFpsState] = useState<5 | 10 | 15 | 20 | 30>(10);
   const currentResolutionRef = useRef<'240p' | '480p'>('240p');
-  const targetFpsRef = useRef<5 | 10 | 15 | 30>(10);
+  const targetFpsRef = useRef<5 | 10 | 15 | 20 | 30>(10);
   const consecutiveSlowFramesRef = useRef<number>(0);
   const lastSettingsChangeTimeRef = useRef<number>(0);
   const currentRttRef = useRef<number>(0);
@@ -914,11 +914,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       return;
     }
 
-    const profiles: { resolution: '240p' | '480p'; fps: 5 | 10 | 15 | 30 }[] = [
+    const profiles: { resolution: '240p' | '480p'; fps: 5 | 10 | 15 | 20 | 30 }[] = [
       { resolution: '480p', fps: 5 },
       { resolution: '480p', fps: 10 },
       { resolution: '480p', fps: 15 },
-      { resolution: '480p', fps: 30 }
+      { resolution: '480p', fps: 20 }
     ];
 
     const currentProfileIdx = profiles.findIndex(p => p.resolution === currentResolutionRef.current && p.fps === targetFpsRef.current);
