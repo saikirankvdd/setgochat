@@ -243,17 +243,18 @@ export class VideoStegoEncoder {
 
       // 2. Extract and compress raw RGB bytes (60x45) using gzipSync
       const totalPixels = this.width * this.height;
-      const maxPayloadBits = Math.floor(totalPixels / 8) - 64; // 2x2 block stego capacity (9,536 bits)
+      const maxPayloadBits = Math.floor(totalPixels / 8) - 64; // 4x4 Luma block stego capacity; 24x18 face fits within budget
 
       let base64 = '';
       let encrypted = '';
       let dataBits = '';
 
-      // Downscale webcam frame to 20x15 to drastically reduce data size
-      const W = 20;
-      const H = 15;
+      // Downscale webcam frame to 24x18 for improved face quality while fitting within 9,536-bit data budget
+      const W = 24;
+      const H = 18;
       const downscaledCanvas = this.downscaledCanvas || document.createElement('canvas');
-      const downCtx = downscaledCanvas.getContext('2d');
+      if (!this.downscaledCanvas) { this.downscaledCanvas = downscaledCanvas; }
+      const downCtx = downscaledCanvas.getContext('2d', { willReadFrequently: true });
       
       let imgPixels: Uint8ClampedArray;
       if (downCtx) {

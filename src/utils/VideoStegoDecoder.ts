@@ -467,10 +467,11 @@ export class VideoStegoDecoder {
               decompressed[3] === 0x47
             ) {
               const rgbBytes = decompressed.subarray(4);
-              const W = 20;
-              const H = 15;
+              const W = 24;
+              const H = 18;
               const tempCanvas = this.tempCanvas || document.createElement('canvas');
-              const tempCtx = tempCanvas.getContext('2d');
+              if (!this.tempCanvas) { this.tempCanvas = tempCanvas; }
+              const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
               if (tempCtx) {
                 const imgData = this.decImageData || tempCtx.createImageData(W, H);
                 let rgbIdx = 0;
