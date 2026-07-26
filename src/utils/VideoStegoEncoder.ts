@@ -25,6 +25,7 @@ export class VideoStegoEncoder {
   private onFrameProcessTime?: (durationMs: number) => void;
   private targetFps: number = 30; // Default to 30 FPS for smooth video
   private masterKey: CryptoJS.lib.WordArray | null = null;
+  private isProcessingFrame: boolean = false; // Re-entrancy guard to prevent timer queue flooding
 
   // Web Worker for non-blocking pixel LSB embedding
   private videoWorker: Worker | null = null;
@@ -191,6 +192,9 @@ export class VideoStegoEncoder {
 
   private processFrame = (): void => {
     if (!this.isRunning) return;
+    // Re-entrancy guard: if previous frame is still processing, skip this tick
+    if (this.isProcessingFrame) return;
+    this.isProcessingFrame = true;
     const startTime = performance.now();
 
     try {
@@ -222,8 +226,9 @@ export class VideoStegoEncoder {
       if (hashStr === this.lastFrameHash) {
         this.frameSkipCounter++;
         if (this.frameSkipCounter < 3) {
-          // Skip frame: schedule next frame quickly
-          setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
+          // Skip frame: schedule next frame — never faster than 100ms to avoid timer flood
+          this.isProcessingFrame = false;
+          setTimeout(this.processFrame, Math.max(100, Math.floor(1000 / this.targetFps)));
           return;
         }
       }
@@ -443,13 +448,15 @@ export class VideoStegoEncoder {
           this.onFrameProcessTime(duration);
         }
 
-        // Loop at dynamic target FPS
-        setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
+        // Loop at dynamic target FPS — schedule AFTER clearing guard so next tick can run
+        this.isProcessingFrame = false;
+        const frameDelay = Math.max(100, Math.floor(1000 / this.targetFps));
+        setTimeout(this.processFrame, frameDelay);
       }
     } catch (e) {
-      console.error("Error encoding video stego frame:", e);
-      // Fail-safe schedule next frame
-      setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
+      // Fail-safe: release lock and schedule next frame slowly
+      this.isProcessingFrame = false;
+      setTimeout(this.processFrame, 200);
     }
   };
 

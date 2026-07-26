@@ -24,7 +24,7 @@ export class VideoStegoDecoder {
   private onFrameDecoded?: (base64: string, seq: number) => void;
   private lastDecodedFrameIndex: number;
   private masterKey: CryptoJS.lib.WordArray | null = null;
-
+  private isProcessingFrame: boolean = false; // Re-entrancy guard to prevent timer queue flooding
 
   constructor(
     remoteVideoEl: HTMLVideoElement,
@@ -258,6 +258,9 @@ export class VideoStegoDecoder {
 
   private processFrame = (): void => {
     if (!this.isRunning) return;
+    // Re-entrancy guard: if previous frame is still processing, skip this tick
+    if (this.isProcessingFrame) return;
+    this.isProcessingFrame = true;
 
     try {
       const video = this.remoteVideoEl;
@@ -266,7 +269,8 @@ export class VideoStegoDecoder {
       const displayCanvas = this.displayCanvas;
 
       if (!video || !decodeCanvas || !coverCanvas || !displayCanvas || video.readyState < 2) {
-        requestAnimationFrame(this.processFrame);
+        this.isProcessingFrame = false;
+        setTimeout(this.processFrame, 100);
         return;
       }
 
@@ -284,7 +288,8 @@ export class VideoStegoDecoder {
           }
         }
         // Do not increment this.frameIndex when skipping frames due to low resolution (<320x240)
-        setTimeout(this.processFrame, 66);
+        this.isProcessingFrame = false;
+        setTimeout(this.processFrame, 100);
         return;
       }
 
@@ -296,13 +301,18 @@ export class VideoStegoDecoder {
           this.setResolution('480p');
         } else {
           // Skip processing this frame and wait for video track resolution to stabilize
-          setTimeout(this.processFrame, 66);
+          this.isProcessingFrame = false;
+          setTimeout(this.processFrame, 100);
           return;
         }
       }
 
       const decCtx = decodeCanvas.getContext('2d', { willReadFrequently: true });
-      if (!decCtx) return;
+      if (!decCtx) {
+        this.isProcessingFrame = false;
+        setTimeout(this.processFrame, 100);
+        return;
+      }
 
       // 1. Draw received stego video to decode canvas
       decCtx.drawImage(video, 0, 0, this.width, this.height);
@@ -365,13 +375,15 @@ export class VideoStegoDecoder {
           }
         }
         this.frameIndex++;
-        setTimeout(this.processFrame, 66);
+        this.isProcessingFrame = false;
+        setTimeout(this.processFrame, 100);
         return;
       }
 
       if (frameIndex === this.lastDecodedFrameIndex) {
-        // Skip decoding that loop to save CPU and prevent duplicate processing.
-        setTimeout(this.processFrame, 66);
+        // Skip decoding — same frame already decoded
+        this.isProcessingFrame = false;
+        setTimeout(this.processFrame, 100);
         return;
       }
 
@@ -511,7 +523,8 @@ export class VideoStegoDecoder {
       // Silently catch unexpected errors
     }
 
-    setTimeout(this.processFrame, 66);
+    this.isProcessingFrame = false;
+    setTimeout(this.processFrame, 100);
   };
 
   private decryptFrameIndexJS(encBytes: Uint8Array, pin: string): number {
