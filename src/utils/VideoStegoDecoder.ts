@@ -325,7 +325,7 @@ export class VideoStegoDecoder {
         for (let dy = 0; dy < 4; dy++) {
           for (let dx = 0; dx < 4; dx++) {
             const idx = ((y + dy) * w + (x + dx)) * 4;
-            sum += (pixArr[idx] * 0.299 + pixArr[idx+1] * 0.587 + pixArr[idx+2] * 0.114);
+            sum += (pixArr[idx] + pixArr[idx+1] + pixArr[idx+2]) / 3;
           }
         }
         return sum / 16;
@@ -360,6 +360,7 @@ export class VideoStegoDecoder {
         frameIndex < 1000000;
 
       if (!isValidFrameIndex) {
+        console.log(`[Stealth-Video-Decoder] Invalid frameIndex: ${frameIndex}`);
         // Draw the cover frame using our current local frameIndex
         const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
         const coverVideo = this.videoEls[clipIdx];
@@ -376,6 +377,8 @@ export class VideoStegoDecoder {
         this.isProcessingFrame = false;
         return; // interval will retry next tick
       }
+
+      console.log(`[Stealth-Video-Decoder] Processing frameIndex: ${frameIndex}`);
 
       if (frameIndex === this.lastDecodedFrameIndex) {
         // Skip decoding — same frame already decoded
@@ -410,6 +413,7 @@ export class VideoStegoDecoder {
 
       let frameDecodedSuccess = false;
       if (dataLength > 0 && dataLength <= maxUsable) {
+        console.log(`[Stealth-Video-Decoder] Extracted dataLength: ${dataLength}`);
         // Decode bits directly into ciphertext byte array
         const numBytes = Math.floor(dataLength / 8);
         const ciphertextBytes = new Uint8Array(numBytes);
@@ -487,13 +491,16 @@ export class VideoStegoDecoder {
               frameDecodedSuccess = true;
             }
           } catch (err) {
-            // Silently drop H.264 corrupted frame — no console flood or tab crash
+            // Temporarily log errors to debug decoding failure
+            console.error('[Stealth-Video-Decoder] Payload decryption/decompression failed:', err);
           }
 
           if (this.onFrameDecoded && frameDecodedSuccess) {
             this.onFrameDecoded('SUCCESS', frameIndex);
           }
         }
+      } else {
+         console.log(`[Stealth-Video-Decoder] Invalid dataLength: ${dataLength} (max: ${maxUsable})`);
       }
 
       if (frameDecodedSuccess) {
