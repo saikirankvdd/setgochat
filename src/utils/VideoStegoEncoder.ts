@@ -17,6 +17,7 @@ export class VideoStegoEncoder {
   private captureCanvas: HTMLCanvasElement | null;
   private coverCanvas: HTMLCanvasElement | null;
   private outputCanvas: HTMLCanvasElement | null;
+  private downscaledCanvas: HTMLCanvasElement | null = null;
   private stegoStream: MediaStream | null;
   private isRunning: boolean;
   private wasmEngine: StealthEngine | null;
@@ -143,6 +144,10 @@ export class VideoStegoEncoder {
     this.outputCanvas.width = this.width;
     this.outputCanvas.height = this.height;
 
+    this.downscaledCanvas = document.createElement('canvas');
+    this.downscaledCanvas.width = 32;
+    this.downscaledCanvas.height = 24;
+
     // 6. Capture output stream at 30 fps
     this.stegoStream = (this.outputCanvas as any).captureStream(30);
   }
@@ -236,9 +241,7 @@ export class VideoStegoEncoder {
       // Downscale webcam frame to 32x24 to drastically reduce data size
       const W = 32;
       const H = 24;
-      const downscaledCanvas = document.createElement('canvas');
-      downscaledCanvas.width = W;
-      downscaledCanvas.height = H;
+      const downscaledCanvas = this.downscaledCanvas || document.createElement('canvas');
       const downCtx = downscaledCanvas.getContext('2d');
       
       let imgPixels: Uint8ClampedArray;

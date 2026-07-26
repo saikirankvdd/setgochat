@@ -16,6 +16,8 @@ export class VideoStegoDecoder {
   private videoEls: HTMLVideoElement[];
   private decodeCanvas: HTMLCanvasElement | null;
   private coverCanvas: HTMLCanvasElement | null;
+  private tempCanvas: HTMLCanvasElement | null = null;
+  private decImageData: ImageData | null = null;
   private isRunning: boolean;
   private wasmEngine: StealthEngine | null;
   private onFrameProcessTime?: (durationMs: number) => void;
@@ -85,6 +87,15 @@ export class VideoStegoDecoder {
     this.coverCanvas = document.createElement('canvas');
     this.coverCanvas.width = this.width;
     this.coverCanvas.height = this.height;
+
+    this.tempCanvas = document.createElement('canvas');
+    this.tempCanvas.width = 32;
+    this.tempCanvas.height = 24;
+
+    const tempCtx = this.tempCanvas.getContext('2d');
+    if (tempCtx) {
+      this.decImageData = tempCtx.createImageData(32, 24);
+    }
 
     // Size display canvas to ensure drawing scales correctly
     this.displayCanvas.width = this.width;
@@ -263,9 +274,15 @@ export class VideoStegoDecoder {
       if (video.videoWidth < 320 || video.videoHeight < 240) {
         const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
         const coverVideo = this.videoEls[clipIdx];
-        const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
-        const displayCtx = displayCanvas.getContext('2d');
-        displayCtx?.putImageData(coverImageData, 0, 0);
+        if (coverVideo) {
+          if (coverVideo.paused && !coverVideo.error) {
+            coverVideo.play().catch(() => {});
+          }
+          const displayCtx = displayCanvas.getContext('2d');
+          if (displayCtx) {
+            displayCtx.drawImage(coverVideo, 0, 0, displayCanvas.width, displayCanvas.height);
+          }
+        }
         // Do not increment this.frameIndex when skipping frames due to low resolution (<320x240)
         setTimeout(this.processFrame, 66);
         return;
@@ -338,9 +355,15 @@ export class VideoStegoDecoder {
         // Draw the cover frame using our current local frameIndex
         const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
         const coverVideo = this.videoEls[clipIdx];
-        const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
-        const displayCtx = displayCanvas.getContext('2d');
-        displayCtx?.putImageData(coverImageData, 0, 0);
+        if (coverVideo) {
+          if (coverVideo.paused && !coverVideo.error) {
+            coverVideo.play().catch(() => {});
+          }
+          const displayCtx = displayCanvas.getContext('2d');
+          if (displayCtx) {
+            displayCtx.drawImage(coverVideo, 0, 0, displayCanvas.width, displayCanvas.height);
+          }
+        }
         this.frameIndex++;
         setTimeout(this.processFrame, 66);
         return;
@@ -431,12 +454,10 @@ export class VideoStegoDecoder {
               const rgbBytes = decompressed.subarray(4);
               const W = 32;
               const H = 24;
-              const tempCanvas = document.createElement('canvas');
-              tempCanvas.width = W;
-              tempCanvas.height = H;
+              const tempCanvas = this.tempCanvas || document.createElement('canvas');
               const tempCtx = tempCanvas.getContext('2d');
               if (tempCtx) {
-                const imgData = tempCtx.createImageData(W, H);
+                const imgData = this.decImageData || tempCtx.createImageData(W, H);
                 let rgbIdx = 0;
                 for (let i = 0; i < imgData.data.length; i += 4) {
                   if (rgbIdx + 2 >= rgbBytes.length) break;
@@ -475,9 +496,15 @@ export class VideoStegoDecoder {
         // If decryption failed or is corrupted, show cover frame
         const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
         const coverVideo = this.videoEls[clipIdx];
-        const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
-        const displayCtx = displayCanvas.getContext('2d');
-        displayCtx?.putImageData(coverImageData, 0, 0);
+        if (coverVideo) {
+          if (coverVideo.paused && !coverVideo.error) {
+            coverVideo.play().catch(() => {});
+          }
+          const displayCtx = displayCanvas.getContext('2d');
+          if (displayCtx) {
+            displayCtx.drawImage(coverVideo, 0, 0, displayCanvas.width, displayCanvas.height);
+          }
+        }
         this.frameIndex++;
       }
     } catch (e) {
