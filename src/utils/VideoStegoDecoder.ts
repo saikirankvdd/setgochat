@@ -343,11 +343,18 @@ export class VideoStegoDecoder {
         return;
       }
 
-      // ALWAYS draw the received stego frame to display — this IS the other person's face video
-      // The WebGL decoding runs on top; the visual output is always the received stream
-      const displayCtx = displayCanvas.getContext('2d');
-      if (displayCtx) {
-        displayCtx.drawImage(video, 0, 0, displayCanvas.width, displayCanvas.height);
+      // Display the LOCAL cover video frame (not the stego stream which has visible pixel artifacts)
+      // This is the correct steganography behavior: receiver sees the innocent cover video
+      const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
+      const localCoverVideo = this.videoEls[clipIdx];
+      if (localCoverVideo) {
+        if (localCoverVideo.paused && !localCoverVideo.error) {
+          localCoverVideo.play().catch(() => {});
+        }
+        const displayCtx = displayCanvas.getContext('2d');
+        if (displayCtx) {
+          displayCtx.drawImage(localCoverVideo, 0, 0, displayCanvas.width, displayCanvas.height);
+        }
       }
 
 
