@@ -175,7 +175,7 @@ export const getWebCryptoKey = async (pin: string): Promise<CryptoKey> => {
     cached = await crypto.subtle.importKey(
       "raw",
       hashBuffer,
-      { name: "AES-GCM" },
+      { name: "AES-CTR" },
       false,
       ["encrypt", "decrypt"]
     );
@@ -189,13 +189,13 @@ export const getWebCryptoKey = async (pin: string): Promise<CryptoKey> => {
  */
 export const fastVideoEncrypt = async (data: Uint8Array, pin: string, frameIndex: number): Promise<Uint8Array> => {
   const key = await getWebCryptoKey(pin);
-  // IV must be 12 bytes for AES-GCM
-  const iv = new Uint8Array(12);
+  // IV for AES-CTR is 16 bytes
+  const iv = new Uint8Array(16);
   const view = new DataView(iv.buffer);
   view.setUint32(0, frameIndex, false); // Use frame index to guarantee unique IV per frame
 
   const encryptedBuffer = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: iv },
+    { name: "AES-CTR", counter: iv, length: 64 },
     key,
     data
   );
@@ -207,12 +207,12 @@ export const fastVideoEncrypt = async (data: Uint8Array, pin: string, frameIndex
  */
 export const fastVideoDecrypt = async (ciphertext: Uint8Array, pin: string, frameIndex: number): Promise<Uint8Array> => {
   const key = await getWebCryptoKey(pin);
-  const iv = new Uint8Array(12);
+  const iv = new Uint8Array(16);
   const view = new DataView(iv.buffer);
   view.setUint32(0, frameIndex, false);
 
   const decryptedBuffer = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: iv },
+    { name: "AES-CTR", counter: iv, length: 64 },
     key,
     ciphertext
   );
