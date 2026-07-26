@@ -267,34 +267,49 @@ export class VideoStegoEncoder {
         return;
       }
 
-      downscaledCanvas.width = W;
-      downscaledCanvas.height = H;
-      downCtx.drawImage(captureCanvas, 0, 0, W, H);
-
       // Encode face using an adaptive synchronous loop (WebP compresses better than JPEG)
+      let scale = 1.0;
       let quality = 0.50;
       let encodedBytes = new Uint8Array(0);
       const isWebPSupported = downscaledCanvas.toDataURL('image/webp').indexOf('data:image/webp') === 0;
       const mimeType = isWebPSupported ? 'image/webp' : 'image/jpeg';
 
-      while (quality >= 0.05) {
-        const b64 = downscaledCanvas.toDataURL(mimeType, quality);
-        const binStr = atob(b64.split(',')[1]);
-        const tempBytes = new Uint8Array(binStr.length);
-        for (let i = 0; i < binStr.length; i++) {
-          tempBytes[i] = binStr.charCodeAt(i);
+      while (scale >= 0.25) {
+        const currentW = Math.floor(W * scale);
+        const currentH = Math.floor(H * scale);
+        
+        downscaledCanvas.width = currentW;
+        downscaledCanvas.height = currentH;
+        // Important: we must draw from captureCanvas (which has the unscaled webcam image)
+        downCtx.drawImage(captureCanvas, 0, 0, currentW, currentH);
+
+        while (quality >= 0.05) {
+          const b64 = downscaledCanvas.toDataURL(mimeType, quality);
+          const binStr = atob(b64.split(',')[1]);
+          
+          // Fast check before allocating Uint8Array
+          const payloadSize = binStr.length + 4; // +4 for STEG header
+          const aesPaddedSize = Math.ceil(payloadSize / 16) * 16;
+          const totalBits = aesPaddedSize * 8;
+          
+          if (totalBits <= maxPayloadBits) {
+            const tempBytes = new Uint8Array(binStr.length);
+            for (let i = 0; i < binStr.length; i++) {
+              tempBytes[i] = binStr.charCodeAt(i);
+            }
+            encodedBytes = tempBytes;
+            break; // Fits perfectly!
+          }
+          quality -= 0.15; // Reduce quality and try again
         }
         
-        // AES padding (16 bytes block size) + 4 bytes STEG header
-        const payloadSize = tempBytes.length + 4;
-        const aesPaddedSize = Math.ceil(payloadSize / 16) * 16;
-        const totalBits = aesPaddedSize * 8;
-        
-        if (totalBits <= maxPayloadBits) {
-          encodedBytes = tempBytes;
-          break; // Fits perfectly!
+        if (encodedBytes.length > 0) {
+          break; // Found a working scale and quality!
         }
-        quality -= 0.15; // Reduce quality and try again
+        
+        // If it didn't fit even at 0.05 quality, reduce resolution scale and restart quality loop
+        scale -= 0.25;
+        quality = 0.60; // We can use slightly higher quality for the smaller resolution
       }
 
       if (encodedBytes.length === 0) {
