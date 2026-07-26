@@ -197,7 +197,7 @@ export class VideoStegoEncoder {
     }
   }
 
-  private processFrame = (): void => {
+  private processFrame = async (): Promise<void> => {
     if (!this.isRunning) return;
     // Re-entrancy guard: skip this tick if previous frame still processing
     if (this.isProcessingFrame) return;
@@ -249,46 +249,52 @@ export class VideoStegoEncoder {
       let encrypted = '';
       let dataBits = '';
 
-      // Downscale webcam frame to 24x18 for improved face quality while fitting within 9,536-bit data budget
-      const W = 24;
-      const H = 18;
+      // Encode face as JPEG (quality 30) — gives ~1000 bytes for 160x120, fitting our 9,536-bit budget
+      // This is 44x more pixels than raw RGB at 24x18!
+      const W = 160;
+      const H = 120;
       const downscaledCanvas = this.downscaledCanvas || document.createElement('canvas');
-      if (!this.downscaledCanvas) { this.downscaledCanvas = downscaledCanvas; }
+      if (!this.downscaledCanvas) {
+        this.downscaledCanvas = downscaledCanvas;
+        downscaledCanvas.width = W;
+        downscaledCanvas.height = H;
+      }
       const downCtx = downscaledCanvas.getContext('2d', { willReadFrequently: true });
-      
-      let imgPixels: Uint8ClampedArray;
-      if (downCtx) {
-        downCtx.drawImage(captureCanvas, 0, 0, W, H);
-        imgPixels = downCtx.getImageData(0, 0, W, H).data;
-      } else {
-        imgPixels = capCtx.getImageData(0, 0, W, H).data;
-      }
-      
-      // Extract raw RGB bytes (skip Alpha channel to save 25% space)
-      const rgbBytes = new Uint8Array(W * H * 3);
-      let rgbIdx = 0;
-      for (let i = 0; i < imgPixels.length; i += 4) {
-        if (rgbIdx >= rgbBytes.length) break;
-        rgbBytes[rgbIdx++] = imgPixels[i];     // R
-        rgbBytes[rgbIdx++] = imgPixels[i + 1]; // G
-        rgbBytes[rgbIdx++] = imgPixels[i + 2]; // B
+
+      if (!downCtx) {
+        this.isProcessingFrame = false;
+        return;
       }
 
-      // Add 4-byte magic header 'STEG' [0x53, 0x54, 0x45, 0x47] before compression
-      const rawWithHeader = new Uint8Array(4 + rgbBytes.length);
-      rawWithHeader[0] = 0x53;
-      rawWithHeader[1] = 0x54;
-      rawWithHeader[2] = 0x45;
-      rawWithHeader[3] = 0x47;
-      rawWithHeader.set(rgbBytes, 4);
+      downscaledCanvas.width = W;
+      downscaledCanvas.height = H;
+      downCtx.drawImage(captureCanvas, 0, 0, W, H);
 
-      // Compress raw RGB bytes using gzip
-      const compressedBytes = gzipSync(rawWithHeader);
-      const compressedWA = uint8ToWordArray(compressedBytes);
+      // Get JPEG bytes asynchronously via toBlob (most efficient path)
+      const jpegBytes = await new Promise<Uint8Array>((resolve) => {
+        downscaledCanvas.toBlob((blob) => {
+          if (!blob) { resolve(new Uint8Array(0)); return; }
+          blob.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
+        }, 'image/jpeg', 0.30); // quality 0.30 = very small file, still recognisable face
+      });
 
-      // Fast AES encryption bypassing EvpKDF & Base64 expansion
+      if (jpegBytes.length === 0) {
+        this.isProcessingFrame = false;
+        return;
+      }
+
+      // Add 4-byte magic header 'STEG' before encryption (no gzip needed — JPEG is already compressed)
+      const rawWithHeader = new Uint8Array(4 + jpegBytes.length);
+      rawWithHeader[0] = 0x53; // 'S'
+      rawWithHeader[1] = 0x54; // 'T'
+      rawWithHeader[2] = 0x45; // 'E'
+      rawWithHeader[3] = 0x47; // 'G'
+      rawWithHeader.set(jpegBytes, 4);
+
+      // AES encrypt directly without gzip (JPEG is already compressed)
+      const payloadWA = uint8ToWordArray(rawWithHeader);
       const iv = CryptoJS.lib.WordArray.create([0, 0, 0, this.frameIndex]);
-      const encryptedWA = CryptoJS.AES.encrypt(compressedWA, this.masterKey!, { iv: iv });
+      const encryptedWA = CryptoJS.AES.encrypt(payloadWA, this.masterKey!, { iv: iv });
       const cipherWA = encryptedWA.ciphertext;
 
       // Convert encrypted bytes directly to a Uint8Array of bits (0 or 1) — avoids string allocation

@@ -451,44 +451,30 @@ export class VideoStegoDecoder {
         const sigBytes = decryptedWA.sigBytes;
         if (sigBytes > 4 && sigBytes < 500000) {
           try {
-            const compressed = wordArrayToUint8(decryptedWA);
-            // Gzip magic number check (0x1F, 0x8B) to prevent OOM crash on corrupted stego data
-            if (compressed.length < 10 || compressed[0] !== 0x1F || compressed[1] !== 0x8B) {
-              throw new Error("Invalid Gzip magic header");
-            }
-            const decompressed = gunzipSync(compressed);
-            
+            // Payload is raw decrypted bytes: [STEG header 4 bytes][JPEG data]
+            const decryptedBytes = wordArrayToUint8(decryptedWA);
             // Check 4-byte magic header 'STEG' [0x53, 0x54, 0x45, 0x47]
             if (
-              decompressed.length >= 4 &&
-              decompressed[0] === 0x53 &&
-              decompressed[1] === 0x54 &&
-              decompressed[2] === 0x45 &&
-              decompressed[3] === 0x47
+              decryptedBytes.length >= 4 &&
+              decryptedBytes[0] === 0x53 &&
+              decryptedBytes[1] === 0x54 &&
+              decryptedBytes[2] === 0x45 &&
+              decryptedBytes[3] === 0x47
             ) {
-              const rgbBytes = decompressed.subarray(4);
-              const W = 24;
-              const H = 18;
-              const tempCanvas = this.tempCanvas || document.createElement('canvas');
-              if (!this.tempCanvas) { this.tempCanvas = tempCanvas; }
-              const tempCtx = tempCanvas.getContext('2d', { willReadFrequently: true });
-              if (tempCtx) {
-                const imgData = this.decImageData || tempCtx.createImageData(W, H);
-                let rgbIdx = 0;
-                for (let i = 0; i < imgData.data.length; i += 4) {
-                  if (rgbIdx + 2 >= rgbBytes.length) break;
-                  imgData.data[i]     = rgbBytes[rgbIdx++]; // R
-                  imgData.data[i + 1] = rgbBytes[rgbIdx++]; // G
-                  imgData.data[i + 2] = rgbBytes[rgbIdx++]; // B
-                  imgData.data[i + 3] = 255;                // A
-                }
-                tempCtx.putImageData(imgData, 0, 0);
-                
+              // Alias as decompressed for the JPEG extraction below
+              const decompressed = decryptedBytes;
+              // Payload is now a JPEG blob — decode it via createImageBitmap for smooth scaling
+              const jpegBytes = decompressed.subarray(4);
+              const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+              createImageBitmap(blob).then((bmp) => {
                 const displayCtx = displayCanvas.getContext('2d');
                 if (displayCtx) {
-                  displayCtx.drawImage(tempCanvas, 0, 0, displayCanvas.width, displayCanvas.height);
+                  displayCtx.imageSmoothingEnabled = true;
+                  displayCtx.imageSmoothingQuality = 'high';
+                  displayCtx.drawImage(bmp, 0, 0, displayCanvas.width, displayCanvas.height);
+                  bmp.close();
                 }
-              }
+              }).catch(() => {});
               frameDecodedSuccess = true;
             }
           } catch (err) {
