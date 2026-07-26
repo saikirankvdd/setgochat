@@ -241,18 +241,19 @@ export class VideoStegoEncoder {
       this.lastFrameHash = hashStr;
       this.frameSkipCounter = 0;
 
-      // 2. Extract and compress raw RGB bytes (60x45) using gzipSync
-      const totalPixels = this.width * this.height;
-      const maxPayloadBits = Math.floor(totalPixels / 8) - 64; // 4x4 Luma block stego capacity; 24x18 face fits within budget
+      // 2. Extract and compress raw RGB bytes using JPEG
+      const cols = Math.floor(this.width / 8);
+      const rows = Math.floor(this.height / 4);
+      const maxPayloadBits = (cols * rows) - 64; // 4x4 Luma block stego capacity (9,536 bits)
 
       let base64 = '';
       let encrypted = '';
       let dataBits = '';
 
-      // Encode face as JPEG (quality 30) — gives ~1000 bytes for 160x120, fitting our 9,536-bit budget
-      // This is 44x more pixels than raw RGB at 24x18!
-      const W = 160;
-      const H = 120;
+      // Encode face as JPEG (quality 0.20) — gives ~800 bytes for 100x75, comfortably fitting our 9,536-bit budget
+      // This is 17x more pixels than raw RGB at 24x18, providing the desired clarity
+      const W = 100;
+      const H = 75;
       const downscaledCanvas = this.downscaledCanvas || document.createElement('canvas');
       if (!this.downscaledCanvas) {
         this.downscaledCanvas = downscaledCanvas;
@@ -275,7 +276,7 @@ export class VideoStegoEncoder {
         downscaledCanvas.toBlob((blob) => {
           if (!blob) { resolve(new Uint8Array(0)); return; }
           blob.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
-        }, 'image/jpeg', 0.30); // quality 0.30 = very small file, still recognisable face
+        }, 'image/jpeg', 0.20); // quality 0.20 = smaller file to prevent truncation
       });
 
       if (jpegBytes.length === 0) {
@@ -312,6 +313,17 @@ export class VideoStegoEncoder {
 
       if (dataBitsArr.length > maxPayloadBits) {
         console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large (${dataBitsArr.length} bits). Max is ${maxPayloadBits}. Skipping.`);
+        // Draw the unmodified cover frame so the WebRTC stream doesn't freeze
+        const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
+        const coverVideo = this.videoEls[clipIdx];
+        if (coverVideo) {
+            try {
+              if (coverVideo.paused) coverVideo.play().catch(() => {});
+              const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
+              const outCtx = outputCanvas.getContext('2d');
+              if (outCtx) outCtx.putImageData(coverImageData, 0, 0);
+            } catch (err) {}
+        }
         this.frameIndex++;
         this.isProcessingFrame = false;
         return; // interval will fire next tick
@@ -359,8 +371,6 @@ export class VideoStegoEncoder {
         // Web Worker LSB disabled to force robust differential fallback
       } else {
         // Spatial 2x2 Block Differential Steganography (survives H.264 & YUV420p compression)
-        const cols = Math.floor(this.width / 8);
-        const rows = Math.floor(this.height / 4);
         const maxUsable = (cols * rows) - 64;
         const dataLength = Math.min(dataBitsArr.length, maxUsable);
 
