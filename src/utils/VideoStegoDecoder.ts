@@ -393,20 +393,42 @@ export class VideoStegoDecoder {
         }
       }
 
-      let decryptedBase64 = '';
+      let frameDecodedSuccess = false;
       if (bitString && bitString.length > 0) {
-        // 4. Convert bits to encrypted string, decrypt, and display image
-        const encrypted = binaryToString(bitString);
-        const iv = CryptoJS.lib.WordArray.create([0, 0, 0, frameIndex]);
-        decryptedBase64 = fastDecrypt(encrypted, this.masterKey!, iv);
+        // 4. Convert bits to ciphertext byte array, decrypt with AES WordArray, and decompress raw RGB
+        const numBytes = Math.floor(bitString.length / 8);
+        const ciphertextBytes = new Uint8Array(numBytes);
+        for (let i = 0; i < numBytes; i++) {
+          let b = 0;
+          const offset = i * 8;
+          for (let j = 0; j < 8; j++) {
+            if (bitString.charCodeAt(offset + j) === 49) {
+              b |= (1 << (7 - j));
+            }
+          }
+          ciphertextBytes[i] = b;
+        }
 
-        if (decryptedBase64) {
+        const cipherWA = CryptoJS.lib.WordArray.create(ciphertextBytes as any);
+        const cipherParams = CryptoJS.lib.CipherParams.create({ ciphertext: cipherWA });
+        const iv = CryptoJS.lib.WordArray.create([0, 0, 0, frameIndex]);
+        const decryptedWA = CryptoJS.AES.decrypt(cipherParams, this.masterKey!, { iv: iv });
+
+        const sigBytes = decryptedWA.sigBytes;
+        if (sigBytes > 0 && sigBytes < 500000) {
           try {
-            const compressed = base64ToUint8(decryptedBase64);
+            const compressed = new Uint8Array(sigBytes);
+            const words = decryptedWA.words;
+            for (let i = 0; i < sigBytes; i++) {
+              const wordIdx = i >>> 2;
+              const byteIdx = 3 - (i % 4);
+              compressed[i] = (words[wordIdx] >>> (byteIdx * 8)) & 0xff;
+            }
+
             const rgbBytes = gunzipSync(compressed);
             
-            const W = 40;
-            const H = 30;
+            const W = 32;
+            const H = 24;
             const tempCanvas = document.createElement('canvas');
             tempCanvas.width = W;
             tempCanvas.height = H;
@@ -428,17 +450,18 @@ export class VideoStegoDecoder {
                 displayCtx.drawImage(tempCanvas, 0, 0, displayCanvas.width, displayCanvas.height);
               }
             }
+            frameDecodedSuccess = true;
           } catch (err) {
             console.error("[Stealth-Video-Decoder] Failed to decompress/render frame:", err);
           }
 
-          if (this.onFrameDecoded) {
-            this.onFrameDecoded(decryptedBase64, frameIndex);
+          if (this.onFrameDecoded && frameDecodedSuccess) {
+            this.onFrameDecoded('SUCCESS', frameIndex);
           }
         }
       }
 
-      if (decryptedBase64) {
+      if (frameDecodedSuccess) {
         this.lastDecodedFrameIndex = frameIndex;
         this.frameIndex = frameIndex;
 

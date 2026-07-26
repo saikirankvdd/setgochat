@@ -233,9 +233,9 @@ export class VideoStegoEncoder {
       let encrypted = '';
       let dataBits = '';
 
-      // Downscale webcam frame to 40x30 to drastically reduce data size
-      const W = 40;
-      const H = 30;
+      // Downscale webcam frame to 32x24 to drastically reduce data size
+      const W = 32;
+      const H = 24;
       const downscaledCanvas = document.createElement('canvas');
       downscaledCanvas.width = W;
       downscaledCanvas.height = H;
@@ -261,13 +261,23 @@ export class VideoStegoEncoder {
 
       // Compress raw RGB bytes using gzip
       const compressedBytes = gzipSync(rgbBytes);
-      base64 = uint8ToBase64(compressedBytes);
+      const compressedWA = CryptoJS.lib.WordArray.create(compressedBytes as any);
 
-      // Fast AES encryption bypassing EvpKDF
+      // Fast AES encryption bypassing EvpKDF & Base64 expansion
       const iv = CryptoJS.lib.WordArray.create([0, 0, 0, this.frameIndex]);
-      encrypted = fastEncrypt(base64, this.masterKey!, iv);
+      const encryptedWA = CryptoJS.AES.encrypt(compressedWA, this.masterKey!, { iv: iv });
+      const cipherWA = encryptedWA.ciphertext;
 
-      dataBits = stringToBinary(encrypted);
+      // Convert encrypted bytes directly to bit string (no Base64 expansion)
+      dataBits = '';
+      const words = cipherWA.words;
+      const sigBytes = cipherWA.sigBytes;
+      for (let i = 0; i < sigBytes; i++) {
+        const wordIdx = i >>> 2;
+        const byteIdx = 3 - (i % 4);
+        const b = (words[wordIdx] >>> (byteIdx * 8)) & 0xff;
+        dataBits += b.toString(2).padStart(8, '0');
+      }
 
       if (dataBits.length > maxPayloadBits) {
         console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large (${dataBits.length} bits). Max is ${maxPayloadBits}. Skipping.`);
