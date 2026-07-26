@@ -147,8 +147,8 @@ export class VideoStegoEncoder {
     this.outputCanvas.height = this.height;
 
     this.downscaledCanvas = document.createElement('canvas');
-    this.downscaledCanvas.width = 32;
-    this.downscaledCanvas.height = 24;
+    this.downscaledCanvas.width = 20;
+    this.downscaledCanvas.height = 15;
 
     // 6. Capture output stream at 30 fps
     this.stegoStream = (this.outputCanvas as any).captureStream(30);
@@ -249,9 +249,9 @@ export class VideoStegoEncoder {
       let encrypted = '';
       let dataBits = '';
 
-      // Downscale webcam frame to 32x24 to drastically reduce data size
-      const W = 32;
-      const H = 24;
+      // Downscale webcam frame to 20x15 to drastically reduce data size
+      const W = 20;
+      const H = 15;
       const downscaledCanvas = this.downscaledCanvas || document.createElement('canvas');
       const downCtx = downscaledCanvas.getContext('2d');
       
@@ -356,24 +356,26 @@ export class VideoStegoEncoder {
         const maxUsable = Math.floor(totalPixels / 8) - 64;
         const dataLength = Math.min(dataBits.length, maxUsable);
 
-        // Helper functions for 2x2 block stego
-        const getBlockChannel = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, channelOffset: number): number => {
+        // Helper functions for 4x4 Luma block stego
+        const getBlockLuma = (pixArr: Uint8ClampedArray, w: number, x: number, y: number): number => {
           let sum = 0;
           for (let dy = 0; dy < 4; dy++) {
             for (let dx = 0; dx < 4; dx++) {
-              const idx = ((y + dy) * w + (x + dx)) * 4 + channelOffset;
-              sum += pixArr[idx];
+              const idx = ((y + dy) * w + (x + dx)) * 4;
+              sum += (pixArr[idx] + pixArr[idx+1] + pixArr[idx+2]) / 3;
             }
           }
           return sum / 16;
         };
 
-        const setBlockChannelAbsolute = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, channelOffset: number, val: number) => {
+        const setBlockLumaAbsolute = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, val: number) => {
           const clamped = Math.min(255, Math.max(0, val));
           for (let dy = 0; dy < 4; dy++) {
             for (let dx = 0; dx < 4; dx++) {
-              const idx = ((y + dy) * w + (x + dx)) * 4 + channelOffset;
+              const idx = ((y + dy) * w + (x + dx)) * 4;
               pixArr[idx] = clamped;
+              pixArr[idx+1] = clamped;
+              pixArr[idx+2] = clamped;
             }
           }
         };
@@ -399,25 +401,22 @@ export class VideoStegoEncoder {
         }
         allBits.set(dataBitsArr, 64);
 
-        // 4. Embed using RGB relative differential modulation on adjacent 4x4 blocks (8x4 pair)
-        const targetDiff = 100; // Enforce minimum channel difference of 100 to survive heavy WebRTC compression
+        // 4. Embed using Luma relative differential modulation on adjacent 4x4 blocks (8x4 pair)
+        const targetDiff = 100; // Enforce minimum Luma difference of 100 to survive heavy WebRTC compression
         const cols = Math.floor(this.width / 8);
 
         for (let i = 0; i < allBits.length; i++) {
           const bit = allBits[i];
-          const pairIdx = Math.floor(i / 3);
-          const channelOffset = i % 3; // 0=R, 1=G, 2=B
-          
-          const rowIdx = Math.floor(pairIdx / cols);
-          const colIdx = pairIdx % cols;
+          const rowIdx = Math.floor(i / cols);
+          const colIdx = i % cols;
 
           const colA = colIdx * 8;
           const rowA = rowIdx * 4;
           const colB = colIdx * 8 + 4;
           const rowB = rowIdx * 4;
 
-          const valA = getBlockChannel(pixels, this.width, colA, rowA, channelOffset);
-          const valB = getBlockChannel(pixels, this.width, colB, rowB, channelOffset);
+          const valA = getBlockLuma(pixels, this.width, colA, rowA);
+          const valB = getBlockLuma(pixels, this.width, colB, rowB);
 
           if (bit === 1) {
             let currentDiff = valA - valB;
@@ -434,12 +433,12 @@ export class VideoStegoEncoder {
                 newValA += (0 - newValB);
                 newValB = 0;
               }
-              setBlockChannelAbsolute(pixels, this.width, colA, rowA, channelOffset, newValA);
-              setBlockChannelAbsolute(pixels, this.width, colB, rowB, channelOffset, newValB);
+              setBlockLumaAbsolute(pixels, this.width, colA, rowA, newValA);
+              setBlockLumaAbsolute(pixels, this.width, colB, rowB, newValB);
             } else {
               // Homogenize block to survive compression even if diff is already good
-              setBlockChannelAbsolute(pixels, this.width, colA, rowA, channelOffset, valA);
-              setBlockChannelAbsolute(pixels, this.width, colB, rowB, channelOffset, valB);
+              setBlockLumaAbsolute(pixels, this.width, colA, rowA, valA);
+              setBlockLumaAbsolute(pixels, this.width, colB, rowB, valB);
             }
           } else {
             let currentDiff = valB - valA;
@@ -456,12 +455,12 @@ export class VideoStegoEncoder {
                 newValB += (0 - newValA);
                 newValA = 0;
               }
-              setBlockChannelAbsolute(pixels, this.width, colA, rowA, channelOffset, newValA);
-              setBlockChannelAbsolute(pixels, this.width, colB, rowB, channelOffset, newValB);
+              setBlockLumaAbsolute(pixels, this.width, colA, rowA, newValA);
+              setBlockLumaAbsolute(pixels, this.width, colB, rowB, newValB);
             } else {
               // Homogenize block
-              setBlockChannelAbsolute(pixels, this.width, colA, rowA, channelOffset, valA);
-              setBlockChannelAbsolute(pixels, this.width, colB, rowB, channelOffset, valB);
+              setBlockLumaAbsolute(pixels, this.width, colA, rowA, valA);
+              setBlockLumaAbsolute(pixels, this.width, colB, rowB, valB);
             }
           }
         }

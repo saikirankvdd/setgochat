@@ -90,12 +90,11 @@ export class VideoStegoDecoder {
     this.coverCanvas.height = this.height;
 
     this.tempCanvas = document.createElement('canvas');
-    this.tempCanvas.width = 32;
-    this.tempCanvas.height = 24;
-
-    const tempCtx = this.tempCanvas.getContext('2d');
+    this.tempCanvas.width = 20;
+    this.tempCanvas.height = 15;
+    const tempCtx = this.tempCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
     if (tempCtx) {
-      this.decImageData = tempCtx.createImageData(32, 24);
+      this.decImageData = tempCtx.createImageData(20, 15);
     }
 
     // Size display canvas to ensure drawing scales correctly
@@ -321,36 +320,32 @@ export class VideoStegoDecoder {
       const receivedImageData = decCtx.getImageData(0, 0, this.width, this.height);
       const pixels = receivedImageData.data;
 
-      const totalPixels = this.width * this.height;
-      const totalChannels = totalPixels * 3;
-      
-      const getBlockChannel = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, channelOffset: number): number => {
+      const getBlockLuma = (pixArr: Uint8ClampedArray, w: number, x: number, y: number): number => {
         let sum = 0;
         for (let dy = 0; dy < 4; dy++) {
           for (let dx = 0; dx < 4; dx++) {
-            const idx = ((y + dy) * w + (x + dx)) * 4 + channelOffset;
-            sum += pixArr[idx];
+            const idx = ((y + dy) * w + (x + dx)) * 4;
+            sum += (pixArr[idx] * 0.299 + pixArr[idx+1] * 0.587 + pixArr[idx+2] * 0.114);
           }
         }
         return sum / 16;
       };
 
       const cols = Math.floor(this.width / 8);
+      const rows = Math.floor(this.height / 4);
 
       // 1. Extract frame index in JS from first 32 bits (i = 0..31)
       const encFrameBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
-        const pairIdx = Math.floor(i / 3);
-        const channelOffset = i % 3;
-        const rowIdx = Math.floor(pairIdx / cols);
-        const colIdx = pairIdx % cols;
+        const rowIdx = Math.floor(i / cols);
+        const colIdx = i % cols;
         const colA = colIdx * 8;
         const rowA = rowIdx * 4;
         const colB = colIdx * 8 + 4;
         const rowB = rowIdx * 4;
 
-        const valA = getBlockChannel(pixels, this.width, colA, rowA, channelOffset);
-        const valB = getBlockChannel(pixels, this.width, colB, rowB, channelOffset);
+        const valA = getBlockLuma(pixels, this.width, colA, rowA);
+        const valB = getBlockLuma(pixels, this.width, colB, rowB);
         const bit = (valA - valB) > 0 ? 1 : 0;
 
         const byteIdx = Math.floor(i / 8);
@@ -389,24 +384,22 @@ export class VideoStegoDecoder {
       }
 
 
-      const totalPairs = cols * Math.floor(this.height / 4);
-      const maxUsable = (totalPairs * 3) - 64;
+      const totalPairs = cols * rows;
+      const maxUsable = totalPairs - 64;
 
       // 2. Extract length header from next 32 bits (i = 32..63)
       const encLenBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
         const bitIdxGlobal = 32 + i;
-        const pairIdx = Math.floor(bitIdxGlobal / 3);
-        const channelOffset = bitIdxGlobal % 3;
-        const rowIdx = Math.floor(pairIdx / cols);
-        const colIdx = pairIdx % cols;
+        const rowIdx = Math.floor(bitIdxGlobal / cols);
+        const colIdx = bitIdxGlobal % cols;
         const colA = colIdx * 8;
         const rowA = rowIdx * 4;
         const colB = colIdx * 8 + 4;
         const rowB = rowIdx * 4;
 
-        const valA = getBlockChannel(pixels, this.width, colA, rowA, channelOffset);
-        const valB = getBlockChannel(pixels, this.width, colB, rowB, channelOffset);
+        const valA = getBlockLuma(pixels, this.width, colA, rowA);
+        const valB = getBlockLuma(pixels, this.width, colB, rowB);
         const bit = (valA - valB) > 0 ? 1 : 0;
 
         const byteIdx = Math.floor(i / 8);
@@ -426,17 +419,15 @@ export class VideoStegoDecoder {
           const offset = i * 8;
           for (let j = 0; j < 8; j++) {
             const bitIdxGlobal = 64 + offset + j;
-            const pairIdx = Math.floor(bitIdxGlobal / 3);
-            const channelOffset = bitIdxGlobal % 3;
-            const rowIdx = Math.floor(pairIdx / cols);
-            const colIdx = pairIdx % cols;
+            const rowIdx = Math.floor(bitIdxGlobal / cols);
+            const colIdx = bitIdxGlobal % cols;
             const colA = colIdx * 8;
             const rowA = rowIdx * 4;
             const colB = colIdx * 8 + 4;
             const rowB = rowIdx * 4;
 
-            const valA = getBlockChannel(pixels, this.width, colA, rowA, channelOffset);
-            const valB = getBlockChannel(pixels, this.width, colB, rowB, channelOffset);
+            const valA = getBlockLuma(pixels, this.width, colA, rowA);
+            const valB = getBlockLuma(pixels, this.width, colB, rowB);
             const bit = (valA - valB) > 0 ? 1 : 0;
             
             if (bit === 1) {
@@ -472,8 +463,8 @@ export class VideoStegoDecoder {
               decompressed[3] === 0x47
             ) {
               const rgbBytes = decompressed.subarray(4);
-              const W = 32;
-              const H = 24;
+              const W = 20;
+              const H = 15;
               const tempCanvas = this.tempCanvas || document.createElement('canvas');
               const tempCtx = tempCanvas.getContext('2d');
               if (tempCtx) {
@@ -510,7 +501,7 @@ export class VideoStegoDecoder {
         this.frameIndex = frameIndex;
 
         // Update progress percentage
-        const usagePct = ((64 + dataLength) / totalChannels) * 100;
+        const usagePct = ((64 + dataLength) / totalPairs) * 100;
         this.onProgress(Math.min(100, Math.round(usagePct)));
       } else {
         // If decryption failed or is corrupted, show cover frame
