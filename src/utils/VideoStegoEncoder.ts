@@ -244,16 +244,19 @@ export class VideoStegoEncoder {
       // 2. Extract and compress raw RGB bytes using JPEG
       const cols = Math.floor(this.width / 8);
       const rows = Math.floor(this.height / 4);
-      const maxPayloadBits = (cols * rows) - 64; // 4x4 Luma block stego capacity (9,536 bits)
+      // 3-channel (R/G/B) differential steganography: each block pair carries 3 bits (one per channel)
+      // Headers (64 bits) still use 1 block pair each via Luma for robustness
+      // Data region: (cols*rows - 64) block pairs * 3 channels = 28,608 bits capacity
+      const maxPayloadBits = ((cols * rows) - 64) * 3; // ~28,608 bits at 640x480
 
       let base64 = '';
       let encrypted = '';
       let dataBits = '';
 
-      // Adaptive encoder: start at 160x120 (highest quality), scale down only if frame is too complex
-      // for the 9,536-bit payload budget. This gives 2.56x more pixels than the previous 100x75 base.
-      const W = 160;
-      const H = 120;
+      // Adaptive encoder: start at 190x140 (highest quality), scale down only if frame is too complex
+      // for the 28,608-bit payload budget. This gives 3.56x more pixels than the previous 100x75 base.
+      const W = 190;
+      const H = 140;
       const downscaledCanvas = this.downscaledCanvas || document.createElement('canvas');
       if (!this.downscaledCanvas) {
         this.downscaledCanvas = downscaledCanvas;
@@ -420,26 +423,25 @@ export class VideoStegoEncoder {
         const maxUsable = (cols * rows) - 64;
         const dataLength = Math.min(dataBitsArr.length, maxUsable);
 
-        // Helper functions for 4x4 Luma block stego
-        const getBlockLuma = (pixArr: Uint8ClampedArray, w: number, x: number, y: number): number => {
+        // Helper: read average of a single channel (R=0, G=1, B=2) from a 4x4 block
+        const getBlockChannel = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, ch: number): number => {
           let sum = 0;
           for (let dy = 0; dy < 4; dy++) {
             for (let dx = 0; dx < 4; dx++) {
               const idx = ((y + dy) * w + (x + dx)) * 4;
-              sum += (pixArr[idx] + pixArr[idx+1] + pixArr[idx+2]) / 3;
+              sum += pixArr[idx + ch];
             }
           }
           return sum / 16;
         };
 
-        const setBlockLumaAbsolute = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, val: number) => {
+        // Helper: write a single channel to an entire 4x4 block
+        const setBlockChannelAbsolute = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, ch: number, val: number) => {
           const clamped = Math.min(255, Math.max(0, val));
           for (let dy = 0; dy < 4; dy++) {
             for (let dx = 0; dx < 4; dx++) {
               const idx = ((y + dy) * w + (x + dx)) * 4;
-              pixArr[idx] = clamped;
-              pixArr[idx+1] = clamped;
-              pixArr[idx+2] = clamped;
+              pixArr[idx + ch] = clamped;
             }
           }
         };
@@ -465,42 +467,76 @@ export class VideoStegoEncoder {
         }
         allBits.set(dataBitsArr, 64);
 
-        // 4. Embed using Luma relative differential modulation on adjacent 4x4 blocks (8x4 pair)
-        const targetDiff = 100; // Enforce minimum Luma difference of 100 to survive heavy WebRTC compression
+        // 4. Embed using multi-channel differential modulation:
+        //    - Bits 0-63 (headers): Luma-based (all RGB channels), 1 bit per block pair — robust
+        //    - Bits 64+  (data):   Per-channel (R/G/B), 3 bits per block pair — 3× capacity
+        const targetDiff = 80;
         for (let i = 0; i < allBits.length; i++) {
           const bit = allBits[i];
-          const rowIdx = Math.floor(i / cols);
-          const colIdx = i % cols;
 
+          // Determine which block pair and which channel to use
+          let blockPairIdx: number;
+          let ch: number; // -1 = all channels (Luma), 0 = R, 1 = G, 2 = B
+          if (i < 64) {
+            // Header region: 1 bit per block pair, Luma (all channels)
+            blockPairIdx = i;
+            ch = -1;
+          } else {
+            // Data region: 3 bits per block pair via R, G, B
+            const dataIdx = i - 64;
+            blockPairIdx = 64 + Math.floor(dataIdx / 3);
+            ch = dataIdx % 3;
+          }
+
+          const rowIdx = Math.floor(blockPairIdx / cols);
+          const colIdx = blockPairIdx % cols;
           const colA = colIdx * 8;
           const rowA = rowIdx * 4;
           const colB = colIdx * 8 + 4;
           const rowB = rowIdx * 4;
 
-          const valA = getBlockLuma(pixels, this.width, colA, rowA);
-          const valB = getBlockLuma(pixels, this.width, colB, rowB);
+          // Read luminance/channel value from the two adjacent blocks
+          let valA: number, valB: number;
+          if (ch === -1) {
+            // Luma: average of R+G+B
+            let sumA = 0, sumB = 0;
+            for (let dy = 0; dy < 4; dy++) {
+              for (let dx = 0; dx < 4; dx++) {
+                const idxA = ((rowA + dy) * this.width + (colA + dx)) * 4;
+                const idxB = ((rowB + dy) * this.width + (colB + dx)) * 4;
+                sumA += (pixels[idxA] + pixels[idxA+1] + pixels[idxA+2]) / 3;
+                sumB += (pixels[idxB] + pixels[idxB+1] + pixels[idxB+2]) / 3;
+              }
+            }
+            valA = sumA / 16;
+            valB = sumB / 16;
+          } else {
+            valA = getBlockChannel(pixels, this.width, colA, rowA, ch);
+            valB = getBlockChannel(pixels, this.width, colB, rowB, ch);
+          }
 
+          // Apply differential encoding
           if (bit === 1) {
             let currentDiff = valA - valB;
             if (currentDiff < targetDiff) {
               const shortfall = targetDiff - currentDiff;
               let newValA = valA + Math.ceil(shortfall / 2);
               let newValB = valB - Math.floor(shortfall / 2);
-              
-              // Shift shortfall if clipping occurs
-              if (newValA > 255) {
-                newValB -= (newValA - 255);
-                newValA = 255;
-              } else if (newValB < 0) {
-                newValA += (0 - newValB);
-                newValB = 0;
+              if (newValA > 255) { newValB -= (newValA - 255); newValA = 255; }
+              else if (newValB < 0) { newValA += (0 - newValB); newValB = 0; }
+              if (ch === -1) {
+                for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) { const ia = ((rowA+dy)*this.width+(colA+dx))*4; pixels[ia]=pixels[ia+1]=pixels[ia+2]=Math.min(255,Math.max(0,newValA)); const ib = ((rowB+dy)*this.width+(colB+dx))*4; pixels[ib]=pixels[ib+1]=pixels[ib+2]=Math.min(255,Math.max(0,newValB)); }
+              } else {
+                setBlockChannelAbsolute(pixels, this.width, colA, rowA, ch, newValA);
+                setBlockChannelAbsolute(pixels, this.width, colB, rowB, ch, newValB);
               }
-              setBlockLumaAbsolute(pixels, this.width, colA, rowA, newValA);
-              setBlockLumaAbsolute(pixels, this.width, colB, rowB, newValB);
             } else {
-              // Homogenize block to survive compression even if diff is already good
-              setBlockLumaAbsolute(pixels, this.width, colA, rowA, valA);
-              setBlockLumaAbsolute(pixels, this.width, colB, rowB, valB);
+              if (ch === -1) {
+                for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) { const ia = ((rowA+dy)*this.width+(colA+dx))*4; pixels[ia]=pixels[ia+1]=pixels[ia+2]=Math.min(255,Math.max(0,valA)); const ib = ((rowB+dy)*this.width+(colB+dx))*4; pixels[ib]=pixels[ib+1]=pixels[ib+2]=Math.min(255,Math.max(0,valB)); }
+              } else {
+                setBlockChannelAbsolute(pixels, this.width, colA, rowA, ch, valA);
+                setBlockChannelAbsolute(pixels, this.width, colB, rowB, ch, valB);
+              }
             }
           } else {
             let currentDiff = valB - valA;
@@ -508,21 +544,21 @@ export class VideoStegoEncoder {
               const shortfall = targetDiff - currentDiff;
               let newValB = valB + Math.ceil(shortfall / 2);
               let newValA = valA - Math.floor(shortfall / 2);
-              
-              // Shift shortfall if clipping occurs
-              if (newValB > 255) {
-                newValA -= (newValB - 255);
-                newValB = 255;
-              } else if (newValA < 0) {
-                newValB += (0 - newValA);
-                newValA = 0;
+              if (newValB > 255) { newValA -= (newValB - 255); newValB = 255; }
+              else if (newValA < 0) { newValB += (0 - newValA); newValA = 0; }
+              if (ch === -1) {
+                for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) { const ia = ((rowA+dy)*this.width+(colA+dx))*4; pixels[ia]=pixels[ia+1]=pixels[ia+2]=Math.min(255,Math.max(0,newValA)); const ib = ((rowB+dy)*this.width+(colB+dx))*4; pixels[ib]=pixels[ib+1]=pixels[ib+2]=Math.min(255,Math.max(0,newValB)); }
+              } else {
+                setBlockChannelAbsolute(pixels, this.width, colA, rowA, ch, newValA);
+                setBlockChannelAbsolute(pixels, this.width, colB, rowB, ch, newValB);
               }
-              setBlockLumaAbsolute(pixels, this.width, colA, rowA, newValA);
-              setBlockLumaAbsolute(pixels, this.width, colB, rowB, newValB);
             } else {
-              // Homogenize block
-              setBlockLumaAbsolute(pixels, this.width, colA, rowA, valA);
-              setBlockLumaAbsolute(pixels, this.width, colB, rowB, valB);
+              if (ch === -1) {
+                for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) { const ia = ((rowA+dy)*this.width+(colA+dx))*4; pixels[ia]=pixels[ia+1]=pixels[ia+2]=Math.min(255,Math.max(0,valA)); const ib = ((rowB+dy)*this.width+(colB+dx))*4; pixels[ib]=pixels[ib+1]=pixels[ib+2]=Math.min(255,Math.max(0,valB)); }
+              } else {
+                setBlockChannelAbsolute(pixels, this.width, colA, rowA, ch, valA);
+                setBlockChannelAbsolute(pixels, this.width, colB, rowB, ch, valB);
+              }
             }
           }
         }

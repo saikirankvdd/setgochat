@@ -320,12 +320,13 @@ export class VideoStegoDecoder {
       const receivedImageData = decCtx.getImageData(0, 0, this.width, this.height);
       const pixels = receivedImageData.data;
 
-      const getBlockLuma = (pixArr: Uint8ClampedArray, w: number, x: number, y: number): number => {
+      // Helper: read average of a single channel from a 4x4 block
+      const getBlockChannel = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, ch: number): number => {
         let sum = 0;
         for (let dy = 0; dy < 4; dy++) {
           for (let dx = 0; dx < 4; dx++) {
             const idx = ((y + dy) * w + (x + dx)) * 4;
-            sum += (pixArr[idx] + pixArr[idx+1] + pixArr[idx+2]) / 3;
+            sum += pixArr[idx + ch];
           }
         }
         return sum / 16;
@@ -388,7 +389,8 @@ export class VideoStegoDecoder {
 
 
 
-      const maxUsable = (cols * rows) - 64;
+      // 3-channel capacity: data region uses R/G/B = 3 bits per block pair
+      const maxUsable = ((cols * rows) - 64) * 3; // ~28,608 bits at 640x480
 
       // 2. Extract length header from next 32 bits (i = 32..63)
       const encLenBytes = new Uint8Array(4);
@@ -414,31 +416,27 @@ export class VideoStegoDecoder {
       let frameDecodedSuccess = false;
       if (dataLength > 0 && dataLength <= maxUsable) {
         console.log(`[Stealth-Video-Decoder] Extracted dataLength: ${dataLength}`);
-        // Decode bits directly into ciphertext byte array
+        // 3. Extract data bits using multi-channel differential reading:
+        //    Each block pair carries 3 data bits — one per R/G/B channel
         const numBytes = Math.floor(dataLength / 8);
         const ciphertextBytes = new Uint8Array(numBytes);
-        
-        for (let i = 0; i < numBytes; i++) {
-          let b = 0;
-          const offset = i * 8;
-          for (let j = 0; j < 8; j++) {
-            const bitIdxGlobal = 64 + offset + j;
-            const rowIdx = Math.floor(bitIdxGlobal / cols);
-            const colIdx = bitIdxGlobal % cols;
-            const colA = colIdx * 8;
-            const rowA = rowIdx * 4;
-            const colB = colIdx * 8 + 4;
-            const rowB = rowIdx * 4;
+        for (let i = 0; i < dataLength; i++) {
+          const blockPairIdx = 64 + Math.floor(i / 3);
+          const ch = i % 3; // 0=R, 1=G, 2=B
+          const rowIdx = Math.floor(blockPairIdx / cols);
+          const colIdx = blockPairIdx % cols;
+          const colA = colIdx * 8;
+          const rowA = rowIdx * 4;
+          const colB = colIdx * 8 + 4;
+          const rowB = rowIdx * 4;
 
-            const valA = getBlockLuma(pixels, this.width, colA, rowA);
-            const valB = getBlockLuma(pixels, this.width, colB, rowB);
-            const bit = (valA - valB) > 0 ? 1 : 0;
-            
-            if (bit === 1) {
-              b |= (1 << (7 - j));
-            }
-          }
-          ciphertextBytes[i] = b;
+          const valA = getBlockChannel(pixels, this.width, colA, rowA, ch);
+          const valB = getBlockChannel(pixels, this.width, colB, rowB, ch);
+          const bit = (valA - valB) > 0 ? 1 : 0;
+
+          const byteIdx = Math.floor(i / 8);
+          const bitIdx = 7 - (i % 8);
+          ciphertextBytes[byteIdx] |= (bit << bitIdx);
         }
 
         // 4. Decrypt with AES WordArray and decompress raw RGB
