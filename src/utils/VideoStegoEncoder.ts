@@ -271,26 +271,57 @@ export class VideoStegoEncoder {
       downscaledCanvas.height = H;
       downCtx.drawImage(captureCanvas, 0, 0, W, H);
 
-      // Get JPEG bytes asynchronously via toBlob (most efficient path)
-      const jpegBytes = await new Promise<Uint8Array>((resolve) => {
-        downscaledCanvas.toBlob((blob) => {
-          if (!blob) { resolve(new Uint8Array(0)); return; }
-          blob.arrayBuffer().then(buf => resolve(new Uint8Array(buf)));
-        }, 'image/jpeg', 0.20); // quality 0.20 = smaller file to prevent truncation
-      });
+      // Encode face using an adaptive synchronous loop (WebP compresses better than JPEG)
+      let quality = 0.50;
+      let encodedBytes = new Uint8Array(0);
+      const isWebPSupported = downscaledCanvas.toDataURL('image/webp').indexOf('data:image/webp') === 0;
+      const mimeType = isWebPSupported ? 'image/webp' : 'image/jpeg';
 
-      if (jpegBytes.length === 0) {
+      while (quality >= 0.05) {
+        const b64 = downscaledCanvas.toDataURL(mimeType, quality);
+        const binStr = atob(b64.split(',')[1]);
+        const tempBytes = new Uint8Array(binStr.length);
+        for (let i = 0; i < binStr.length; i++) {
+          tempBytes[i] = binStr.charCodeAt(i);
+        }
+        
+        // AES padding (16 bytes block size) + 4 bytes STEG header
+        const payloadSize = tempBytes.length + 4;
+        const aesPaddedSize = Math.ceil(payloadSize / 16) * 16;
+        const totalBits = aesPaddedSize * 8;
+        
+        if (totalBits <= maxPayloadBits) {
+          encodedBytes = tempBytes;
+          break; // Fits perfectly!
+        }
+        quality -= 0.15; // Reduce quality and try again
+      }
+
+      if (encodedBytes.length === 0) {
+        // Even at minimum quality it's too large (highly complex frame). Skip embedding.
+        console.warn(`[Stealth-Video] Frame ${this.frameIndex} too complex to compress under ${maxPayloadBits} bits. Skipping.`);
+        const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
+        const coverVideo = this.videoEls[clipIdx];
+        if (coverVideo) {
+            try {
+              if (coverVideo.paused) coverVideo.play().catch(() => {});
+              const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
+              const outCtx = outputCanvas.getContext('2d');
+              if (outCtx) outCtx.putImageData(coverImageData, 0, 0);
+            } catch (err) {}
+        }
+        this.frameIndex++;
         this.isProcessingFrame = false;
         return;
       }
 
-      // Add 4-byte magic header 'STEG' before encryption (no gzip needed — JPEG is already compressed)
-      const rawWithHeader = new Uint8Array(4 + jpegBytes.length);
+      // Add 4-byte magic header 'STEG' before encryption
+      const rawWithHeader = new Uint8Array(4 + encodedBytes.length);
       rawWithHeader[0] = 0x53; // 'S'
       rawWithHeader[1] = 0x54; // 'T'
       rawWithHeader[2] = 0x45; // 'E'
       rawWithHeader[3] = 0x47; // 'G'
-      rawWithHeader.set(jpegBytes, 4);
+      rawWithHeader.set(encodedBytes, 4);
 
       // AES encrypt directly without gzip (JPEG is already compressed)
       const payloadWA = uint8ToWordArray(rawWithHeader);

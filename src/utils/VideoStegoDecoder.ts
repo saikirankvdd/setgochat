@@ -463,9 +463,10 @@ export class VideoStegoDecoder {
             ) {
               // Alias as decompressed for the JPEG extraction below
               const decompressed = decryptedBytes;
-              // Payload is now a JPEG blob — decode it via createImageBitmap for smooth scaling
-              const jpegBytes = decompressed.subarray(4);
-              const blob = new Blob([jpegBytes], { type: 'image/jpeg' });
+              // Payload is a compressed image blob (WebP or JPEG)
+              const imgBytes = decompressed.subarray(4);
+              // createImageBitmap automatically detects format from binary headers
+              const blob = new Blob([imgBytes]);
               createImageBitmap(blob).then((bmp) => {
                 const displayCtx = displayCanvas.getContext('2d');
                 if (displayCtx) {
