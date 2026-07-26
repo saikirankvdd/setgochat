@@ -284,21 +284,24 @@ export class VideoStegoEncoder {
       const encryptedWA = CryptoJS.AES.encrypt(compressedWA, this.masterKey!, { iv: iv });
       const cipherWA = encryptedWA.ciphertext;
 
-      // Convert encrypted bytes directly to bit string (no Base64 expansion)
-      dataBits = '';
+      // Convert encrypted bytes directly to a Uint8Array of bits (0 or 1) — avoids string allocation
       const words = cipherWA.words;
       const sigBytes = cipherWA.sigBytes;
+      const dataBitsArr = new Uint8Array(sigBytes * 8);
       for (let i = 0; i < sigBytes; i++) {
         const wordIdx = i >>> 2;
         const byteIdx = 3 - (i % 4);
         const b = (words[wordIdx] >>> (byteIdx * 8)) & 0xff;
-        dataBits += b.toString(2).padStart(8, '0');
+        for (let bit = 7; bit >= 0; bit--) {
+          dataBitsArr[i * 8 + (7 - bit)] = (b >>> bit) & 1;
+        }
       }
 
-      if (dataBits.length > maxPayloadBits) {
-        console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large (${dataBits.length} bits). Max is ${maxPayloadBits}. Skipping.`);
+      if (dataBitsArr.length > maxPayloadBits) {
+        console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large (${dataBitsArr.length} bits). Max is ${maxPayloadBits}. Skipping.`);
         this.frameIndex++;
-        setTimeout(this.processFrame, Math.max(10, Math.floor(1000 / this.targetFps)));
+        this.isProcessingFrame = false;
+        setTimeout(this.processFrame, Math.max(100, Math.floor(1000 / this.targetFps)));
         return;
       }
 
@@ -371,31 +374,24 @@ export class VideoStegoEncoder {
 
         // 1. Generate encrypted frame index bits
         const encFrameIndex = this.encryptFrameIndexJS(currentFrameIdx, this.pin);
-        const frameIndexBits: number[] = [];
-        for (let i = 0; i < 32; i++) {
-          const byteIdx = Math.floor(i / 8);
-          const bitIdx = 7 - (i % 8);
-          const bit = (encFrameIndex[byteIdx] >>> bitIdx) & 1;
-          frameIndexBits.push(bit);
-        }
 
         // 2. Generate encrypted length header bits
         const encLength = this.encryptLengthHeaderJS(dataLength, this.pin + '_' + currentFrameIdx);
-        const lengthBits: number[] = [];
+
+        // 3. Assemble all bits sequentially into a flat Uint8Array (no intermediate arrays)
+        const totalBitsCount = 32 + 32 + dataBitsArr.length;
+        const allBits = new Uint8Array(totalBitsCount);
         for (let i = 0; i < 32; i++) {
           const byteIdx = Math.floor(i / 8);
           const bitIdx = 7 - (i % 8);
-          const bit = (encLength[byteIdx] >>> bitIdx) & 1;
-          lengthBits.push(bit);
+          allBits[i] = (encFrameIndex[byteIdx] >>> bitIdx) & 1;
         }
-
-        // 3. Assemble all bits sequentially (simplifies decoding & eliminates PRNG sync errors)
-        const allBits: number[] = [];
-        allBits.push(...frameIndexBits);
-        allBits.push(...lengthBits);
-        for (let i = 0; i < dataLength; i++) {
-          allBits.push(parseInt(dataBits[i]));
+        for (let i = 0; i < 32; i++) {
+          const byteIdx = Math.floor(i / 8);
+          const bitIdx = 7 - (i % 8);
+          allBits[32 + i] = (encLength[byteIdx] >>> bitIdx) & 1;
         }
+        allBits.set(dataBitsArr, 64);
 
         // 4. Embed using green-channel relative differential modulation on adjacent 2x2 blocks
         const targetDiff = 40; // Enforce minimum green-channel difference of 40 to survive compression
@@ -436,7 +432,7 @@ export class VideoStegoEncoder {
         triggerStegoFrameCallback();
 
         // Update progress percentage
-        const totalBitsNeeded = 32 + dataBits.length;
+        const totalBitsNeeded = 32 + dataBitsArr.length;
         const usagePct = (totalBitsNeeded / maxUsable) * 100;
         this.onProgress(Math.min(100, Math.round(usagePct)));
 

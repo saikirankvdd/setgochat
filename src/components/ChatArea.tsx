@@ -848,6 +848,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const consecutiveSlowFramesRef = useRef<number>(0);
   const lastSettingsChangeTimeRef = useRef<number>(0);
   const currentRttRef = useRef<number>(0);
+  // Battery cache — refreshed every 30s in background, not per-frame
+  const batteryLevelRef = useRef<number>(1.0);
+  const batteryChargingRef = useRef<boolean>(true);
+  const lastBatteryCheckRef = useRef<number>(0);
+  // Adaptive engine throttle — only allow one adaptive check per second
+  const lastAdaptiveCheckRef = useRef<number>(0);
 
   const isMobileDevice = () => {
     if (typeof navigator === 'undefined') return false;
@@ -870,23 +876,33 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
   };
 
-  const checkAdaptiveStegoEngine = async (frameDurationMs: number, source: 'encode' | 'decode') => {
-    if (isMobileDevice()) {
-      return;
-    }
-    const rtt = currentRttRef.current;
-    let batteryLevel = 1.0;
-    let batteryCharging = true;
-    if (typeof navigator !== 'undefined' && 'getBattery' in navigator) {
-      try {
-        const battery = await (navigator as any).getBattery();
-        batteryLevel = battery.level;
-        batteryCharging = battery.charging;
-      } catch (e) {}
-    }
-
-    const isBatterySaver = !batteryCharging && batteryLevel < 0.3;
+  // Refresh battery state in background every 30 seconds — never inside processFrame
+  const refreshBatteryState = () => {
+    if (typeof navigator === 'undefined' || !('getBattery' in navigator)) return;
     const now = performance.now();
+    if (now - lastBatteryCheckRef.current < 30000) return; // only refresh every 30s
+    lastBatteryCheckRef.current = now;
+    (navigator as any).getBattery().then((battery: any) => {
+      batteryLevelRef.current = battery.level;
+      batteryChargingRef.current = battery.charging;
+    }).catch(() => {});
+  };
+
+  const checkAdaptiveStegoEngine = (frameDurationMs: number, _source: 'encode' | 'decode') => {
+    if (isMobileDevice()) return;
+
+    // Throttle: only run adaptive logic at most once per second
+    const now = performance.now();
+    if (now - lastAdaptiveCheckRef.current < 1000) return;
+    lastAdaptiveCheckRef.current = now;
+
+    // Use cached battery values — never await here
+    refreshBatteryState();
+    const batteryLevel = batteryLevelRef.current;
+    const batteryCharging = batteryChargingRef.current;
+
+    const rtt = currentRttRef.current;
+    const isBatterySaver = !batteryCharging && batteryLevel < 0.3;
     const cooldownTime = 15000; // 15 seconds
     const timeSinceLastChange = now - lastSettingsChangeTimeRef.current;
 
