@@ -129,3 +129,35 @@ export const fastDecrypt = (ciphertext: string, key: CryptoJS.lib.WordArray, iv:
   }
 };
 
+/**
+ * Convert Uint8Array to CryptoJS WordArray accurately
+ */
+export const uint8ToWordArray = (u8: Uint8Array): CryptoJS.lib.WordArray => {
+  const len = u8.length;
+  const words: number[] = [];
+  for (let i = 0; i < len; i += 4) {
+    words.push(
+      (u8[i] << 24) |
+      ((u8[i + 1] || 0) << 16) |
+      ((u8[i + 2] || 0) << 8) |
+      (u8[i + 3] || 0)
+    );
+  }
+  return CryptoJS.lib.WordArray.create(words, len);
+};
+
+/**
+ * Convert CryptoJS WordArray to Uint8Array accurately
+ */
+export const wordArrayToUint8 = (wa: CryptoJS.lib.WordArray): Uint8Array => {
+  const len = wa.sigBytes;
+  const u8 = new Uint8Array(len);
+  const words = wa.words;
+  for (let i = 0; i < len; i++) {
+    const wordIdx = i >>> 2;
+    const byteIdx = 3 - (i % 4);
+    u8[i] = (words[wordIdx] >>> (byteIdx * 8)) & 0xff;
+  }
+  return u8;
+};
+

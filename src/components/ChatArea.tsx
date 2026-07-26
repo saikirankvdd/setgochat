@@ -899,10 +899,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
 
     const profiles: { resolution: '240p' | '480p'; fps: 5 | 10 | 15 | 30 }[] = [
-      { resolution: '240p', fps: 5 },
-      { resolution: '240p', fps: 10 },
-      { resolution: '240p', fps: 15 },
-      { resolution: '240p', fps: 30 },
+      { resolution: '480p', fps: 5 },
+      { resolution: '480p', fps: 10 },
       { resolution: '480p', fps: 15 },
       { resolution: '480p', fps: 30 }
     ];

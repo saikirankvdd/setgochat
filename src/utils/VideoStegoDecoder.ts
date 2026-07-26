@@ -1,4 +1,4 @@
-import { decryptData, binaryToString, getSha256Key, fastDecrypt, base64ToUint8 } from './crypto';
+import { decryptData, binaryToString, getSha256Key, fastDecrypt, base64ToUint8, uint8ToWordArray, wordArrayToUint8 } from './crypto';
 import { gunzipSync } from 'fflate';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
@@ -409,7 +409,7 @@ export class VideoStegoDecoder {
           ciphertextBytes[i] = b;
         }
 
-        const cipherWA = CryptoJS.lib.WordArray.create(ciphertextBytes as any);
+        const cipherWA = uint8ToWordArray(ciphertextBytes);
         const cipherParams = CryptoJS.lib.CipherParams.create({ ciphertext: cipherWA });
         const iv = CryptoJS.lib.WordArray.create([0, 0, 0, frameIndex]);
         const decryptedWA = CryptoJS.AES.decrypt(cipherParams, this.masterKey!, { iv: iv });
@@ -417,14 +417,7 @@ export class VideoStegoDecoder {
         const sigBytes = decryptedWA.sigBytes;
         if (sigBytes > 0 && sigBytes < 500000) {
           try {
-            const compressed = new Uint8Array(sigBytes);
-            const words = decryptedWA.words;
-            for (let i = 0; i < sigBytes; i++) {
-              const wordIdx = i >>> 2;
-              const byteIdx = 3 - (i % 4);
-              compressed[i] = (words[wordIdx] >>> (byteIdx * 8)) & 0xff;
-            }
-
+            const compressed = wordArrayToUint8(decryptedWA);
             const rgbBytes = gunzipSync(compressed);
             
             const W = 32;

@@ -1,4 +1,4 @@
-import { encryptData, stringToBinary, getSha256Key, fastEncrypt, uint8ToBase64 } from './crypto';
+import { encryptData, stringToBinary, getSha256Key, fastEncrypt, uint8ToBase64, uint8ToWordArray, wordArrayToUint8 } from './crypto';
 import { gzipSync } from 'fflate';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
@@ -261,7 +261,7 @@ export class VideoStegoEncoder {
 
       // Compress raw RGB bytes using gzip
       const compressedBytes = gzipSync(rgbBytes);
-      const compressedWA = CryptoJS.lib.WordArray.create(compressedBytes as any);
+      const compressedWA = uint8ToWordArray(compressedBytes);
 
       // Fast AES encryption bypassing EvpKDF & Base64 expansion
       const iv = CryptoJS.lib.WordArray.create([0, 0, 0, this.frameIndex]);
