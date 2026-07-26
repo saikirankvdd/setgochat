@@ -3,6 +3,7 @@ import { gzipSync } from 'fflate';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
 import CryptoJS from 'crypto-js';
+import { WebGLStego } from './WebGLStego';
 
 export class VideoStegoEncoder {
   private localStream: MediaStream;
@@ -27,6 +28,7 @@ export class VideoStegoEncoder {
   private masterKey: CryptoJS.lib.WordArray | null = null;
   private isProcessingFrame: boolean = false; // Re-entrancy guard to prevent timer queue flooding
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private webglStego: WebGLStego | null = null;
 
   // Web Worker for non-blocking pixel LSB embedding
   private videoWorker: Worker | null = null;
@@ -151,7 +153,14 @@ export class VideoStegoEncoder {
     this.downscaledCanvas.height = 15;
 
     // 6. Capture output stream at 30 fps
-    this.stegoStream = (this.outputCanvas as any).captureStream(30);
+    this.stegoStream = (this.outputCanvas as any).captureStream(this.targetFps);
+    
+    try {
+      this.webglStego = new WebGLStego(this.width, this.height);
+      console.log("[Stealth-Video] WebGL GPU Engine initialized successfully.");
+    } catch(err) {
+      console.error("[Stealth-Video] Failed to initialize WebGL GPU Engine:", err);
+    }
   }
 
   getStegoStream(): MediaStream {
@@ -436,104 +445,17 @@ export class VideoStegoEncoder {
         }
         allBits.set(dataBitsArr, 64);
 
-        // 4. Embed using multi-channel differential modulation:
-        //    - Bits 0-63 (headers): Luma-based (all RGB channels), 1 bit per block pair — robust
-        //    - Bits 64+  (data):   Per-channel (R/G/B), 3 bits per block pair — 3× capacity
-        const targetDiff = 80;
-        for (let i = 0; i < allBits.length; i++) {
-          const bit = allBits[i];
-
-          // Determine which block pair and which channel to use
-          let blockPairIdx: number;
-          let ch: number; // -1 = all channels (Luma), 0 = R, 1 = G, 2 = B
-          if (i < 64) {
-            // Header region: 1 bit per block pair, Luma (all channels)
-            blockPairIdx = i;
-            ch = -1;
-          } else {
-            // Data region: 3 bits per block pair via R, G, B
-            const dataIdx = i - 64;
-            blockPairIdx = 64 + Math.floor(dataIdx / 3);
-            ch = dataIdx % 3;
+        // 4. Embed using hardware-accelerated WebGL GPU Shaders (Instantly)
+        if (this.webglStego) {
+          const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
+          const stegoImageData = this.webglStego.encode(coverImageData, allBits);
+          const outCtx = outputCanvas.getContext('2d');
+          if (outCtx) {
+            outCtx.putImageData(stegoImageData, 0, 0);
           }
-
-          const rowIdx = Math.floor(blockPairIdx / cols);
-          const colIdx = blockPairIdx % cols;
-          const colA = colIdx * 8;
-          const rowA = rowIdx * 4;
-          const colB = colIdx * 8 + 4;
-          const rowB = rowIdx * 4;
-
-          // Read luminance/channel value from the two adjacent blocks
-          let valA: number, valB: number;
-          if (ch === -1) {
-            // Luma: average of R+G+B
-            let sumA = 0, sumB = 0;
-            for (let dy = 0; dy < 4; dy++) {
-              for (let dx = 0; dx < 4; dx++) {
-                const idxA = ((rowA + dy) * this.width + (colA + dx)) * 4;
-                const idxB = ((rowB + dy) * this.width + (colB + dx)) * 4;
-                sumA += (pixels[idxA] + pixels[idxA+1] + pixels[idxA+2]) / 3;
-                sumB += (pixels[idxB] + pixels[idxB+1] + pixels[idxB+2]) / 3;
-              }
-            }
-            valA = sumA / 16;
-            valB = sumB / 16;
-          } else {
-            valA = getBlockChannel(pixels, this.width, colA, rowA, ch);
-            valB = getBlockChannel(pixels, this.width, colB, rowB, ch);
-          }
-
-          // Apply differential encoding
-          if (bit === 1) {
-            let currentDiff = valA - valB;
-            if (currentDiff < targetDiff) {
-              const shortfall = targetDiff - currentDiff;
-              let newValA = valA + Math.ceil(shortfall / 2);
-              let newValB = valB - Math.floor(shortfall / 2);
-              if (newValA > 255) { newValB -= (newValA - 255); newValA = 255; }
-              else if (newValB < 0) { newValA += (0 - newValB); newValB = 0; }
-              if (ch === -1) {
-                for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) { const ia = ((rowA+dy)*this.width+(colA+dx))*4; pixels[ia]=pixels[ia+1]=pixels[ia+2]=Math.min(255,Math.max(0,newValA)); const ib = ((rowB+dy)*this.width+(colB+dx))*4; pixels[ib]=pixels[ib+1]=pixels[ib+2]=Math.min(255,Math.max(0,newValB)); }
-              } else {
-                setBlockChannelAbsolute(pixels, this.width, colA, rowA, ch, newValA);
-                setBlockChannelAbsolute(pixels, this.width, colB, rowB, ch, newValB);
-              }
-            } else {
-              if (ch === -1) {
-                for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) { const ia = ((rowA+dy)*this.width+(colA+dx))*4; pixels[ia]=pixels[ia+1]=pixels[ia+2]=Math.min(255,Math.max(0,valA)); const ib = ((rowB+dy)*this.width+(colB+dx))*4; pixels[ib]=pixels[ib+1]=pixels[ib+2]=Math.min(255,Math.max(0,valB)); }
-              } else {
-                setBlockChannelAbsolute(pixels, this.width, colA, rowA, ch, valA);
-                setBlockChannelAbsolute(pixels, this.width, colB, rowB, ch, valB);
-              }
-            }
-          } else {
-            let currentDiff = valB - valA;
-            if (currentDiff < targetDiff) {
-              const shortfall = targetDiff - currentDiff;
-              let newValB = valB + Math.ceil(shortfall / 2);
-              let newValA = valA - Math.floor(shortfall / 2);
-              if (newValB > 255) { newValA -= (newValB - 255); newValB = 255; }
-              else if (newValA < 0) { newValB += (0 - newValA); newValA = 0; }
-              if (ch === -1) {
-                for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) { const ia = ((rowA+dy)*this.width+(colA+dx))*4; pixels[ia]=pixels[ia+1]=pixels[ia+2]=Math.min(255,Math.max(0,newValA)); const ib = ((rowB+dy)*this.width+(colB+dx))*4; pixels[ib]=pixels[ib+1]=pixels[ib+2]=Math.min(255,Math.max(0,newValB)); }
-              } else {
-                setBlockChannelAbsolute(pixels, this.width, colA, rowA, ch, newValA);
-                setBlockChannelAbsolute(pixels, this.width, colB, rowB, ch, newValB);
-              }
-            } else {
-              if (ch === -1) {
-                for (let dy = 0; dy < 4; dy++) for (let dx = 0; dx < 4; dx++) { const ia = ((rowA+dy)*this.width+(colA+dx))*4; pixels[ia]=pixels[ia+1]=pixels[ia+2]=Math.min(255,Math.max(0,valA)); const ib = ((rowB+dy)*this.width+(colB+dx))*4; pixels[ib]=pixels[ib+1]=pixels[ib+2]=Math.min(255,Math.max(0,valB)); }
-              } else {
-                setBlockChannelAbsolute(pixels, this.width, colA, rowA, ch, valA);
-                setBlockChannelAbsolute(pixels, this.width, colB, rowB, ch, valB);
-              }
-            }
-          }
+        } else {
+          console.error("WebGLStego not available! Fallback missing.");
         }
-
-        // Draw modified cover pixels to output canvas
-        outCtx.putImageData(coverImageData, 0, 0);
         triggerStegoFrameCallback();
 
         // Update progress percentage

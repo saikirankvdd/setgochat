@@ -3,6 +3,7 @@ import { gunzipSync } from 'fflate';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
 import CryptoJS from 'crypto-js';
+import { WebGLStego } from './WebGLStego';
 
 export class VideoStegoDecoder {
   private remoteVideoEl: HTMLVideoElement;
@@ -26,6 +27,7 @@ export class VideoStegoDecoder {
   private masterKey: CryptoJS.lib.WordArray | null = null;
   private isProcessingFrame: boolean = false; // Re-entrancy guard to prevent timer queue flooding
   private intervalId: ReturnType<typeof setInterval> | null = null;
+  private webglStego: WebGLStego | null = null;
 
   constructor(
     remoteVideoEl: HTMLVideoElement,
@@ -81,6 +83,12 @@ export class VideoStegoDecoder {
     }
 
     // 3. Create canvases
+    try {
+      this.webglStego = new WebGLStego(this.width, this.height);
+      console.log("[Stealth-Video-Decoder] WebGL GPU Engine active.");
+    } catch (err) {
+      console.error("[Stealth-Video-Decoder] WebGL GPU Engine failed:", err);
+    }
     this.decodeCanvas = document.createElement('canvas');
     this.decodeCanvas.width = this.width;
     this.decodeCanvas.height = this.height;
@@ -320,39 +328,22 @@ export class VideoStegoDecoder {
       const receivedImageData = decCtx.getImageData(0, 0, this.width, this.height);
       const pixels = receivedImageData.data;
 
-      // Helper: read average of a single channel from a 4x4 block
-      const getBlockChannel = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, ch: number): number => {
-        let sum = 0;
-        for (let dy = 0; dy < 4; dy++) {
-          for (let dx = 0; dx < 4; dx++) {
-            const idx = ((y + dy) * w + (x + dx)) * 4;
-            sum += pixArr[idx + ch];
-          }
-        }
-        return sum / 16;
-      };
+      // Extract all bits instantly via GPU WebGL Shaders
+      let extractedBits: Uint8Array;
+      if (this.webglStego) {
+        extractedBits = this.webglStego.decode(receivedImageData);
+      } else {
+        console.error("WebGLStego unavailable on decoder!");
+        this.isProcessingFrame = false;
+        return;
+      }
 
-      const cols = Math.floor(this.width / 8);
-      const rows = Math.floor(this.height / 4);
-
-      // 1. Extract frame index in JS from first 32 bits (i = 0..31)
+      // 1. Parse frame index (bits 0..31)
       const encFrameBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
-        const rowIdx = Math.floor(i / cols);
-        const colIdx = i % cols;
-        const colA = colIdx * 8;
-        const rowA = rowIdx * 4;
-        const colB = colIdx * 8 + 4;
-        const rowB = rowIdx * 4;
-
-        // Headers use Luma (all channels equal), so any single channel reads correctly
-        const valA = getBlockChannel(pixels, this.width, colA, rowA, 1); // green = luma for header blocks
-        const valB = getBlockChannel(pixels, this.width, colB, rowB, 1);
-        const bit = (valA - valB) > 0 ? 1 : 0;
-
         const byteIdx = Math.floor(i / 8);
         const bitIdx = 7 - (i % 8);
-        encFrameBytes[byteIdx] |= (bit << bitIdx);
+        encFrameBytes[byteIdx] |= (extractedBits[i] << bitIdx);
       }
       const frameIndex = this.decryptFrameIndexJS(encFrameBytes, this.pin);
 
@@ -388,57 +379,29 @@ export class VideoStegoDecoder {
         return; // interval will retry next tick
       }
 
-
-
       // 3-channel capacity: data region uses R/G/B = 3 bits per block pair
       const maxUsable = ((cols * rows) - 64) * 3; // ~28,608 bits at 640x480
 
-      // 2. Extract length header from next 32 bits (i = 32..63)
+      // 2. Parse length header (bits 32..63)
       const encLenBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
-        const bitIdxGlobal = 32 + i;
-        const rowIdx = Math.floor(bitIdxGlobal / cols);
-        const colIdx = bitIdxGlobal % cols;
-        const colA = colIdx * 8;
-        const rowA = rowIdx * 4;
-        const colB = colIdx * 8 + 4;
-        const rowB = rowIdx * 4;
-
-        // Headers use Luma (all channels equal), so any single channel reads correctly
-        const valA = getBlockChannel(pixels, this.width, colA, rowA, 1); // green = luma for header blocks
-        const valB = getBlockChannel(pixels, this.width, colB, rowB, 1);
-        const bit = (valA - valB) > 0 ? 1 : 0;
-
         const byteIdx = Math.floor(i / 8);
         const bitIdx = 7 - (i % 8);
-        encLenBytes[byteIdx] |= (bit << bitIdx);
+        encLenBytes[byteIdx] |= (extractedBits[32 + i] << bitIdx);
       }
       let dataLength = this.decryptLengthHeaderJS(encLenBytes, this.pin + '_' + frameIndex);
 
       let frameDecodedSuccess = false;
       if (dataLength > 0 && dataLength <= maxUsable) {
         console.log(`[Stealth-Video-Decoder] Extracted dataLength: ${dataLength}`);
-        // 3. Extract data bits using multi-channel differential reading:
-        //    Each block pair carries 3 data bits — one per R/G/B channel
+        
+        // 3. Parse data bits
         const numBytes = Math.floor(dataLength / 8);
         const ciphertextBytes = new Uint8Array(numBytes);
         for (let i = 0; i < dataLength; i++) {
-          const blockPairIdx = 64 + Math.floor(i / 3);
-          const ch = i % 3; // 0=R, 1=G, 2=B
-          const rowIdx = Math.floor(blockPairIdx / cols);
-          const colIdx = blockPairIdx % cols;
-          const colA = colIdx * 8;
-          const rowA = rowIdx * 4;
-          const colB = colIdx * 8 + 4;
-          const rowB = rowIdx * 4;
-
-          const valA = getBlockChannel(pixels, this.width, colA, rowA, ch);
-          const valB = getBlockChannel(pixels, this.width, colB, rowB, ch);
-          const bit = (valA - valB) > 0 ? 1 : 0;
-
           const byteIdx = Math.floor(i / 8);
           const bitIdx = 7 - (i % 8);
-          ciphertextBytes[byteIdx] |= (bit << bitIdx);
+          ciphertextBytes[byteIdx] |= (extractedBits[64 + i] << bitIdx);
         }
 
         // 4. Decrypt with AES WebCrypto and decompress raw RGB
