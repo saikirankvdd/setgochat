@@ -250,10 +250,10 @@ export class VideoStegoEncoder {
       let encrypted = '';
       let dataBits = '';
 
-      // Encode face as JPEG (quality 0.20) — gives ~800 bytes for 100x75, comfortably fitting our 9,536-bit budget
-      // This is 17x more pixels than raw RGB at 24x18, providing the desired clarity
-      const W = 100;
-      const H = 75;
+      // Adaptive encoder: start at 160x120 (highest quality), scale down only if frame is too complex
+      // for the 9,536-bit payload budget. This gives 2.56x more pixels than the previous 100x75 base.
+      const W = 160;
+      const H = 120;
       const downscaledCanvas = this.downscaledCanvas || document.createElement('canvas');
       if (!this.downscaledCanvas) {
         this.downscaledCanvas = downscaledCanvas;
@@ -269,7 +269,7 @@ export class VideoStegoEncoder {
 
       // Encode face using an adaptive synchronous loop (WebP compresses better than JPEG)
       let scale = 1.0;
-      let quality = 0.50;
+      let quality = 0.65; // Start at 0.65 quality for the best possible clarity at 160x120
       let encodedBytes = new Uint8Array(0);
       const isWebPSupported = downscaledCanvas.toDataURL('image/webp').indexOf('data:image/webp') === 0;
       const mimeType = isWebPSupported ? 'image/webp' : 'image/jpeg';

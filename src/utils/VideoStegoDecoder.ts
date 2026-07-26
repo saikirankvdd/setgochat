@@ -467,7 +467,13 @@ export class VideoStegoDecoder {
               const imgBytes = decompressed.subarray(4);
               // createImageBitmap automatically detects format from binary headers
               const blob = new Blob([imgBytes]);
-              createImageBitmap(blob).then((bmp) => {
+              // Use browser-native high-quality upscaling by requesting target resolution directly
+              const bitmapOptions: ImageBitmapOptions = {
+                resizeWidth: displayCanvas.width,
+                resizeHeight: displayCanvas.height,
+                resizeQuality: 'high', // Uses Lanczos or equivalent for best quality
+              };
+              createImageBitmap(blob, bitmapOptions).then((bmp) => {
                 const displayCtx = displayCanvas.getContext('2d');
                 if (displayCtx) {
                   displayCtx.imageSmoothingEnabled = true;
@@ -475,7 +481,18 @@ export class VideoStegoDecoder {
                   displayCtx.drawImage(bmp, 0, 0, displayCanvas.width, displayCanvas.height);
                   bmp.close();
                 }
-              }).catch(() => {});
+              }).catch(() => {
+                // Fallback: try without resize options if browser doesn't support them
+                createImageBitmap(blob).then((bmp) => {
+                  const displayCtx = displayCanvas.getContext('2d');
+                  if (displayCtx) {
+                    displayCtx.imageSmoothingEnabled = true;
+                    displayCtx.imageSmoothingQuality = 'high';
+                    displayCtx.drawImage(bmp, 0, 0, displayCanvas.width, displayCanvas.height);
+                    bmp.close();
+                  }
+                }).catch(() => {});
+              });
               frameDecodedSuccess = true;
             }
           } catch (err) {
