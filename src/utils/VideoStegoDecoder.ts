@@ -345,8 +345,9 @@ export class VideoStegoDecoder {
         const colB = colIdx * 8 + 4;
         const rowB = rowIdx * 4;
 
-        const valA = getBlockLuma(pixels, this.width, colA, rowA);
-        const valB = getBlockLuma(pixels, this.width, colB, rowB);
+        // Headers use Luma (all channels equal), so any single channel reads correctly
+        const valA = getBlockChannel(pixels, this.width, colA, rowA, 1); // green = luma for header blocks
+        const valB = getBlockChannel(pixels, this.width, colB, rowB, 1);
         const bit = (valA - valB) > 0 ? 1 : 0;
 
         const byteIdx = Math.floor(i / 8);
@@ -403,8 +404,9 @@ export class VideoStegoDecoder {
         const colB = colIdx * 8 + 4;
         const rowB = rowIdx * 4;
 
-        const valA = getBlockLuma(pixels, this.width, colA, rowA);
-        const valB = getBlockLuma(pixels, this.width, colB, rowB);
+        // Headers use Luma (all channels equal), so any single channel reads correctly
+        const valA = getBlockChannel(pixels, this.width, colA, rowA, 1); // green = luma for header blocks
+        const valB = getBlockChannel(pixels, this.width, colB, rowB, 1);
         const bit = (valA - valB) > 0 ? 1 : 0;
 
         const byteIdx = Math.floor(i / 8);
