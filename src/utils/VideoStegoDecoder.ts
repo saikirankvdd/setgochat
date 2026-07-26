@@ -399,6 +399,10 @@ export class VideoStegoDecoder {
         return; // interval will retry next tick
       }
 
+      const cWidth = displayCanvas.width;
+      const cHeight = displayCanvas.height;
+      const cols = Math.floor(cWidth / 8);
+      const rows = Math.floor(cHeight / 4);
       // 3-channel capacity: data region uses R/G/B = 3 bits per block pair
       const maxUsable = ((cols * rows) - 64) * 3; // ~28,608 bits at 640x480
 
