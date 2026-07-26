@@ -399,7 +399,7 @@ export class VideoStegoEncoder {
         allBits.set(dataBitsArr, 64);
 
         // 4. Embed using green-channel relative differential modulation on adjacent 2x2 blocks
-        const targetDiff = 40; // Enforce minimum green-channel difference of 40 to survive compression
+        const targetDiff = 100; // Enforce minimum green-channel difference of 100 to survive heavy WebRTC compression
         const cols = Math.floor(this.width / 4);
 
         for (let i = 0; i < allBits.length; i++) {

@@ -387,7 +387,7 @@ export class VideoStegoDecoder {
         return; // interval will retry next tick
       }
 
-      let bitString = '';
+
       const maxUsable = Math.floor(totalPixels / 8) - 64;
 
       // 2. Extract length header from next 32 blocks (logical channels 32-63)
@@ -409,40 +409,38 @@ export class VideoStegoDecoder {
         const bitIdx = 7 - (i % 8);
         encLenBytes[byteIdx] |= (bit << bitIdx);
       }
-      const dataLength = this.decryptLengthHeaderJS(encLenBytes, this.pin + '_' + frameIndex);
-
-      if (dataLength > 0 && dataLength <= maxUsable) {
-        for (let i = 0; i < dataLength; i++) {
-          const bitIdxGlobal = 64 + i;
-          const rowIdx = Math.floor(bitIdxGlobal / cols);
-          const colIdx = bitIdxGlobal % cols;
-          const colA = colIdx * 4;
-          const rowA = rowIdx * 2;
-          const colB = colIdx * 4 + 2;
-          const rowB = rowIdx * 2;
-
-          const valA = getBlockGreen(pixels, this.width, colA, rowA);
-          const valB = getBlockGreen(pixels, this.width, colB, rowB);
-          const bit = (valA - valB) > 0 ? 1 : 0;
-          bitString += bit.toString();
-        }
-      }
+      let dataLength = this.decryptLengthHeaderJS(encLenBytes, this.pin + '_' + frameIndex);
 
       let frameDecodedSuccess = false;
-      if (bitString && bitString.length > 0) {
-        // 4. Convert bits to ciphertext byte array, decrypt with AES WordArray, and decompress raw RGB
-        const numBytes = Math.floor(bitString.length / 8);
+      if (dataLength > 0 && dataLength <= maxUsable) {
+        // Decode bits directly into ciphertext byte array
+        const numBytes = Math.floor(dataLength / 8);
         const ciphertextBytes = new Uint8Array(numBytes);
+        
         for (let i = 0; i < numBytes; i++) {
           let b = 0;
           const offset = i * 8;
           for (let j = 0; j < 8; j++) {
-            if (bitString.charCodeAt(offset + j) === 49) {
+            const bitIdxGlobal = 64 + offset + j;
+            const rowIdx = Math.floor(bitIdxGlobal / cols);
+            const colIdx = bitIdxGlobal % cols;
+            const colA = colIdx * 4;
+            const rowA = rowIdx * 2;
+            const colB = colIdx * 4 + 2;
+            const rowB = rowIdx * 2;
+
+            const valA = getBlockGreen(pixels, this.width, colA, rowA);
+            const valB = getBlockGreen(pixels, this.width, colB, rowB);
+            const bit = (valA - valB) > 0 ? 1 : 0;
+            
+            if (bit === 1) {
               b |= (1 << (7 - j));
             }
           }
           ciphertextBytes[i] = b;
         }
+
+        // 4. Decrypt with AES WordArray and decompress raw RGB
 
         const cipherWA = uint8ToWordArray(ciphertextBytes);
         const cipherParams = CryptoJS.lib.CipherParams.create({ ciphertext: cipherWA });
@@ -453,6 +451,10 @@ export class VideoStegoDecoder {
         if (sigBytes > 4 && sigBytes < 500000) {
           try {
             const compressed = wordArrayToUint8(decryptedWA);
+            // Gzip magic number check (0x1F, 0x8B) to prevent OOM crash on corrupted stego data
+            if (compressed.length < 10 || compressed[0] !== 0x1F || compressed[1] !== 0x8B) {
+              throw new Error("Invalid Gzip magic header");
+            }
             const decompressed = gunzipSync(compressed);
             
             // Check 4-byte magic header 'STEG' [0x53, 0x54, 0x45, 0x47]
@@ -502,7 +504,7 @@ export class VideoStegoDecoder {
         this.frameIndex = frameIndex;
 
         // Update progress percentage
-        const usagePct = ((64 + bitString.length) / totalChannels) * 100;
+        const usagePct = ((64 + dataLength) / totalChannels) * 100;
         this.onProgress(Math.min(100, Math.round(usagePct)));
       } else {
         // If decryption failed or is corrupted, show cover frame
