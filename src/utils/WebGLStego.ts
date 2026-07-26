@@ -24,9 +24,12 @@ export class WebGLStego {
     this.encodeProgram = this.createProgram(this.vertexShaderSource, this.encoderFragmentSource);
     this.decodeProgram = this.createProgram(this.vertexShaderSource, this.decoderFragmentSource);
 
-    this.coverTexture = this.createTexture();
-    this.dataTexture = this.createTexture();
-    this.stegoTexture = this.createTexture();
+    const cols = Math.floor(this.width / 8);
+    const rows = Math.floor(this.height / 4);
+
+    this.coverTexture = this.createTexture(this.width, this.height);
+    this.dataTexture = this.createTexture(cols, rows);
+    this.stegoTexture = this.createTexture(this.width, this.height);
     this.fbo = gl.createFramebuffer()!;
   }
 
@@ -54,29 +57,32 @@ export class WebGLStego {
     return program;
   }
 
-  private createTexture(): WebGLTexture {
+  private createTexture(w?: number, h?: number): WebGLTexture {
     const tex = this.gl.createTexture()!;
     this.gl.bindTexture(this.gl.TEXTURE_2D, tex);
     this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_S, this.gl.CLAMP_TO_EDGE);
     this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_WRAP_T, this.gl.CLAMP_TO_EDGE);
     this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MIN_FILTER, this.gl.NEAREST);
     this.gl.texParameteri(this.gl.TEXTURE_2D, this.gl.TEXTURE_MAG_FILTER, this.gl.NEAREST);
+    if (w && h) {
+      this.gl.texImage2D(this.gl.TEXTURE_2D, 0, this.gl.RGBA, w, h, 0, this.gl.RGBA, this.gl.UNSIGNED_BYTE, null);
+    }
     return tex;
   }
 
   public encode(coverImageData: ImageData, bits: Uint8Array): ImageData {
     const gl = this.gl;
-    
-    // 1. Upload Cover Video Texture
-    gl.bindTexture(gl.TEXTURE_2D, this.coverTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.width, this.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, coverImageData.data);
-
-    // 2. Upload Data Texture
     const cols = Math.floor(this.width / 8);
     const rows = Math.floor(this.height / 4);
+
+    // 1. Upload Cover Video Texture
+    gl.bindTexture(gl.TEXTURE_2D, this.coverTexture);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.width, this.height, gl.RGBA, gl.UNSIGNED_BYTE, coverImageData.data);
+
+    // 2. Upload Data Texture
     const dataPixels = new Uint8Array(cols * rows * 4); // RGBA per block pair
     
-    // Header (64 bits) -> packed into first 64 block pairs (Luma/Green channel equivalent)
+    // Header (64 bits) -> packed into first 64 block pairs
     for(let i=0; i<64; i++) {
         const bit = i < bits.length ? bits[i] : 0;
         dataPixels[i*4 + 0] = bit * 255; // R
@@ -95,7 +101,7 @@ export class WebGLStego {
     }
 
     gl.bindTexture(gl.TEXTURE_2D, this.dataTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cols, rows, 0, gl.RGBA, gl.UNSIGNED_BYTE, dataPixels);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, cols, rows, gl.RGBA, gl.UNSIGNED_BYTE, dataPixels);
 
     // 3. Render
     gl.useProgram(this.encodeProgram);
@@ -112,7 +118,6 @@ export class WebGLStego {
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.stegoTexture, 0);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.width, this.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     
     gl.viewport(0, 0, this.width, this.height);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -129,7 +134,7 @@ export class WebGLStego {
     const rows = Math.floor(this.height / 4);
 
     gl.bindTexture(gl.TEXTURE_2D, this.stegoTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, this.width, this.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, stegoImageData.data);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, this.width, this.height, gl.RGBA, gl.UNSIGNED_BYTE, stegoImageData.data);
 
     gl.useProgram(this.decodeProgram);
     gl.activeTexture(gl.TEXTURE0);
@@ -137,10 +142,9 @@ export class WebGLStego {
     gl.uniform1i(gl.getUniformLocation(this.decodeProgram, "u_stego"), 0);
     gl.uniform2f(gl.getUniformLocation(this.decodeProgram, "u_resolution"), this.width, this.height);
 
-    // Render extracted bits to a tiny texture (cols x rows)
+    // Render extracted bits to dataTexture (cols x rows)
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.dataTexture, 0);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, cols, rows, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
     
     gl.viewport(0, 0, cols, rows);
     gl.drawArrays(gl.TRIANGLES, 0, 6);

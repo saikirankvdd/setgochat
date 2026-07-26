@@ -262,6 +262,11 @@ export class VideoStegoDecoder {
       this.displayCanvas.width = this.width;
       this.displayCanvas.height = this.height;
     }
+    try {
+      this.webglStego = new WebGLStego(this.width, this.height);
+    } catch(err) {
+      console.error("[Stealth-Video-Decoder] Failed to resize WebGL GPU Engine:", err);
+    }
     console.log(`[Stealth-Video-Decoder] Resolution dynamically adjusted to ${resolution} (${this.width}x${this.height})`);
   }
 
