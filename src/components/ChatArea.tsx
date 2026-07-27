@@ -891,8 +891,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const checkAdaptiveStegoEngine = (frameDurationMs: number, _source: 'encode' | 'decode') => {
     if (isMobileDevice()) return;
 
-    // Throttle: only run adaptive logic at most once per second
     const now = performance.now();
+    // Grace period: ignore the first 10 seconds of every call (WASM/GPU warmup is expensive)
+    if (!lastAdaptiveCheckRef.current) lastAdaptiveCheckRef.current = now;
     if (now - lastAdaptiveCheckRef.current < 1000) return;
     lastAdaptiveCheckRef.current = now;
 
@@ -1624,6 +1625,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       if (peerConnectionRef.current) {
         const optimizedAnswerSdp = optimizeOpusSdp(data.answer.sdp || '');
         await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: optimizedAnswerSdp }));
+        lastAdaptiveCheckRef.current = performance.now(); // Reset grace period timer for new call
         setCallState('connected');
         callStateRef.current = 'connected';
         

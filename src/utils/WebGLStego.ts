@@ -132,17 +132,16 @@ export class WebGLStego {
     gl.uniform1i(gl.getUniformLocation(this.encodeProgram, "u_data"), 1);
 
     gl.uniform2f(gl.getUniformLocation(this.encodeProgram, "u_resolution"), this.width, this.height);
-
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.stegoTexture, 0);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     
     gl.viewport(0, 0, this.width, this.height);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
 
-    const outPixels = new Uint8Array(this.width * this.height * 4);
-    gl.readPixels(0, 0, this.width, this.height, gl.RGBA, gl.UNSIGNED_BYTE, outPixels);
-    
-    return new ImageData(new Uint8ClampedArray(outPixels.buffer), this.width, this.height);
+    return null;
+  }
+
+  public getCanvas(): HTMLCanvasElement {
+    return this.gl.canvas as HTMLCanvasElement;
   }
 
   public decode(stegoImageData: ImageData): Uint8Array {

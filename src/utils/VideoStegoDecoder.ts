@@ -458,70 +458,55 @@ export class VideoStegoDecoder {
           const bitIdx = 7 - (i % 8);
           ciphertextBytes[byteIdx] |= (extractedBits[320 + i] << bitIdx);
         }
+        // Synchronous PRNG XOR decryption — mirrors encoder's 'VID_ENC_' + pin + '_' + frameIndex
+        const decPrng = new JS_PRNG('VID_ENC_' + this.pin + '_' + frameIndex);
+        const decryptedBytes = new Uint8Array(ciphertextBytes.length);
+        for (let i = 0; i < ciphertextBytes.length; i++) {
+          decryptedBytes[i] = ciphertextBytes[i] ^ Math.floor(decPrng.next() * 256);
+        }
 
-        // 4. Decrypt with AES WebCrypto and decompress raw RGB
+        if (decryptedBytes.length >= 4 &&
+            decryptedBytes[0] === 0x53 &&
+            decryptedBytes[1] === 0x54 &&
+            decryptedBytes[2] === 0x45 &&
+            decryptedBytes[3] === 0x47) {
 
-        const decryptedBytes = await fastVideoDecrypt(ciphertextBytes, this.pin, frameIndex);
+          // Payload is raw RGB bytes (encoder sends 100x75 thumbnail)
+          const rgbBytes = decryptedBytes.subarray(4);
+          const THUMB_W = 100;
+          const THUMB_H = 75;
+          const expectedLen = THUMB_W * THUMB_H * 3;
 
-        if (decryptedBytes.length > 4 && decryptedBytes.length < 500000) {
-          try {
-            // Check 4-byte magic header 'STEG' [0x53, 0x54, 0x45, 0x47]
-            if (
-              decryptedBytes.length >= 4 &&
-              decryptedBytes[0] === 0x53 &&
-              decryptedBytes[1] === 0x54 &&
-              decryptedBytes[2] === 0x45 &&
-              decryptedBytes[3] === 0x47
-            ) {
-              // Payload is a compressed image blob (WebP or JPEG)
-              const imgBytes = decryptedBytes.subarray(4);
-              // createImageBitmap automatically detects format from binary headers
-              const blob = new Blob([imgBytes]);
-              // Use browser-native high-quality upscaling by requesting target resolution directly
-              const bitmapOptions: ImageBitmapOptions = {
-                resizeWidth: displayCanvas.width,
-                resizeHeight: displayCanvas.height,
-                resizeQuality: 'high', // Uses Lanczos or equivalent for best quality
-              };
-              createImageBitmap(blob, bitmapOptions).then((bmp) => {
-                const displayCtx = displayCanvas.getContext('2d');
-                if (displayCtx) {
-                  displayCtx.imageSmoothingEnabled = true;
-                  displayCtx.imageSmoothingQuality = 'high';
-                  displayCtx.drawImage(bmp, 0, 0, displayCanvas.width, displayCanvas.height);
-                }
-                bmp.close();
-                this.isProcessingFrame = false;
-              }).catch(() => {
-                // Fallback: try without resize options if browser doesn't support them
-                createImageBitmap(blob).then((bmp) => {
-                  const displayCtx = displayCanvas.getContext('2d');
-                  if (displayCtx) {
-                    displayCtx.imageSmoothingEnabled = true;
-                    displayCtx.imageSmoothingQuality = 'high';
-                    displayCtx.drawImage(bmp, 0, 0, displayCanvas.width, displayCanvas.height);
-                  }
-                  bmp.close();
-                  this.isProcessingFrame = false;
-                }).catch(() => {
-                  this.isProcessingFrame = false;
-                });
-              });
-              frameDecodedSuccess = true;
-              return; // We return early here because the bitmap decode is async
+          if (rgbBytes.length >= expectedLen) {
+            // Build ImageData from raw RGB
+            const imgData = new ImageData(THUMB_W, THUMB_H);
+            for (let i = 0, j = 0; i < expectedLen; i += 3, j += 4) {
+              imgData.data[j]     = rgbBytes[i];
+              imgData.data[j + 1] = rgbBytes[i + 1];
+              imgData.data[j + 2] = rgbBytes[i + 2];
+              imgData.data[j + 3] = 255;
             }
 
-          } catch (err) {
-            // Temporarily log errors to debug decoding failure
-            console.error('[Stealth-Video-Decoder] Payload decryption/decompression failed:', err);
-          }
-
-          if (this.onFrameDecoded && frameDecodedSuccess) {
-            this.onFrameDecoded('SUCCESS', frameIndex);
+            // Draw to display canvas with upscaling
+            const displayCtx = displayCanvas.getContext('2d');
+            if (displayCtx) {
+              displayCtx.imageSmoothingEnabled = true;
+              displayCtx.imageSmoothingQuality = 'high';
+              // Use an intermediate canvas to hold the thumbnail then scale it
+              const tmpCanvas = document.createElement('canvas');
+              tmpCanvas.width = THUMB_W;
+              tmpCanvas.height = THUMB_H;
+              const tmpCtx = tmpCanvas.getContext('2d')!;
+              tmpCtx.putImageData(imgData, 0, 0);
+              displayCtx.drawImage(tmpCanvas, 0, 0, displayCanvas.width, displayCanvas.height);
+            }
+            frameDecodedSuccess = true;
           }
         }
-      } else {
-         console.log(`[Stealth-Video-Decoder] Invalid dataLength: ${dataLength} (max: ${maxUsable})`);
+
+        if (this.onFrameDecoded && frameDecodedSuccess) {
+          this.onFrameDecoded('SUCCESS', frameIndex);
+        }
       }
 
       if (frameDecodedSuccess) {

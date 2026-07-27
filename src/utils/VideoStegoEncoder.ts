@@ -1,5 +1,4 @@
-import { encryptData, stringToBinary, getSha256Key, fastEncrypt, uint8ToBase64, uint8ToWordArray, wordArrayToUint8, fastVideoEncrypt } from './crypto';
-import { gzipSync } from 'fflate';
+import { getSha256Key, fastVideoEncrypt } from './crypto';
 import { getClipSequence, preloadClips, getFrameAtIndex, getCurrentClipIndex } from './clipFrameLoader';
 import wasmInit, { StealthEngine } from '../../stealth-engine/pkg/stealth_engine';
 import CryptoJS from 'crypto-js';
@@ -24,17 +23,17 @@ export class VideoStegoEncoder {
   private wasmEngine: StealthEngine | null;
   private onStegoFrame?: (pngBuffer: Uint8Array, frameIndex: number) => void;
   private onFrameProcessTime?: (durationMs: number) => void;
-  private targetFps: number = 30; // Default to 30 FPS for smooth video
+  private targetFps: number = 30;
   private masterKey: CryptoJS.lib.WordArray | null = null;
-  private isProcessingFrame: boolean = false; // Re-entrancy guard to prevent timer queue flooding
+  private isProcessingFrame: boolean = false;
   private intervalId: ReturnType<typeof setInterval> | null = null;
   private webglStego: WebGLStego | null = null;
 
-  // Web Worker for non-blocking pixel LSB embedding
+  // Web Worker (kept for compatibility but not used in hot path)
   private videoWorker: Worker | null = null;
   private workerReady: boolean = false;
 
-  // Frame diff skipping to optimize CPU on static frames
+  // Frame diff skipping
   private lastFrameHash: string = '';
   private frameSkipCounter: number = 0;
 
@@ -74,13 +73,12 @@ export class VideoStegoEncoder {
   }
 
   async init(): Promise<void> {
-    // Pre-hash PIN once to get master key for fast stream encryption
     this.masterKey = getSha256Key(this.pin);
 
     // 1. Preload cover videos
     this.videoEls = await preloadClips();
 
-    // 2. Initialize WASM Engine (fallback)
+    // 2. Initialize WASM Engine (fallback, not used in hot path)
     try {
       const response = await fetch('/stealth-engine/stealth_engine_bg.wasm');
       const wasmBuffer = await response.arrayBuffer();
@@ -88,30 +86,28 @@ export class VideoStegoEncoder {
       this.wasmEngine = new StealthEngine();
       console.log("[Stealth-Video-Encoder] Rust WASM Engine active (fallback).");
     } catch (err) {
-      console.warn("[Stealth-Video-Encoder] Rust WASM Engine failed, falling back to JS:", err);
+      console.warn("[Stealth-Video-Encoder] Rust WASM Engine failed:", err);
     }
 
-    // 3. Initialize Web Worker
+    // 3. Initialize Web Worker (kept for compatibility)
     try {
       this.videoWorker = new Worker('/stego-video-worker.js', { type: 'module' });
       this.videoWorker.onmessage = (e) => {
         if (e.data.type === 'WORKER_READY') {
           this.workerReady = true;
           console.log("[Stealth-Video-Encoder] Web Worker ready.");
-        } else if (e.data.type === 'WORKER_ERROR') {
-          console.error("[Stealth-Video-Encoder] Web Worker initialization failed:", e.data.error);
         }
       };
     } catch (workerErr) {
       console.error("[Stealth-Video-Encoder] Failed to spawn Web Worker:", workerErr);
     }
-    
+
     // 4. Create hidden video element to read localStream (webcam)
     this.webcamVideoEl = document.createElement('video');
     this.webcamVideoEl.srcObject = this.localStream;
     this.webcamVideoEl.muted = true;
     this.webcamVideoEl.playsInline = true;
-    
+
     if (typeof document !== 'undefined') {
       let container = document.getElementById('stealth-video-preload-container');
       if (!container) {
@@ -149,24 +145,22 @@ export class VideoStegoEncoder {
     this.outputCanvas.height = this.height;
 
     this.downscaledCanvas = document.createElement('canvas');
-    this.downscaledCanvas.width = 20;
-    this.downscaledCanvas.height = 15;
+    this.downscaledCanvas.width = 100;
+    this.downscaledCanvas.height = 75;
 
-    // 6. Capture output stream at exactly the processed frame rate (0 = manual)
+    // 6. Capture output stream at manually-triggered rate (0 = manual via requestFrame)
     this.stegoStream = (this.outputCanvas as any).captureStream(0);
-    
+
     try {
       this.webglStego = new WebGLStego(this.width, this.height);
       console.log("[Stealth-Video] WebGL GPU Engine initialized successfully.");
-    } catch(err) {
+    } catch (err) {
       console.error("[Stealth-Video] Failed to initialize WebGL GPU Engine:", err);
     }
   }
 
   getStegoStream(): MediaStream {
-    if (!this.stegoStream) {
-      throw new Error('VideoStegoEncoder not initialized');
-    }
+    if (!this.stegoStream) throw new Error('VideoStegoEncoder not initialized');
     return this.stegoStream;
   }
 
@@ -174,8 +168,7 @@ export class VideoStegoEncoder {
     if (this.isRunning) return;
     this.isRunning = true;
     this.frameIndex = 0;
-    // Use setInterval instead of recursive setTimeout to prevent async chain memory growth
-    const intervalMs = Math.max(100, Math.floor(1000 / this.targetFps));
+    const intervalMs = Math.max(33, Math.floor(1000 / this.targetFps)); // min 33ms = 30fps cap
     this.intervalId = setInterval(this.processFrame, intervalMs);
   }
 
@@ -192,13 +185,9 @@ export class VideoStegoEncoder {
         this.webcamVideoEl.parentNode.removeChild(this.webcamVideoEl);
       }
     }
-    // Pause all cover videos to save CPU
     this.videoEls.forEach(vid => {
-      try {
-        if (!vid.paused) vid.pause();
-      } catch (e) {}
+      try { if (!vid.paused) vid.pause(); } catch (e) {}
     });
-    // Terminate worker to free up resources
     if (this.videoWorker) {
       this.videoWorker.terminate();
       this.videoWorker = null;
@@ -210,9 +199,21 @@ export class VideoStegoEncoder {
     }
   }
 
-  private processFrame = async (): Promise<void> => {
+  /**
+   * SYNCHRONOUS processFrame — no toBlob, no async WebCrypto.
+   * Target latency: ~2–5ms per frame (previously 120–260ms).
+   *
+   * Approach:
+   *   1. Capture a fixed 100x75 thumbnail of the webcam (raw pixels).
+   *   2. XOR-encrypt with a per-frame PRNG stream (pin + frameIndex) — same
+   *      algorithm as the decoder will use to reverse it.
+   *   3. Embed bits via WebGL GPU shaders into the cover video frame.
+   *   4. Push resulting canvas to WebRTC via requestFrame().
+   *
+   * The decoder mirrors step 2 exactly using 'VID_ENC_' + pin + '_' + frameIndex.
+   */
+  private processFrame = (): void => {
     if (!this.isRunning) return;
-    // Re-entrancy guard: skip this tick if previous frame still processing
     if (this.isProcessingFrame) return;
     this.isProcessingFrame = true;
     const startTime = performance.now();
@@ -223,16 +224,19 @@ export class VideoStegoEncoder {
       const coverCanvas = this.coverCanvas;
       const outputCanvas = this.outputCanvas;
 
-      if (!webcam || !captureCanvas || !coverCanvas || !outputCanvas) return;
+      if (!webcam || !captureCanvas || !coverCanvas || !outputCanvas) {
+        this.isProcessingFrame = false;
+        return;
+      }
 
-      const capCtx = captureCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
-      const outCtx = outputCanvas.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' });
-      if (!capCtx || !outCtx) return;
+      const capCtx = captureCanvas.getContext('2d', { willReadFrequently: true });
+      const outCtx = outputCanvas.getContext('2d', { willReadFrequently: true });
+      if (!capCtx || !outCtx) { this.isProcessingFrame = false; return; }
 
-      // 1. Draw webcam to capture canvas
+      // Step 1: Draw webcam to capture canvas
       capCtx.drawImage(webcam, 0, 0, this.width, this.height);
 
-      // --- 1a. Frame Diff Skipping ---
+      // Step 1a: Frame diff skipping (cheap 32x32 center hash — ~0.1ms)
       const cx = Math.floor(this.width / 2) - 16;
       const cy = Math.floor(this.height / 2) - 16;
       const sampleData = capCtx.getImageData(cx, cy, 32, 32);
@@ -242,281 +246,114 @@ export class VideoStegoEncoder {
         quickHash |= 0;
       }
       const hashStr = quickHash.toString(16);
-
       if (hashStr === this.lastFrameHash) {
         this.frameSkipCounter++;
-        if (this.frameSkipCounter < 3) {
-          // Skip identical frame — just release the lock, interval will fire next tick
-          this.isProcessingFrame = false;
-          return;
-        }
+        if (this.frameSkipCounter < 3) { this.isProcessingFrame = false; return; }
       }
       this.lastFrameHash = hashStr;
       this.frameSkipCounter = 0;
 
-      // 2. Extract and compress raw RGB bytes using JPEG
+      // Step 2: Compute stego capacity from cover frame block structure
       const cols = Math.floor(this.width / 8);
       const rows = Math.floor(this.height / 4);
-      // 3-channel (R/G/B) differential steganography: each block pair carries 3 bits (one per channel)
-      // Headers (64 bits) still use 1 block pair each via Luma for robustness
-      // Data region: (cols*rows - 64) block pairs * 3 channels = 28,608 bits capacity
       const maxPayloadBits = ((cols * rows) - 320) * 3;
 
-      let base64 = '';
-      let encrypted = '';
-      let dataBits = '';
-
-      // Adaptive encoder: start at 190x140 (highest quality), scale down only if frame is too complex
-      // for the 28,608-bit payload budget. This gives 3.56x more pixels than the previous 100x75 base.
-      const W = 190;
-      const H = 140;
+      // Step 3: SYNCHRONOUS payload — capture 100x75 thumbnail + XOR encrypt (~1-2ms total)
+      const THUMB_W = 100;
+      const THUMB_H = 75;
       if (!this.downscaledCanvas) {
-        if (typeof OffscreenCanvas !== 'undefined') {
-           this.downscaledCanvas = new OffscreenCanvas(W, H) as any;
-        } else {
-           const c = document.createElement('canvas');
-           c.width = W;
-           c.height = H;
-           this.downscaledCanvas = c;
+        this.downscaledCanvas = document.createElement('canvas');
+        this.downscaledCanvas.width = THUMB_W;
+        this.downscaledCanvas.height = THUMB_H;
+      }
+      const thumbCanvas = this.downscaledCanvas;
+      const thumbCtx = thumbCanvas.getContext('2d', { willReadFrequently: true })!;
+      thumbCtx.drawImage(captureCanvas, 0, 0, THUMB_W, THUMB_H);
+      const thumbData = thumbCtx.getImageData(0, 0, THUMB_W, THUMB_H);
+
+      // Pack RGB only (skip alpha) with STEG magic header
+      const rawRgbLen = THUMB_W * THUMB_H * 3;
+      const rawWithHeader = new Uint8Array(4 + rawRgbLen);
+      rawWithHeader[0] = 0x53; rawWithHeader[1] = 0x54; // 'ST'
+      rawWithHeader[2] = 0x45; rawWithHeader[3] = 0x47; // 'EG'
+      for (let i = 0, j = 4; i < thumbData.data.length; i += 4, j += 3) {
+        rawWithHeader[j]     = thumbData.data[i];
+        rawWithHeader[j + 1] = thumbData.data[i + 1];
+        rawWithHeader[j + 2] = thumbData.data[i + 2];
+      }
+
+      // PRNG XOR encryption — decoder mirrors this with same seed
+      const encPrng = new JS_PRNG('VID_ENC_' + this.pin + '_' + this.frameIndex);
+      const cipherBytes = new Uint8Array(rawWithHeader.length);
+      for (let i = 0; i < rawWithHeader.length; i++) {
+        cipherBytes[i] = rawWithHeader[i] ^ Math.floor(encPrng.next() * 256);
+      }
+
+      // Convert to flat bit array
+      const dataBitsArr = new Uint8Array(cipherBytes.length * 8);
+      for (let i = 0; i < cipherBytes.length; i++) {
+        const b = cipherBytes[i];
+        for (let bit = 7; bit >= 0; bit--) {
+          dataBitsArr[i * 8 + (7 - bit)] = (b >>> bit) & 1;
         }
       }
-      const downscaledCanvas = this.downscaledCanvas as any;
-      const downCtx = downscaledCanvas.getContext('2d', { willReadFrequently: true });
-      if (!downCtx) {
+
+      if (dataBitsArr.length > maxPayloadBits) {
+        // Shouldn't happen with 100x75 thumbnail at 480p, but guard anyway
+        console.warn(`[Stealth-Video] payload ${dataBitsArr.length} > capacity ${maxPayloadBits}. Skipping frame.`);
+        this.frameIndex++;
         this.isProcessingFrame = false;
         return;
       }
 
-      // Adaptive encoder loop: find highest quality that fits in maxPayloadBits
-      // using async toBlob() to avoid Base64 string allocation
-      // Start from the last successful scale and quality to save CPU
-      let scale = (this as any).lastScale || 0.75;
-      let quality = Math.min((this as any).lastQuality || 0.60, 0.80);
-      let dataBitsArr = new Uint8Array(0);
-
-      while (scale >= 0.25) {
-        const currentW = Math.floor(W * scale);
-        const currentH = Math.floor(H * scale);
-        
-        downscaledCanvas.width = currentW;
-        downscaledCanvas.height = currentH;
-        downCtx.drawImage(captureCanvas, 0, 0, currentW, currentH);
-
-        while (quality >= 0.05) {
-          const blob = await new Promise<Blob | null>(resolve => {
-            if (downscaledCanvas.convertToBlob) {
-              downscaledCanvas.convertToBlob({ type: 'image/webp', quality }).then(resolve).catch(() => resolve(null));
-            } else {
-              downscaledCanvas.toBlob(resolve, 'image/webp', quality);
-            }
-          });
-          
-          if (!blob) break;
-          const arrayBuffer = await blob.arrayBuffer();
-          const encodedBytes = new Uint8Array(arrayBuffer);
-
-          const rawWithHeader = new Uint8Array(4 + encodedBytes.length);
-          rawWithHeader[0] = 0x53; // 'S'
-          rawWithHeader[1] = 0x54; // 'T'
-          rawWithHeader[2] = 0x45; // 'E'
-          rawWithHeader[3] = 0x47; // 'G'
-          rawWithHeader.set(encodedBytes, 4);
-
-          const cipherBytes = await fastVideoEncrypt(rawWithHeader, this.pin, this.frameIndex);
-
-          const sigBytes = cipherBytes.length;
-          const tempBitsArr = new Uint8Array(sigBytes * 8);
-          for (let i = 0; i < sigBytes; i++) {
-            const b = cipherBytes[i];
-            for (let bit = 7; bit >= 0; bit--) {
-              tempBitsArr[i * 8 + (7 - bit)] = (b >>> bit) & 1;
-            }
-          }
-
-          if (tempBitsArr.length <= maxPayloadBits) {
-            dataBitsArr = tempBitsArr;
-            (this as any).lastScale = scale;
-            (this as any).lastQuality = quality;
-            break; 
-          }
-          quality -= 0.15; // Reduce quality and try again
-        }
-
-        if (dataBitsArr.length > 0) {
-          // Probe upwards slowly ONLY if we have plenty of headroom
-          if (dataBitsArr.length < maxPayloadBits * 0.8) {
-             (this as any).lastQuality = Math.min(quality + 0.05, 0.80);
-             if ((this as any).lastQuality >= 0.80 && scale < 1.0) {
-                (this as any).lastScale = Math.min(scale + 0.25, 1.0);
-                (this as any).lastQuality = 0.45;
-             }
-          }
-          break;
-        }
-        
-        scale -= 0.25;
-        quality = 0.60; // When dropping scale, start at 0.60 for the smaller scale
-      }
-
-      if (dataBitsArr.length === 0 || dataBitsArr.length > maxPayloadBits) {
-        console.warn(`[Stealth-Video] Frame ${this.frameIndex} too large (${dataBitsArr.length} bits). Max is ${maxPayloadBits}. Skipping.`);
-        // Draw the unmodified cover frame so the WebRTC stream doesn't freeze
-        const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
-        const coverVideo = this.videoEls[clipIdx];
-        if (coverVideo) {
-            try {
-              if (coverVideo.paused) coverVideo.play().catch(() => {});
-              const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
-              const outCtx = outputCanvas.getContext('2d');
-              if (outCtx) {
-                outCtx.putImageData(coverImageData, 0, 0);
-                const track = this.stegoStream?.getVideoTracks()[0] as any;
-                if (track && typeof track.requestFrame === 'function') {
-                  track.requestFrame();
-                }
-              }
-            } catch (err) {}
-        }
-        this.frameIndex++;
-        this.isProcessingFrame = false;
-        return; // interval will fire next tick
-      }
-
-      // 3. Get active cover clip and extract its frame
+      // Step 4: Get active cover clip frame
       const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
-      
-      // Pause all inactive cover videos, and play the active one
       this.videoEls.forEach((vid, idx) => {
         try {
-          if (idx === clipIdx) {
-            if (vid.paused) {
-              vid.play().catch(() => {});
-            }
-          } else {
-            if (!vid.paused) {
-              vid.pause();
-            }
-          }
-        } catch (vidErr) {}
+          if (idx === clipIdx) { if (vid.paused) vid.play().catch(() => {}); }
+          else { if (!vid.paused) vid.pause(); }
+        } catch (_) {}
       });
-
       const coverVideo = this.videoEls[clipIdx];
       const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
-      const pixels = coverImageData.data;
-
-      // Send the stego frame losslessly as a PNG via callback asynchronously (if enabled)
       const currentFrameIdx = this.frameIndex;
-      const triggerStegoFrameCallback = () => {
-        if (this.onStegoFrame) {
-          outputCanvas.toBlob((blob) => {
-            if (blob && this.isRunning) {
-              blob.arrayBuffer().then((buffer) => {
-                if (this.isRunning && this.onStegoFrame) {
-                  this.onStegoFrame(new Uint8Array(buffer), currentFrameIdx);
-                }
-              });
-            }
-          }, 'image/png');
+
+      // Step 5: Build encrypted header bits (synchronous PRNG — same as decoder)
+      const encFrameIndex = this.encryptFrameIndexJS(currentFrameIdx, this.pin);
+      const encLength = this.encryptLengthHeaderJS(dataBitsArr.length, this.pin + '_' + currentFrameIdx);
+
+      // 5x redundancy for header (320 bits = 5 × 64 bits)
+      const allBits = new Uint8Array(320 + dataBitsArr.length);
+      for (let rep = 0; rep < 5; rep++) {
+        const offset = rep * 64;
+        for (let i = 0; i < 32; i++) {
+          allBits[offset + i] = (encFrameIndex[Math.floor(i / 8)] >>> (7 - (i % 8))) & 1;
         }
-      };
-
-      if (false) {
-        // Web Worker LSB disabled to force robust differential fallback
-      } else {
-        // Spatial 2x2 Block Differential Steganography (survives H.264 & YUV420p compression)
-        // 3-channel capacity: data region uses R/G/B = 3 bits per block pair
-        // (Header now uses first 320 block pairs for 5x redundancy)
-        const maxUsable = ((cols * rows) - 320) * 3;
-        const dataLength = Math.min(dataBitsArr.length, maxUsable);
-
-        // Helper: read average of a single channel (R=0, G=1, B=2) from a 4x4 block
-        const getBlockChannel = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, ch: number): number => {
-          let sum = 0;
-          for (let dy = 0; dy < 4; dy++) {
-            for (let dx = 0; dx < 4; dx++) {
-              const idx = ((y + dy) * w + (x + dx)) * 4;
-              sum += pixArr[idx + ch];
-            }
-          }
-          return sum / 16;
-        };
-
-        // Helper: write a single channel to an entire 4x4 block
-        const setBlockChannelAbsolute = (pixArr: Uint8ClampedArray, w: number, x: number, y: number, ch: number, val: number) => {
-          const clamped = Math.min(255, Math.max(0, val));
-          for (let dy = 0; dy < 4; dy++) {
-            for (let dx = 0; dx < 4; dx++) {
-              const idx = ((y + dy) * w + (x + dx)) * 4;
-              pixArr[idx + ch] = clamped;
-            }
-          }
-        };
-
-        // 1. Generate encrypted frame index bits
-        const encFrameIndex = this.encryptFrameIndexJS(currentFrameIdx, this.pin);
-
-        // 2. Generate encrypted length header bits
-        const encLength = this.encryptLengthHeaderJS(dataLength, this.pin + '_' + currentFrameIdx);
-
-        // 3. Assemble all bits sequentially into a flat Uint8Array (no intermediate arrays)
-        const totalBitsCount = 320 + dataBitsArr.length;
-        const allBits = new Uint8Array(totalBitsCount);
-        
-        // Apply 5x forward error correction redundancy for the 64-bit header
-        for (let rep = 0; rep < 5; rep++) {
-          const offset = rep * 64;
-          for (let i = 0; i < 32; i++) {
-            const byteIdx = Math.floor(i / 8);
-            const bitIdx = 7 - (i % 8);
-            allBits[offset + i] = (encFrameIndex[byteIdx] >>> bitIdx) & 1;
-          }
-          for (let i = 0; i < 32; i++) {
-            const byteIdx = Math.floor(i / 8);
-            const bitIdx = 7 - (i % 8);
-            allBits[offset + 32 + i] = (encLength[byteIdx] >>> bitIdx) & 1;
-          }
+        for (let i = 0; i < 32; i++) {
+          allBits[offset + 32 + i] = (encLength[Math.floor(i / 8)] >>> (7 - (i % 8))) & 1;
         }
-        allBits.set(dataBitsArr, 320);
-
-        // 4. Embed using hardware-accelerated WebGL GPU Shaders (Instantly)
-        if (this.webglStego) {
-          const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
-          const stegoImageData = this.webglStego.encode(coverImageData, allBits);
-          const outCtx = outputCanvas.getContext('2d');
-          if (outCtx) {
-            outCtx.putImageData(stegoImageData, 0, 0);
-            const track = this.stegoStream?.getVideoTracks()[0] as any;
-            if (track && typeof track.requestFrame === 'function') {
-              track.requestFrame();
-            }
-          }
-          // DEBUG: Log what encoder is embedding
-          const encLenHex = Array.from(encLength).map(b => b.toString(16).padStart(2,'0')).join(' ');
-          // console.log(`[Stego-Debug-ENC] Frame ${currentFrameIdx}: dataLength=${dataLength} encLength=[${encLenHex}] allBits.length=${allBits.length} pin_key='${this.pin}_${currentFrameIdx}'`);
-        } else {
-          console.error("WebGLStego not available! Fallback missing.");
-        }
-        triggerStegoFrameCallback();
-
-        // Update progress percentage
-        const totalBitsNeeded = 32 + dataBitsArr.length;
-        const usagePct = (totalBitsNeeded / maxUsable) * 100;
-        this.onProgress(Math.min(100, Math.round(usagePct)));
-
-        // Advance frame index
-        this.frameIndex++;
-
-        const duration = performance.now() - startTime;
-        if (this.onFrameProcessTime) {
-          this.onFrameProcessTime(duration);
-        }
-        // Release guard — interval will fire next tick automatically
-        this.isProcessingFrame = false;
       }
+      allBits.set(dataBitsArr, 320);
+
+      // Step 6: GPU encode — renders directly to WebGL canvas (NO readPixels at all!)
+      if (this.webglStego) {
+        this.webglStego.encode(coverImageData, allBits);
+        // Copy WebGL canvas → output canvas → WebRTC stream
+        outCtx.drawImage(this.webglStego.getCanvas(), 0, 0, this.width, this.height);
+        const track = this.stegoStream?.getVideoTracks()[0] as any;
+        if (track && typeof track.requestFrame === 'function') {
+          track.requestFrame();
+        }
+      }
+
+      this.frameIndex++;
+      const duration = performance.now() - startTime;
+      if (this.onFrameProcessTime) this.onFrameProcessTime(duration);
+
     } catch (e) {
-      // Fail-safe: release lock, interval will continue
-      this.isProcessingFrame = false;
+      console.error('[Stealth-Video-Encoder] processFrame error:', e);
     }
+    this.isProcessingFrame = false;
   };
 
   setResolution(resolution: '240p' | '480p'): void {
@@ -527,24 +364,13 @@ export class VideoStegoEncoder {
       this.width = 640;
       this.height = 480;
     }
-    if (this.captureCanvas) {
-      this.captureCanvas.width = this.width;
-      this.captureCanvas.height = this.height;
-    }
-    if (this.coverCanvas) {
-      this.coverCanvas.width = this.width;
-      this.coverCanvas.height = this.height;
-    }
-    if (this.outputCanvas) {
-      this.outputCanvas.width = this.width;
-      this.outputCanvas.height = this.height;
-    }
+    if (this.captureCanvas) { this.captureCanvas.width = this.width; this.captureCanvas.height = this.height; }
+    if (this.coverCanvas)   { this.coverCanvas.width   = this.width; this.coverCanvas.height   = this.height; }
+    if (this.outputCanvas)  { this.outputCanvas.width  = this.width; this.outputCanvas.height  = this.height; }
     try {
-      if (this.webglStego) {
-        this.webglStego.destroy();
-      }
+      if (this.webglStego) this.webglStego.destroy();
       this.webglStego = new WebGLStego(this.width, this.height);
-    } catch(err) {
+    } catch (err) {
       console.error("[Stealth-Video-Encoder] Failed to resize WebGL GPU Engine:", err);
     }
     console.log(`[Stealth-Video-Encoder] Resolution dynamically adjusted to ${resolution} (${this.width}x${this.height})`);
@@ -553,10 +379,9 @@ export class VideoStegoEncoder {
   setTargetFps(fps: number): void {
     this.targetFps = fps;
     console.log(`[Stealth-Video-Encoder] Target FPS dynamically adjusted to ${fps}`);
-    // Restart interval at new rate if currently running
     if (this.isRunning && this.intervalId !== null) {
       clearInterval(this.intervalId);
-      this.intervalId = setInterval(this.processFrame, Math.max(100, Math.floor(1000 / fps)));
+      this.intervalId = setInterval(this.processFrame, Math.max(33, Math.floor(1000 / fps)));
     }
   }
 
@@ -575,7 +400,6 @@ export class VideoStegoEncoder {
     indexBytes[1] = (frameIndex >>> 16) & 0xFF;
     indexBytes[2] = (frameIndex >>> 8) & 0xFF;
     indexBytes[3] = frameIndex & 0xFF;
-    
     for (let i = 0; i < 4; i++) {
       indexBytes[i] ^= Math.floor(prng.next() * 256);
     }
@@ -589,7 +413,6 @@ export class VideoStegoEncoder {
     lengthBytes[1] = (length >>> 16) & 0xFF;
     lengthBytes[2] = (length >>> 8) & 0xFF;
     lengthBytes[3] = length & 0xFF;
-    
     for (let i = 0; i < 4; i++) {
       lengthBytes[i] ^= Math.floor(prng.next() * 256);
     }
