@@ -1006,9 +1006,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             isRevealed: true,
           }];
         });
-      } else if (state === 'failed' || state === 'closed') {
-        console.warn("[Stealth-Call] WebRTC connection failed or closed. Ending call. State:", state);
-        if (callStateRef.current === 'connected' || state === 'closed') {
+      } else if (state === 'failed' || state === 'closed' || state === 'disconnected') {
+        console.warn("[Stealth-Call] WebRTC connection failed, closed, or disconnected. Ending call. State:", state);
+        if (callStateRef.current === 'connected' || state === 'closed' || state === 'disconnected') {
           endCall(true);
         }
       }
@@ -2728,6 +2728,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
 
     setCallState('idle');
+    callStateRef.current = 'idle';
     setWebrtcConnected(false);
     pendingCandidates.current = [];
 
@@ -2762,9 +2763,27 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
       delete (window as any).stealthDecodePipelineActive;
 
-      // 3. Stop audio context
+      // 3. Clean up processors and players FIRST before closing context
+      const micProcessor = (window as any).stealthMicProcessor;
+      if (micProcessor) {
+        micProcessor.onaudioprocess = null;
+        try { micProcessor.disconnect(); } catch (e) {}
+        delete (window as any).stealthMicProcessor;
+      }
+      const micSource = (window as any).stealthMicSource;
+      if (micSource) {
+        try { micSource.disconnect(); } catch (e) {}
+        delete (window as any).stealthMicSource;
+      }
+      if ((window as any).stealthVoicePlayerNode) {
+        (window as any).stealthVoicePlayerNode.port.postMessage({ type: 'STOP' });
+        try { (window as any).stealthVoicePlayerNode.disconnect(); } catch (e) {}
+        delete (window as any).stealthVoicePlayerNode;
+      }
+
+      // 4. Stop audio context
       if (stealthAudioCtxRef.current) {
-        stealthAudioCtxRef.current.close();
+        stealthAudioCtxRef.current.close().catch(() => {});
         stealthAudioCtxRef.current = null;
         workletModuleLoadedRef.current = false;
       }
@@ -2772,24 +2791,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       coverSongRef.current = null;
       clockOffsetRef.current = null;
       delete (window as any).stealthRemoteSource;
-
-      // Clean up processors and players
-      const micProcessor = (window as any).stealthMicProcessor;
-      if (micProcessor) {
-        micProcessor.onaudioprocess = null;
-        micProcessor.disconnect();
-        delete (window as any).stealthMicProcessor;
-      }
-      const micSource = (window as any).stealthMicSource;
-      if (micSource) {
-        micSource.disconnect();
-        delete (window as any).stealthMicSource;
-      }
-      if ((window as any).stealthVoicePlayerNode) {
-        (window as any).stealthVoicePlayerNode.port.postMessage({ type: 'STOP' });
-        (window as any).stealthVoicePlayerNode.disconnect();
-        delete (window as any).stealthVoicePlayerNode;
-      }
 
       console.log("[Stealth] Steganography context and worklets cleaned up.");
     } catch (e) {

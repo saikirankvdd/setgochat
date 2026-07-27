@@ -82,8 +82,8 @@ export class WebGLStego {
     // 2. Upload Data Texture
     const dataPixels = new Uint8Array(cols * rows * 4); // RGBA per block pair
     
-    // Header (64 bits) -> packed into first 64 block pairs
-    for(let i=0; i<64; i++) {
+    // Header (320 bits) -> packed into first 320 block pairs
+    for(let i=0; i<320; i++) {
         const bit = i < bits.length ? bits[i] : 0;
         dataPixels[i*4 + 0] = bit * 255; // R
         dataPixels[i*4 + 1] = bit * 255; // G
@@ -92,8 +92,8 @@ export class WebGLStego {
     }
     
     // Data region
-    let bitIdx = 64;
-    for(let i=64; i<cols*rows; i++) {
+    let bitIdx = 320;
+    for(let i=320; i<cols*rows; i++) {
         dataPixels[i*4 + 0] = bitIdx < bits.length ? bits[bitIdx++] * 255 : 0; // R
         dataPixels[i*4 + 1] = bitIdx < bits.length ? bits[bitIdx++] * 255 : 0; // G
         dataPixels[i*4 + 2] = bitIdx < bits.length ? bits[bitIdx++] * 255 : 0; // B

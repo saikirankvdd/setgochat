@@ -383,7 +383,7 @@ export class VideoStegoDecoder {
         frameIndex < 1000000;
 
       if (!isValidFrameIndex) {
-        console.log(`[Stealth-Video-Decoder] Invalid frameIndex: ${frameIndex}`);
+        // console.log(`[Stealth-Video-Decoder] Invalid frameIndex: ${frameIndex}`);
         // Draw the cover frame using our current local frameIndex
         const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
         const coverVideo = this.videoEls[clipIdx];

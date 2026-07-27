@@ -256,7 +256,7 @@ export class VideoStegoEncoder {
       // 3-channel (R/G/B) differential steganography: each block pair carries 3 bits (one per channel)
       // Headers (64 bits) still use 1 block pair each via Luma for robustness
       // Data region: (cols*rows - 64) block pairs * 3 channels = 28,608 bits capacity
-      const maxPayloadBits = ((cols * rows) - 64) * 3; // ~28,608 bits at 640x480
+      const maxPayloadBits = ((cols * rows) - 320) * 3;
 
       let base64 = '';
       let encrypted = '';
