@@ -16,7 +16,8 @@ export class VideoStegoDecoder {
   private clipSequence: number[];
   private videoEls: HTMLVideoElement[];
   private decodeCanvas: HTMLCanvasElement | null;
-  private coverCanvas: HTMLCanvasElement | null;
+  private invalidFrameCount: number = 0;
+  private coverCanvas: HTMLCanvasElement | null = null;
   private tempCanvas: HTMLCanvasElement | null = null;
   private decImageData: ImageData | null = null;
   private isRunning: boolean;
@@ -385,28 +386,31 @@ export class VideoStegoDecoder {
       const frameIndex = this.decryptFrameIndexJS(encFrameBytes, this.pin);
 
       // Sanity check: is the decrypted frameIndex valid?
-      const isValidFrameIndex = 
+      let isValidFrameIndex = frameIndex !== null && 
         frameIndex >= 0 && 
         frameIndex < 1000000;
 
       if (!isValidFrameIndex) {
-        // console.log(`[Stealth-Video-Decoder] Invalid frameIndex: ${frameIndex}`);
-        // Draw the cover frame using our current local frameIndex
-        const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
-        const coverVideo = this.videoEls[clipIdx];
-        if (coverVideo) {
-          if (coverVideo.paused && !coverVideo.error) {
-            coverVideo.play().catch(() => {});
+        this.invalidFrameCount++;
+        
+        if (this.invalidFrameCount > 10) {
+          // If we've seen 10 invalid frames in a row, the stego stream is probably gone or fully broken.
+          // Draw the cover frame so the user at least sees a smooth video.
+          const clipIdx = getCurrentClipIndex(this.frameIndex, this.clipSequence);
+          const coverVideo = this.videoEls[clipIdx];
+          if (coverVideo) {
+            const displayCtx = displayCanvas.getContext('2d');
+            if (displayCtx) displayCtx.drawImage(coverVideo, 0, 0, displayCanvas.width, displayCanvas.height);
           }
-          const displayCtx = displayCanvas.getContext('2d');
-          if (displayCtx) {
-            displayCtx.drawImage(coverVideo, 0, 0, displayCanvas.width, displayCanvas.height);
-          }
+          this.frameIndex++;
         }
-        this.frameIndex++;
+        
         this.isProcessingFrame = false;
-        return; // interval will retry next tick
+        return;
       }
+      
+      // Valid frame! Reset the invalid counter.
+      this.invalidFrameCount = 0;
 
       // console.log(`[Stealth-Video-Decoder] Processing frameIndex: ${frameIndex}`);
 

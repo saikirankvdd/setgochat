@@ -152,8 +152,8 @@ export class VideoStegoEncoder {
     this.downscaledCanvas.width = 20;
     this.downscaledCanvas.height = 15;
 
-    // 6. Capture output stream at 30 fps
-    this.stegoStream = (this.outputCanvas as any).captureStream(this.targetFps);
+    // 6. Capture output stream at exactly the processed frame rate (0 = manual)
+    this.stegoStream = (this.outputCanvas as any).captureStream(0);
     
     try {
       this.webglStego = new WebGLStego(this.width, this.height);
@@ -284,8 +284,9 @@ export class VideoStegoEncoder {
 
       // Adaptive encoder loop: find highest quality that fits in maxPayloadBits
       // using async toBlob() to avoid Base64 string allocation
-      let scale = 1.0;
-      let quality = 0.80;
+      // Start from the last successful scale and quality to save CPU, but try to gradually upgrade
+      let scale = (this as any).lastScale || 1.0;
+      let quality = Math.min((this as any).lastQuality || 0.80, 0.80);
       let dataBitsArr = new Uint8Array(0);
 
       while (scale >= 0.25) {
@@ -328,12 +329,20 @@ export class VideoStegoEncoder {
 
           if (tempBitsArr.length <= maxPayloadBits) {
             dataBitsArr = tempBitsArr;
+            (this as any).lastScale = scale;
+            (this as any).lastQuality = quality;
             break; // Fits within payload budget!
           }
           quality -= 0.15; // Reduce quality and try again
         }
 
         if (dataBitsArr.length > 0) {
+          // Slowly attempt to upgrade quality on the next frame to recover detail
+          (this as any).lastQuality = Math.min(((this as any).lastQuality || 0.80) + 0.05, 0.80);
+          if ((this as any).lastQuality >= 0.80 && (this as any).lastScale < 1.0) {
+            (this as any).lastScale = Math.min(((this as any).lastScale || 1.0) + 0.25, 1.0);
+            (this as any).lastQuality = 0.60;
+          }
           break; // Found a working scale and quality!
         }
         
@@ -351,7 +360,13 @@ export class VideoStegoEncoder {
               if (coverVideo.paused) coverVideo.play().catch(() => {});
               const coverImageData = getFrameAtIndex(coverVideo, this.frameIndex, coverCanvas);
               const outCtx = outputCanvas.getContext('2d');
-              if (outCtx) outCtx.putImageData(coverImageData, 0, 0);
+              if (outCtx) {
+                outCtx.putImageData(coverImageData, 0, 0);
+                const track = this.stegoStream?.getVideoTracks()[0] as any;
+                if (track && typeof track.requestFrame === 'function') {
+                  track.requestFrame();
+                }
+              }
             } catch (err) {}
         }
         this.frameIndex++;
@@ -462,6 +477,10 @@ export class VideoStegoEncoder {
           const outCtx = outputCanvas.getContext('2d');
           if (outCtx) {
             outCtx.putImageData(stegoImageData, 0, 0);
+            const track = this.stegoStream?.getVideoTracks()[0] as any;
+            if (track && typeof track.requestFrame === 'function') {
+              track.requestFrame();
+            }
           }
           // DEBUG: Log what encoder is embedding
           const encLenHex = Array.from(encLength).map(b => b.toString(16).padStart(2,'0')).join(' ');
