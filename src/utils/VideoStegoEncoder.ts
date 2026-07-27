@@ -397,8 +397,9 @@ export class VideoStegoEncoder {
         // Web Worker LSB disabled to force robust differential fallback
       } else {
         // Spatial 2x2 Block Differential Steganography (survives H.264 & YUV420p compression)
-        // 3-channel capacity: data region uses R/G/B = 3 bits per block pair = 28,608 bits total
-        const maxUsable = ((cols * rows) - 64) * 3;
+        // 3-channel capacity: data region uses R/G/B = 3 bits per block pair
+        // (Header now uses first 320 block pairs for 5x redundancy)
+        const maxUsable = ((cols * rows) - 320) * 3;
         const dataLength = Math.min(dataBitsArr.length, maxUsable);
 
         // Helper: read average of a single channel (R=0, G=1, B=2) from a 4x4 block
@@ -431,19 +432,24 @@ export class VideoStegoEncoder {
         const encLength = this.encryptLengthHeaderJS(dataLength, this.pin + '_' + currentFrameIdx);
 
         // 3. Assemble all bits sequentially into a flat Uint8Array (no intermediate arrays)
-        const totalBitsCount = 32 + 32 + dataBitsArr.length;
+        const totalBitsCount = 320 + dataBitsArr.length;
         const allBits = new Uint8Array(totalBitsCount);
-        for (let i = 0; i < 32; i++) {
-          const byteIdx = Math.floor(i / 8);
-          const bitIdx = 7 - (i % 8);
-          allBits[i] = (encFrameIndex[byteIdx] >>> bitIdx) & 1;
+        
+        // Apply 5x forward error correction redundancy for the 64-bit header
+        for (let rep = 0; rep < 5; rep++) {
+          const offset = rep * 64;
+          for (let i = 0; i < 32; i++) {
+            const byteIdx = Math.floor(i / 8);
+            const bitIdx = 7 - (i % 8);
+            allBits[offset + i] = (encFrameIndex[byteIdx] >>> bitIdx) & 1;
+          }
+          for (let i = 0; i < 32; i++) {
+            const byteIdx = Math.floor(i / 8);
+            const bitIdx = 7 - (i % 8);
+            allBits[offset + 32 + i] = (encLength[byteIdx] >>> bitIdx) & 1;
+          }
         }
-        for (let i = 0; i < 32; i++) {
-          const byteIdx = Math.floor(i / 8);
-          const bitIdx = 7 - (i % 8);
-          allBits[32 + i] = (encLength[byteIdx] >>> bitIdx) & 1;
-        }
-        allBits.set(dataBitsArr, 64);
+        allBits.set(dataBitsArr, 320);
 
         // 4. Embed using hardware-accelerated WebGL GPU Shaders (Instantly)
         if (this.webglStego) {
@@ -455,7 +461,7 @@ export class VideoStegoEncoder {
           }
           // DEBUG: Log what encoder is embedding
           const encLenHex = Array.from(encLength).map(b => b.toString(16).padStart(2,'0')).join(' ');
-          console.log(`[Stego-Debug-ENC] Frame ${currentFrameIdx}: dataLength=${dataLength} encLength=[${encLenHex}] allBits.length=${allBits.length} pin_key='${this.pin}_${currentFrameIdx}'`);
+          // console.log(`[Stego-Debug-ENC] Frame ${currentFrameIdx}: dataLength=${dataLength} encLength=[${encLenHex}] allBits.length=${allBits.length} pin_key='${this.pin}_${currentFrameIdx}'`);
         } else {
           console.error("WebGLStego not available! Fallback missing.");
         }

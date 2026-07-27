@@ -154,14 +154,14 @@ export class WebGLStego {
     gl.readPixels(0, 0, cols, rows, gl.RGBA, gl.UNSIGNED_BYTE, extractedData);
     
     // Pack RGBA back into bit array
-    const maxUsable = ((cols * rows) - 64) * 3 + 64;
+    const maxUsable = ((cols * rows) - 320) * 3 + 320;
     const bits = new Uint8Array(maxUsable);
     
-    for(let i=0; i<64; i++) {
+    for(let i=0; i<320; i++) {
         bits[i] = extractedData[i*4 + 1] > 127 ? 1 : 0; // G channel for header
     }
-    let bitIdx = 64;
-    for(let i=64; i<cols*rows; i++) {
+    let bitIdx = 320;
+    for(let i=320; i<cols*rows; i++) {
         bits[bitIdx++] = extractedData[i*4 + 0] > 127 ? 1 : 0; // R
         bits[bitIdx++] = extractedData[i*4 + 1] > 127 ? 1 : 0; // G
         bits[bitIdx++] = extractedData[i*4 + 2] > 127 ? 1 : 0; // B
@@ -224,7 +224,7 @@ export class WebGLStego {
         float targetDiff = 80.0;
         vec4 shiftA = vec4(0.0);
 
-        if (blockPairIdx < 64.0) {
+        if (blockPairIdx < 320.0) {
             // Header: 1 bit per block pair, using Luma (R+G+B)/3
             float lumaA = (avgA.r + avgA.g + avgA.b) / 3.0;
             float lumaB = (avgB.r + avgB.g + avgB.b) / 3.0;
@@ -310,7 +310,7 @@ export class WebGLStego {
         vec4 avgA = (sumA / 16.0) * 255.0;
         vec4 avgB = (sumB / 16.0) * 255.0;
         
-        if (blockPairIdx < 64.0) {
+        if (blockPairIdx < 320.0) {
             float lumaA = (avgA.r + avgA.g + avgA.b) / 3.0;
             float lumaB = (avgB.r + avgB.g + avgB.b) / 3.0;
             float diff = lumaA - lumaB;

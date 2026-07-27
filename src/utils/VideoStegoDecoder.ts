@@ -358,12 +358,22 @@ export class VideoStegoDecoder {
       }
 
 
-      // 1. Parse frame index (bits 0..31)
+      // 0. Perform 5x majority vote for the 64-bit header (320 bits)
+      const votedHeaderBits = new Uint8Array(64);
+      for (let i = 0; i < 64; i++) {
+        let sum = 0;
+        for (let rep = 0; rep < 5; rep++) {
+          sum += extractedBits[rep * 64 + i];
+        }
+        votedHeaderBits[i] = sum >= 3 ? 1 : 0;
+      }
+
+      // 1. Parse frame index (bits 0..31 of voted header)
       const encFrameBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
         const byteIdx = Math.floor(i / 8);
         const bitIdx = 7 - (i % 8);
-        encFrameBytes[byteIdx] |= (extractedBits[i] << bitIdx);
+        encFrameBytes[byteIdx] |= (votedHeaderBits[i] << bitIdx);
       }
       const frameIndex = this.decryptFrameIndexJS(encFrameBytes, this.pin);
 
@@ -391,7 +401,7 @@ export class VideoStegoDecoder {
         return; // interval will retry next tick
       }
 
-      console.log(`[Stealth-Video-Decoder] Processing frameIndex: ${frameIndex}`);
+      // console.log(`[Stealth-Video-Decoder] Processing frameIndex: ${frameIndex}`);
 
       if (frameIndex === this.lastDecodedFrameIndex) {
         // Skip decoding — same frame already decoded
@@ -404,29 +414,29 @@ export class VideoStegoDecoder {
       const cols = Math.floor(cWidth / 8);
       const rows = Math.floor(cHeight / 4);
       // 3-channel capacity: data region uses R/G/B = 3 bits per block pair
-      const maxUsable = ((cols * rows) - 64) * 3; // ~28,608 bits at 640x480
+      const maxUsable = ((cols * rows) - 320) * 3;
 
       // DEBUG: Count how many bits are 1 vs 0 in header
       let headerBitCount = 0;
       try {
-        headerBitCount = Array.from(extractedBits.subarray(0, 64)).filter(b => b === 1).length;
+        headerBitCount = Array.from(extractedBits.subarray(0, 320)).filter(b => b === 1).length;
       } catch (err) {}
-      console.log(`[Stego-Debug] Frame ${frameIndex}: Header bits (0-63) = ${headerBitCount} ones out of 64. maxUsable=${maxUsable}`);
+      // console.log(`[Stego-Debug] Frame ${frameIndex}: Header bits (0-319) = ${headerBitCount} ones out of 320. maxUsable=${maxUsable}`);
 
       // 2. Parse length header (bits 32..63)
       const encLenBytes = new Uint8Array(4);
       for (let i = 0; i < 32; i++) {
         const byteIdx = Math.floor(i / 8);
         const bitIdx = 7 - (i % 8);
-        encLenBytes[byteIdx] |= (extractedBits[32 + i] << bitIdx);
+        encLenBytes[byteIdx] |= (votedHeaderBits[32 + i] << bitIdx);
       }
       const rawEncLen = Array.from(encLenBytes).map(b => b.toString(16).padStart(2,'0')).join(' ');
       let dataLength = this.decryptLengthHeaderJS(encLenBytes, this.pin + '_' + frameIndex);
-      console.log(`[Stego-Debug] Frame ${frameIndex}: encLenBytes=[${rawEncLen}] decryptedDataLength=${dataLength} pin_key='${this.pin}_${frameIndex}'`);
+      // console.log(`[Stego-Debug] Frame ${frameIndex}: encLenBytes=[${rawEncLen}] decryptedDataLength=${dataLength} pin_key='${this.pin}_${frameIndex}'`);
 
       let frameDecodedSuccess = false;
       if (dataLength > 0 && dataLength <= maxUsable) {
-        console.log(`[Stealth-Video-Decoder] Extracted dataLength: ${dataLength}`);
+        // console.log(`[Stealth-Video-Decoder] Extracted dataLength: ${dataLength}`);
         
         // 3. Parse data bits
         const numBytes = Math.floor(dataLength / 8);
@@ -434,7 +444,7 @@ export class VideoStegoDecoder {
         for (let i = 0; i < dataLength; i++) {
           const byteIdx = Math.floor(i / 8);
           const bitIdx = 7 - (i % 8);
-          ciphertextBytes[byteIdx] |= (extractedBits[64 + i] << bitIdx);
+          ciphertextBytes[byteIdx] |= (extractedBits[320 + i] << bitIdx);
         }
 
         // 4. Decrypt with AES WebCrypto and decompress raw RGB

@@ -2741,6 +2741,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     
     // --- V2 STEALTH CLEANUP ---
     try {
+      // 1. First, Stop video stego loops (prevents infinite intervals if audio ctx crashes)
+      if (videoEncoderRef.current) {
+        videoEncoderRef.current.stop();
+        videoEncoderRef.current = null;
+      }
+      if (videoDecoderRef.current) {
+        videoDecoderRef.current.stop();
+        videoDecoderRef.current = null;
+      }
+
+      // 2. Stop worklets
       stealthWorkletRef.current?.port.postMessage({ type: 'STOP' });
       stealthWorkletRef.current = null;
       
@@ -2751,21 +2762,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
       delete (window as any).stealthDecodePipelineActive;
 
+      // 3. Stop audio context
       if (stealthAudioCtxRef.current) {
         stealthAudioCtxRef.current.close();
         stealthAudioCtxRef.current = null;
-        workletModuleLoadedRef.current = false; // reset so next call loads the module into fresh ctx
+        workletModuleLoadedRef.current = false;
       }
 
       coverSongRef.current = null;
       clockOffsetRef.current = null;
       delete (window as any).stealthRemoteSource;
-
-      // Stop video stego if active
-      videoEncoderRef.current?.stop();
-      videoEncoderRef.current = null;
-      videoDecoderRef.current?.stop();
-      videoDecoderRef.current = null;
 
       // Clean up processors and players
       const micProcessor = (window as any).stealthMicProcessor;
