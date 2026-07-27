@@ -1590,11 +1590,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rStream = remoteStreamRef.current || new MediaStream();
           rStream.addTrack(event.track);
         }
-        // Disable cover audio track from WebRTC so user doesn't hear it
-        rStream.getAudioTracks().forEach(track => {
-          track.enabled = false;
-          console.log("[Stealth-RTP] Disabled remote WebRTC audio track to mute cover song.");
-        });
+        // DO NOT disable track.enabled = false here, or AudioContext receives silence!
+        // The track is muted via silentGain node in startStealthAudioDecode.
         remoteStreamRef.current = rStream;
         const freshStream = new MediaStream(rStream.getTracks());
         setRemoteStream(freshStream);
@@ -2496,10 +2493,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           rStream.addTrack(event.track);
         }
         // Disable cover audio track from WebRTC so user doesn't hear it
-        rStream.getAudioTracks().forEach(track => {
-          track.enabled = false;
-          console.log("[Stealth-RTP] Disabled remote WebRTC audio track to mute cover song.");
-        });
+        // The track is muted via silentGain node in startStealthAudioDecode.
+        console.log("[Stealth-RTP] Remote WebRTC audio track received.");
         remoteStreamRef.current = rStream;
         const freshStream = new MediaStream(rStream.getTracks());
         setRemoteStream(freshStream);
@@ -2550,11 +2545,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const acceptCall = async () => {
-    // Capture user gesture synchronously for mobile AudioContext activation
-    const gestureAudioCtx = getOrCreateAudioContext();
-    if (gestureAudioCtx && gestureAudioCtx.state === 'suspended') {
-      gestureAudioCtx.resume().catch(err => console.warn("[Stealth-Gesture] AudioContext resume failed:", err));
-    }
+    // Mobile Safari requires AudioContext to be resumed synchronously in the click handler!
+    const initCtx = getOrCreateAudioContext();
+    if (initCtx.state === 'suspended') initCtx.resume().catch(()=>{});
 
     // Initialize decode pipeline immediately in user gesture to ensure it's allowed to play audio
     await startStealthAudioDecode(null as any);

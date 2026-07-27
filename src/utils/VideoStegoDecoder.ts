@@ -287,6 +287,7 @@ export class VideoStegoDecoder {
     // Re-entrancy guard: if previous frame is still processing, skip this tick
     if (this.isProcessingFrame) return;
     this.isProcessingFrame = true;
+    const startTime = performance.now();
 
     try {
       const video = this.remoteVideoEl;
@@ -549,6 +550,9 @@ export class VideoStegoDecoder {
       console.error("[Stealth-Video-Decoder] CRASH inside processFrame:", e);
     }
 
+    if (this.onFrameProcessTime) {
+      this.onFrameProcessTime(performance.now() - startTime);
+    }
     this.isProcessingFrame = false;
     // interval handles next tick automatically
   };

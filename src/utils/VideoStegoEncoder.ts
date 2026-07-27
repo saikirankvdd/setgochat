@@ -270,12 +270,17 @@ export class VideoStegoEncoder {
       // for the 28,608-bit payload budget. This gives 3.56x more pixels than the previous 100x75 base.
       const W = 190;
       const H = 140;
-      const downscaledCanvas = this.downscaledCanvas || document.createElement('canvas');
       if (!this.downscaledCanvas) {
-        this.downscaledCanvas = downscaledCanvas;
-        downscaledCanvas.width = W;
-        downscaledCanvas.height = H;
+        if (typeof OffscreenCanvas !== 'undefined') {
+           this.downscaledCanvas = new OffscreenCanvas(W, H) as any;
+        } else {
+           const c = document.createElement('canvas');
+           c.width = W;
+           c.height = H;
+           this.downscaledCanvas = c;
+        }
       }
+      const downscaledCanvas = this.downscaledCanvas as any;
       const downCtx = downscaledCanvas.getContext('2d', { willReadFrequently: true });
       if (!downCtx) {
         this.isProcessingFrame = false;
@@ -284,9 +289,9 @@ export class VideoStegoEncoder {
 
       // Adaptive encoder loop: find highest quality that fits in maxPayloadBits
       // using async toBlob() to avoid Base64 string allocation
-      // Start from the last successful scale and quality to save CPU, but try to gradually upgrade
-      let scale = (this as any).lastScale || 1.0;
-      let quality = Math.min((this as any).lastQuality || 0.80, 0.80);
+      // Start from the last successful scale and quality to save CPU
+      let scale = (this as any).lastScale || 0.75;
+      let quality = Math.min((this as any).lastQuality || 0.60, 0.80);
       let dataBitsArr = new Uint8Array(0);
 
       while (scale >= 0.25) {
@@ -299,14 +304,17 @@ export class VideoStegoEncoder {
 
         while (quality >= 0.05) {
           const blob = await new Promise<Blob | null>(resolve => {
-            downscaledCanvas.toBlob(resolve, 'image/webp', quality);
+            if (downscaledCanvas.convertToBlob) {
+              downscaledCanvas.convertToBlob({ type: 'image/webp', quality }).then(resolve).catch(() => resolve(null));
+            } else {
+              downscaledCanvas.toBlob(resolve, 'image/webp', quality);
+            }
           });
           
           if (!blob) break;
           const arrayBuffer = await blob.arrayBuffer();
           const encodedBytes = new Uint8Array(arrayBuffer);
 
-          // Add 4-byte magic header 'STEG' before encryption
           const rawWithHeader = new Uint8Array(4 + encodedBytes.length);
           rawWithHeader[0] = 0x53; // 'S'
           rawWithHeader[1] = 0x54; // 'T'
@@ -314,10 +322,8 @@ export class VideoStegoEncoder {
           rawWithHeader[3] = 0x47; // 'G'
           rawWithHeader.set(encodedBytes, 4);
 
-          // Hardware-accelerated AES-GCM encryption (fast, non-blocking)
           const cipherBytes = await fastVideoEncrypt(rawWithHeader, this.pin, this.frameIndex);
 
-          // Convert ciphertext directly to a Uint8Array of bits (0 or 1)
           const sigBytes = cipherBytes.length;
           const tempBitsArr = new Uint8Array(sigBytes * 8);
           for (let i = 0; i < sigBytes; i++) {
@@ -331,23 +337,25 @@ export class VideoStegoEncoder {
             dataBitsArr = tempBitsArr;
             (this as any).lastScale = scale;
             (this as any).lastQuality = quality;
-            break; // Fits within payload budget!
+            break; 
           }
           quality -= 0.15; // Reduce quality and try again
         }
 
         if (dataBitsArr.length > 0) {
-          // Slowly attempt to upgrade quality on the next frame to recover detail
-          (this as any).lastQuality = Math.min(((this as any).lastQuality || 0.80) + 0.05, 0.80);
-          if ((this as any).lastQuality >= 0.80 && (this as any).lastScale < 1.0) {
-            (this as any).lastScale = Math.min(((this as any).lastScale || 1.0) + 0.25, 1.0);
-            (this as any).lastQuality = 0.60;
+          // Probe upwards slowly ONLY if we have plenty of headroom
+          if (dataBitsArr.length < maxPayloadBits * 0.8) {
+             (this as any).lastQuality = Math.min(quality + 0.05, 0.80);
+             if ((this as any).lastQuality >= 0.80 && scale < 1.0) {
+                (this as any).lastScale = Math.min(scale + 0.25, 1.0);
+                (this as any).lastQuality = 0.45;
+             }
           }
-          break; // Found a working scale and quality!
+          break;
         }
         
         scale -= 0.25;
-        quality = 0.60;
+        quality = 0.60; // When dropping scale, start at 0.60 for the smaller scale
       }
 
       if (dataBitsArr.length === 0 || dataBitsArr.length > maxPayloadBits) {
