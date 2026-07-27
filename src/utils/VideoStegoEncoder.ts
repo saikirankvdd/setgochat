@@ -204,6 +204,10 @@ export class VideoStegoEncoder {
       this.videoWorker = null;
       this.workerReady = false;
     }
+    if (this.webglStego) {
+      this.webglStego.destroy();
+      this.webglStego = null;
+    }
   }
 
   private processFrame = async (): Promise<void> => {
@@ -507,6 +511,14 @@ export class VideoStegoEncoder {
     if (this.outputCanvas) {
       this.outputCanvas.width = this.width;
       this.outputCanvas.height = this.height;
+    }
+    try {
+      if (this.webglStego) {
+        this.webglStego.destroy();
+      }
+      this.webglStego = new WebGLStego(this.width, this.height);
+    } catch(err) {
+      console.error("[Stealth-Video-Encoder] Failed to resize WebGL GPU Engine:", err);
     }
     console.log(`[Stealth-Video-Encoder] Resolution dynamically adjusted to ${resolution} (${this.width}x${this.height})`);
   }

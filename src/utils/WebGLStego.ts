@@ -70,6 +70,23 @@ export class WebGLStego {
     return tex;
   }
 
+  public destroy(): void {
+    const gl = this.gl;
+    if (!gl) return;
+    
+    gl.deleteTexture(this.coverTexture);
+    gl.deleteTexture(this.dataTexture);
+    gl.deleteTexture(this.stegoTexture);
+    gl.deleteFramebuffer(this.fbo);
+    
+    gl.deleteProgram(this.encodeProgram);
+    gl.deleteProgram(this.decodeProgram);
+
+    // Lose the WebGL context to free up browser limits immediately
+    const ext = gl.getExtension('WEBGL_lose_context');
+    if (ext) ext.loseContext();
+  }
+
   public encode(coverImageData: ImageData, bits: Uint8Array): ImageData {
     const gl = this.gl;
     const cols = Math.floor(this.width / 8);

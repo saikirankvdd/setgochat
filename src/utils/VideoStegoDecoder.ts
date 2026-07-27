@@ -131,6 +131,10 @@ export class VideoStegoDecoder {
         if (!vid.paused) vid.pause();
       } catch (e) {}
     });
+    if (this.webglStego) {
+      this.webglStego.destroy();
+      this.webglStego = null;
+    }
   }
 
   public decodeFrameFromImage(img: HTMLImageElement): void {
@@ -263,6 +267,9 @@ export class VideoStegoDecoder {
       this.displayCanvas.height = this.height;
     }
     try {
+      if (this.webglStego) {
+        this.webglStego.destroy();
+      }
       this.webglStego = new WebGLStego(this.width, this.height);
     } catch(err) {
       console.error("[Stealth-Video-Decoder] Failed to resize WebGL GPU Engine:", err);
