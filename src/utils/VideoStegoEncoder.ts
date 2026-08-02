@@ -145,8 +145,8 @@ export class VideoStegoEncoder {
     this.outputCanvas.height = this.height;
 
     this.downscaledCanvas = document.createElement('canvas');
-    this.downscaledCanvas.width = 100;
-    this.downscaledCanvas.height = 75;
+    this.downscaledCanvas.width = 32;
+    this.downscaledCanvas.height = 32;
 
     // 6. Capture output stream at manually-triggered rate (0 = manual via requestFrame)
     this.stegoStream = (this.outputCanvas as any).captureStream(0);
@@ -258,9 +258,11 @@ export class VideoStegoEncoder {
       const rows = Math.floor(this.height / 4);
       const maxPayloadBits = ((cols * rows) - 320) * 3;
 
-      // Step 3: SYNCHRONOUS payload — capture 100x75 thumbnail + XOR encrypt (~1-2ms total)
-      const THUMB_W = 100;
-      const THUMB_H = 75;
+      // Step 3: SYNCHRONOUS payload — capture 32x32 thumbnail + XOR encrypt (~1-2ms total)
+      // Capacity at 480p = ((80*120)-320)*3 = 27,840 bits = 3,480 bytes.
+      // 32x32 RGB + 4 header = 3,076 bytes = 24,608 bits — fits comfortably.
+      const THUMB_W = 32;
+      const THUMB_H = 32;
       if (!this.downscaledCanvas) {
         this.downscaledCanvas = document.createElement('canvas');
         this.downscaledCanvas.width = THUMB_W;

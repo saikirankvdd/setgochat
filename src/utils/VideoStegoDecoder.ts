@@ -473,8 +473,8 @@ export class VideoStegoDecoder {
 
           // Payload is raw RGB bytes (encoder sends 100x75 thumbnail)
           const rgbBytes = decryptedBytes.subarray(4);
-          const THUMB_W = 100;
-          const THUMB_H = 75;
+          const THUMB_W = 32;
+          const THUMB_H = 32;
           const expectedLen = THUMB_W * THUMB_H * 3;
 
           if (rgbBytes.length >= expectedLen) {
