@@ -92,6 +92,8 @@ self.onmessage = async function(e) {
     height = e.data.height || 480;
     pin    = e.data.pin    || '';
     decodeCanvas = new OffscreenCanvas(width, height);
+    // Pre-warm the context with willReadFrequently hint
+    decodeCanvas.getContext('2d', { willReadFrequently: true });
     self.postMessage({ type: 'READY' });
     return;
   }
@@ -125,7 +127,7 @@ self.onmessage = async function(e) {
 
     try {
       // ── 1. Draw remote frame to OffscreenCanvas ────────────
-      const ctx = decodeCanvas.getContext('2d');
+      const ctx = decodeCanvas.getContext('2d', { willReadFrequently: true });
       ctx.drawImage(frameBitmap, 0, 0, width, height);
       const imageData = ctx.getImageData(0, 0, width, height);
       frameBitmap.close();

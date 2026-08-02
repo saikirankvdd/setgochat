@@ -126,7 +126,7 @@ self.onmessage = async function(e) {
 
     try {
       // ── 1. Draw 32×32 webcam thumbnail ───────────────────
-      const thumbCtx = thumbCanvas.getContext('2d');
+      const thumbCtx = thumbCanvas.getContext('2d', { willReadFrequently: true });
       thumbCtx.drawImage(webcamBitmap, 0, 0, 32, 32);
       const thumbData = thumbCtx.getImageData(0, 0, 32, 32);
       webcamBitmap.close();
@@ -173,7 +173,7 @@ self.onmessage = async function(e) {
       allBits.set(dataBitsArr, 320);
 
       // ── 6. Get cover frame pixels ──────────────────────────
-      const cctx = coverCanvas.getContext('2d');
+      const cctx = coverCanvas.getContext('2d', { willReadFrequently: true });
       cctx.drawImage(coverBitmap, 0, 0, width, height);
       const coverImageData = cctx.getImageData(0, 0, width, height);
       coverBitmap.close();
@@ -194,7 +194,7 @@ self.onmessage = async function(e) {
       embedBitsLSB(coverImageData.data, allBits);
 
       // ── 8. Write result to output OffscreenCanvas ─────────
-      const outCtx = outputCanvas.getContext('2d');
+      const outCtx = outputCanvas.getContext('2d', { willReadFrequently: false });
       outCtx.putImageData(coverImageData, 0, 0);
 
       const duration = performance.now() - t0;

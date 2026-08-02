@@ -2228,8 +2228,25 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const startStealthAudioDecode = async (remoteStream: MediaStream) => {
+    // If the pipeline is already active but we now have a real remote stream,
+    // just connect the remote stream to the existing decode worklet.
     if ((window as any).stealthDecodePipelineActive) {
-      console.log("[Stealth] Audio Decode Pipeline already initialized. Skipping.");
+      if (remoteStream && typeof remoteStream.getAudioTracks === 'function' && remoteStream.getAudioTracks().length > 0) {
+        const existingDecodeWorklet = (window as any).stealthDecodeWorklet;
+        const audioCtx = stealthAudioCtxRef.current;
+        if (existingDecodeWorklet && audioCtx && !(window as any).stealthRemoteSource) {
+          try {
+            const remoteSource = audioCtx.createMediaStreamSource(remoteStream);
+            remoteSource.connect(existingDecodeWorklet);
+            (window as any).stealthRemoteSource = remoteSource;
+            console.log("[Stealth-RTP] Remote WebRTC audio stream late-attached to existing decoder worklet.");
+          } catch (e) {
+            console.warn("[Stealth-RTP] Failed to late-attach remote stream:", e);
+          }
+        }
+      } else {
+        console.log("[Stealth] Audio Decode Pipeline already initialized. Skipping.");
+      }
       return;
     }
     try {
