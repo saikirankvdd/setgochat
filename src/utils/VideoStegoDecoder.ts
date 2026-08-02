@@ -117,6 +117,10 @@ export class VideoStegoDecoder {
           const thumbImgData = new ImageData(rgba, e.data.thumbW, e.data.thumbH);
 
           if (this.thumbCanvas) {
+            if (this.thumbCanvas.width !== e.data.thumbW || this.thumbCanvas.height !== e.data.thumbH) {
+              this.thumbCanvas.width = e.data.thumbW;
+              this.thumbCanvas.height = e.data.thumbH;
+            }
             const thumbCtx = this.thumbCanvas.getContext('2d')!;
             thumbCtx.putImageData(thumbImgData, 0, 0);
             const displayCtx = this.displayCanvas.getContext('2d');
