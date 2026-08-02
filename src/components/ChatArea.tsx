@@ -908,17 +908,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     const timeSinceLastChange = now - lastSettingsChangeTimeRef.current;
 
     if (isBatterySaver) {
-      if (currentResolutionRef.current !== '240p' || targetFpsRef.current !== 5) {
-        console.warn(`[Stealth-Adaptive] Low battery (${Math.round(batteryLevel * 100)}%) and not charging. Forcing Battery Saver Mode (240p @ 5fps).`);
-        applyStegoSettings('240p', 5);
+      if (currentResolutionRef.current !== '240p' || targetFpsRef.current !== 15) {
+        console.warn(`[Stealth-Adaptive] Low battery (${Math.round(batteryLevel * 100)}%) and not charging. Forcing Battery Saver Mode (240p @ 15fps).`);
+        applyStegoSettings('240p', 15);
       }
       return;
     }
 
     const profiles: { resolution: '240p' | '480p'; fps: 5 | 10 | 15 | 20 | 30 | 60 }[] = [
-      { resolution: '480p', fps: 5 },
-      { resolution: '480p', fps: 10 },
-      { resolution: '480p', fps: 15 },
+      { resolution: '480p', fps: 15 }, // FLOOR — never go below 15fps
       { resolution: '480p', fps: 20 },
       { resolution: '480p', fps: 30 },
       { resolution: '480p', fps: 60 }
@@ -926,32 +924,34 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
     const currentProfileIdx = profiles.findIndex(p => p.resolution === currentResolutionRef.current && p.fps === targetFpsRef.current);
 
-    // 3-channel stego loop takes ~30-50ms per frame — raise thresholds accordingly
-    const isCpuOverloaded = frameDurationMs > 60;
-    // RTT of 215-237ms is normal for intercontinental stego calls — only flag extreme congestion
-    const isNetworkCongested = rtt > 350;
+    // ONLY use RTT (network congestion) to drive quality decisions.
+    // Stego frame encoding takes 60-80ms by design — this is NOT "CPU overloaded".
+    // We never downgrade based on frameDurationMs.
+    const isNetworkCongested = rtt > 500; // Only downgrade on severe congestion (>500ms RTT)
+    const isNetworkGood     = rtt > 0 && rtt < 300; // Upgrade when RTT is healthy
 
-    if (isCpuOverloaded || isNetworkCongested) {
+    if (isNetworkCongested) {
       consecutiveSlowFramesRef.current += 1;
       if (consecutiveSlowFramesRef.current >= 5) {
         consecutiveSlowFramesRef.current = 0;
         if (timeSinceLastChange > cooldownTime && currentProfileIdx > 0) {
           const nextProfile = profiles[currentProfileIdx - 1];
-          console.warn(`[Stealth-Adaptive] Performance drop (Frame: ${frameDurationMs.toFixed(1)}ms, RTT: ${rtt.toFixed(1)}ms). Downgrading to ${nextProfile.resolution} @ ${nextProfile.fps}fps.`);
+          console.warn(`[Stealth-Adaptive] Network congested (RTT: ${rtt.toFixed(1)}ms). Downgrading to ${nextProfile.resolution} @ ${nextProfile.fps}fps.`);
           applyStegoSettings(nextProfile.resolution, nextProfile.fps);
         }
       }
     } else {
-      if (frameDurationMs < 20 && rtt < 280 && (batteryCharging || batteryLevel > 0.4)) {
-        consecutiveSlowFramesRef.current = 0;
+      consecutiveSlowFramesRef.current = 0;
+      if (isNetworkGood && (batteryCharging || batteryLevel > 0.4)) {
         if (timeSinceLastChange > cooldownTime && currentProfileIdx >= 0 && currentProfileIdx < profiles.length - 1) {
           const nextProfile = profiles[currentProfileIdx + 1];
-          console.log(`[Stealth-Adaptive] Performance healthy (Frame: ${frameDurationMs.toFixed(1)}ms, RTT: ${rtt.toFixed(1)}ms). Upgrading to ${nextProfile.resolution} @ ${nextProfile.fps}fps.`);
+          console.log(`[Stealth-Adaptive] Network healthy (RTT: ${rtt.toFixed(1)}ms). Upgrading to ${nextProfile.resolution} @ ${nextProfile.fps}fps.`);
           applyStegoSettings(nextProfile.resolution, nextProfile.fps);
         }
       }
     }
   };
+
 
   useEffect(() => {
     let intervalId: any;
@@ -2409,7 +2409,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     try {
       const isMobile = isMobileDevice();
       const initialResolution = '480p';
-      const initialFps = 15;
+      const initialFps = 30;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);
@@ -2562,7 +2562,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     try {
       const isMobile = isMobileDevice();
       const initialResolution = '480p';
-      const initialFps = 15;
+      const initialFps = 30;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);

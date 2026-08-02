@@ -168,7 +168,7 @@ export class VideoStegoEncoder {
     if (this.isRunning) return;
     this.isRunning = true;
     this.frameIndex = 0;
-    const intervalMs = Math.max(33, Math.floor(1000 / this.targetFps)); // min 33ms = 30fps cap
+    const intervalMs = Math.max(16, Math.floor(1000 / this.targetFps)); // 16ms = 60fps max
     this.intervalId = setInterval(this.processFrame, intervalMs);
   }
 
@@ -383,7 +383,7 @@ export class VideoStegoEncoder {
     console.log(`[Stealth-Video-Encoder] Target FPS dynamically adjusted to ${fps}`);
     if (this.isRunning && this.intervalId !== null) {
       clearInterval(this.intervalId);
-      this.intervalId = setInterval(this.processFrame, Math.max(33, Math.floor(1000 / fps)));
+      this.intervalId = setInterval(this.processFrame, Math.max(16, Math.floor(1000 / fps)));
     }
   }
 
