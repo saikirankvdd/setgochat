@@ -2125,7 +2125,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const getOrCreateAudioContext = () => {
     if (!stealthAudioCtxRef.current || stealthAudioCtxRef.current.state === 'closed') {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      stealthAudioCtxRef.current = new AudioCtx();
+      stealthAudioCtxRef.current = new AudioCtx({ latencyHint: 'interactive' });
       workletModuleLoadedRef.current = false; // new context needs module loaded again
     }
     return stealthAudioCtxRef.current;
