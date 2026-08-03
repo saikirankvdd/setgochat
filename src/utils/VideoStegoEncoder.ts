@@ -135,6 +135,9 @@ export class VideoStegoEncoder {
             track.requestFrame();
           }
           if (this.onFrameProcessTime) this.onFrameProcessTime(e.data.duration);
+          if (e.data.jpegBuffer && this.onStegoFrame) {
+            this.onStegoFrame(new Uint8Array(e.data.jpegBuffer), e.data.frameIndex);
+          }
 
         } else if (type === 'FRAME_SKIPPED') {
           this.workerBusy = false;

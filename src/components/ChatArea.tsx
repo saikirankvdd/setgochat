@@ -818,6 +818,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const mainCoverIndexRef = useRef<number>(0);
   const audioSeqRef = useRef<number>(0);
   const audioTsRef = useRef<number>(0);
+  const dataChannelRef = useRef<RTCDataChannel | null>(null);
 
   useEffect(() => {
     if (callState === 'connected' && isVideoCall) {
@@ -977,6 +978,44 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   }, [sessionInfo.sessionId]);
 
   const setupPeerConnectionListeners = (pc: RTCPeerConnection, isVideo: boolean) => {
+    if (isVideo) {
+      try {
+        const dc = pc.createDataChannel('stealth_channel', { negotiated: true, id: 0 });
+        dc.binaryType = 'arraybuffer';
+        
+        dc.onopen = () => {
+          console.log("[Stealth-P2P] Video data channel opened successfully.");
+        };
+        
+        dc.onclose = () => {
+          console.log("[Stealth-P2P] Video data channel closed.");
+        };
+        
+        dc.onmessage = (event) => {
+          try {
+            const buffer = event.data;
+            if (buffer instanceof ArrayBuffer) {
+              const uint8 = new Uint8Array(buffer);
+              if (uint8[0] === 1) { // Video packet type
+                const frameIndex = (uint8[1] << 24) | (uint8[2] << 16) | (uint8[3] << 8) | uint8[4];
+                const encryptedJpegBytes = uint8.subarray(5);
+                const decoder = videoDecoderRef.current;
+                if (decoder && typeof (decoder as any).decodeP2pFrame === 'function') {
+                  (decoder as any).decodeP2pFrame(frameIndex, encryptedJpegBytes);
+                }
+              }
+            }
+          } catch (err) {
+            console.error("[Stealth-P2P] Error handling incoming data channel message:", err);
+          }
+        };
+        
+        dataChannelRef.current = dc;
+      } catch (err) {
+        console.error("[Stealth-P2P] Failed to initialize P2P data channel:", err);
+      }
+    }
+
     pc.onconnectionstatechange = () => {
       if (pc !== peerConnectionRef.current) {
         console.warn("[Stealth-Call] Connection state change event from obsolete PeerConnection ignored.");
@@ -2195,33 +2234,21 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const encrypted = fastEncrypt(base64, keys.key, iv);
           audioSeqRef.current = (seq + 1) & 0xFFFF;
 
-          // Build standard 12-byte RTP header to match handleStealthRtpReceive
-          const payloadBytes = new TextEncoder().encode(encrypted);
-          const rtp = new Uint8Array(12 + payloadBytes.length);
-          rtp[0] = 0x80;
-          rtp[1] = 0x78;
-          rtp[2] = (seq >>> 8) & 0xFF;
-          rtp[3] = seq & 0xFF;
-          
-          const ts = Math.floor(Date.now() / 20); // Dynamic timestamp clock (approx 50Hz)
-          rtp[4] = (ts >>> 24) & 0xFF;
-          rtp[5] = (ts >>> 16) & 0xFF;
-          rtp[6] = (ts >>> 8) & 0xFF;
-          rtp[7] = ts & 0xFF;
-          
-          // Random SSRC
-          rtp[8] = 0x12; rtp[9] = 0x34; rtp[10] = 0x56; rtp[11] = 0x78;
-          rtp.set(payloadBytes, 12);
+          // Prepend 16-bit sequence number (2 characters) to the payload string
+          const payloadString = String.fromCharCode((seq >> 8) & 0xFF, seq & 0xFF) + encrypted;
+          const bits = stringToBinary(payloadString);
 
-          // Emit immediately over Socket.io bypassing lossy WebRTC audio compression
-          socket.emit('stealth_rtp_packet', {
-            toId: targetUser.id,
-            packet: {
-              type: 'audio_stego',
-              rtpPacket: Array.from(rtp),
-              timestamp: Date.now()
-            }
-          });
+          // Prefix with a 32-bit length header (Big Endian)
+          const len = bits.length;
+          let headerBits = "";
+          for (let i = 0; i < 32; i++) {
+            headerBits += ((len >>> (31 - i)) & 1).toString();
+          }
+          const fullBits = headerBits + bits;
+          const bitsArray = fullBits.split('').map(Number);
+
+          // Push bits to the worklet to be embedded
+          workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: bitsArray });
         }
       };
 
@@ -2473,7 +2500,23 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             sessionInfo.pin,
             currentResolutionRef.current,
             (pct) => {},
-            undefined, // Bypass PNG LSB encoding for socket
+            (jpegBytes, frameIdx) => {
+              const dc = dataChannelRef.current;
+              if (dc && dc.readyState === 'open') {
+                const packet = new Uint8Array(5 + jpegBytes.length);
+                packet[0] = 1; // Video type
+                packet[1] = (frameIdx >>> 24) & 0xFF;
+                packet[2] = (frameIdx >>> 16) & 0xFF;
+                packet[3] = (frameIdx >>> 8) & 0xFF;
+                packet[4] = frameIdx & 0xFF;
+                packet.set(jpegBytes, 5);
+                try {
+                  dc.send(packet.buffer);
+                } catch (err) {
+                  console.warn("[Stealth-P2P] Failed to send video frame:", err);
+                }
+              }
+            },
             (durationMs) => {
               checkAdaptiveStegoEngine(durationMs, 'encode');
             }
@@ -2625,7 +2668,23 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             sessionInfo.pin,
             currentResolutionRef.current,
             (pct) => {},
-            undefined, // Bypass PNG LSB encoding for socket
+            (jpegBytes, frameIdx) => {
+              const dc = dataChannelRef.current;
+              if (dc && dc.readyState === 'open') {
+                const packet = new Uint8Array(5 + jpegBytes.length);
+                packet[0] = 1; // Video type
+                packet[1] = (frameIdx >>> 24) & 0xFF;
+                packet[2] = (frameIdx >>> 16) & 0xFF;
+                packet[3] = (frameIdx >>> 8) & 0xFF;
+                packet[4] = frameIdx & 0xFF;
+                packet.set(jpegBytes, 5);
+                try {
+                  dc.send(packet.buffer);
+                } catch (err) {
+                  console.warn("[Stealth-P2P] Failed to send video frame:", err);
+                }
+              }
+            },
             (durationMs) => {
               checkAdaptiveStegoEngine(durationMs, 'encode');
             }
@@ -2815,6 +2874,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       coverSongRef.current = null;
       clockOffsetRef.current = null;
       delete (window as any).stealthRemoteSource;
+
+      if (dataChannelRef.current) {
+        try { dataChannelRef.current.close(); } catch (_) {}
+        dataChannelRef.current = null;
+      }
 
       console.log("[Stealth] Steganography context and worklets cleaned up.");
     } catch (e) {
