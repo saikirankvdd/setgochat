@@ -66,8 +66,8 @@ self.onmessage = async function(e) {
 
     try {
       // Dynamic high-clarity JPEG thumbnail size selection
-      const THUMB_W = width <= 320 ? 80 : 160;
-      const THUMB_H = width <= 320 ? 60 : 120;
+      const THUMB_W = width <= 320 ? 160 : 320;
+      const THUMB_H = width <= 320 ? 120 : 240;
       if (thumbCanvas.width !== THUMB_W || thumbCanvas.height !== THUMB_H) {
         thumbCanvas.width = THUMB_W;
         thumbCanvas.height = THUMB_H;
@@ -79,7 +79,7 @@ self.onmessage = async function(e) {
       webcamBitmap.close();
 
       // ── 2. Compress to high-efficiency JPEG ────────
-      const blob = await thumbCanvas.convertToBlob({ type: 'image/jpeg', quality: 0.4 });
+      const blob = await thumbCanvas.convertToBlob({ type: 'image/jpeg', quality: 0.7 });
       const arrayBuffer = await blob.arrayBuffer();
       const jpegBytes = new Uint8Array(arrayBuffer);
 

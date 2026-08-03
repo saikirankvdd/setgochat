@@ -2545,6 +2545,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             (jpegBytes, frameIdx) => {
               const dc = dataChannelRef.current;
               if (dc && dc.readyState === 'open') {
+                if (dc.bufferedAmount > 65536) {
+                  return;
+                }
                 const packet = new Uint8Array(5 + jpegBytes.length);
                 packet[0] = 1; // Video type
                 packet[1] = (frameIdx >>> 24) & 0xFF;
@@ -2713,6 +2716,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             (jpegBytes, frameIdx) => {
               const dc = dataChannelRef.current;
               if (dc && dc.readyState === 'open') {
+                if (dc.bufferedAmount > 65536) {
+                  return;
+                }
                 const packet = new Uint8Array(5 + jpegBytes.length);
                 packet[0] = 1; // Video type
                 packet[1] = (frameIdx >>> 24) & 0xFF;
