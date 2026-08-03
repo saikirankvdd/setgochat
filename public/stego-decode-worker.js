@@ -222,12 +222,19 @@ self.onmessage = async function(e) {
         plainBytes[i] = cipherBytes[i] ^ Math.floor(decPrng.next() * 256);
       }
 
-      // ── 7. Verify STEG magic ───────────────────────────────
-      if (plainBytes.length < 4 ||
-          plainBytes[0] !== 0x53 || plainBytes[1] !== 0x54 ||
-          plainBytes[2] !== 0x45 || plainBytes[3] !== 0x47) {
+      // ── 7. Verify STEG magic with tolerance (allow up to 2 byte mismatches) ──
+      let magicMismatches = 0;
+      if (plainBytes.length < 4) {
+        magicMismatches = 4;
+      } else {
+        if (plainBytes[0] !== 0x53) magicMismatches++;
+        if (plainBytes[1] !== 0x54) magicMismatches++;
+        if (plainBytes[2] !== 0x45) magicMismatches++;
+        if (plainBytes[3] !== 0x47) magicMismatches++;
+      }
+      if (magicMismatches > 2) {
         isProcessing = false;
-        self.postMessage({ type: 'DECODE_INVALID', reason: 'bad_magic' });
+        self.postMessage({ type: 'DECODE_INVALID', reason: 'bad_magic', magicMismatches });
         return;
       }
 

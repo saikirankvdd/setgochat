@@ -830,11 +830,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           if (!params.encodings) {
             params.encodings = [{}];
           }
-          params.encodings[0].maxBitrate = 1500000; // 1.5 Mbps
+          params.encodings[0].maxBitrate = 4000000; // 4.0 Mbps
           params.encodings[0].maxFramerate = 60;    // 60 FPS max for WebGL GPU engine
           params.degradationPreference = "maintain-resolution";
           videoSender.setParameters(params)
-            .then(() => console.log("[Stealth-Call] WebRTC video sender parameters optimized for high-fidelity LSB stego (1.5 Mbps, 60 FPS)."))
+            .then(() => console.log("[Stealth-Call] WebRTC video sender parameters optimized for high-fidelity LSB stego (4.0 Mbps, 60 FPS)."))
             .catch(err => console.error("[Stealth-Call] Failed to set WebRTC video sender parameters:", err));
         }
       }

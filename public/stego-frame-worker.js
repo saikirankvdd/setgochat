@@ -55,7 +55,7 @@ function encryptLengthHeaderJS(length, seedPin) {
 function embedBitsBlockDifferential(pixelData, allBits, width, height) {
   const cols = Math.floor(width / 8);
   const rows = Math.floor(height / 4);
-  const targetDiff = 80.0;
+  const targetDiff = 120.0;
   let bitIdx = 320;
 
   for (let r = 0; r < rows; r++) {
