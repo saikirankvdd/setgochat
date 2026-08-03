@@ -2286,7 +2286,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             packet[2] = seq & 0xFF;
             packet.set(payloadBytes, 3);
             try {
-              dc.send(packet.buffer);
+              dc.send(packet);
             } catch (err) {
               console.warn("[Stealth-P2P] Failed to send audio packet over data channel:", err);
             }
@@ -2553,7 +2553,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 packet[4] = frameIdx & 0xFF;
                 packet.set(jpegBytes, 5);
                 try {
-                  dc.send(packet.buffer);
+                  dc.send(packet);
                 } catch (err) {
                   console.warn("[Stealth-P2P] Failed to send video frame:", err);
                 }
@@ -2721,7 +2721,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 packet[4] = frameIdx & 0xFF;
                 packet.set(jpegBytes, 5);
                 try {
-                  dc.send(packet.buffer);
+                  dc.send(packet);
                 } catch (err) {
                   console.warn("[Stealth-P2P] Failed to send video frame:", err);
                 }
