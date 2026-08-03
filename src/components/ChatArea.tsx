@@ -978,42 +978,68 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   }, [sessionInfo.sessionId]);
 
   const setupPeerConnectionListeners = (pc: RTCPeerConnection, isVideo: boolean) => {
-    if (isVideo) {
-      try {
-        const dc = pc.createDataChannel('stealth_channel', { negotiated: true, id: 0 });
-        dc.binaryType = 'arraybuffer';
-        
-        dc.onopen = () => {
-          console.log("[Stealth-P2P] Video data channel opened successfully.");
-        };
-        
-        dc.onclose = () => {
-          console.log("[Stealth-P2P] Video data channel closed.");
-        };
-        
-        dc.onmessage = (event) => {
-          try {
-            const buffer = event.data;
-            if (buffer instanceof ArrayBuffer) {
-              const uint8 = new Uint8Array(buffer);
-              if (uint8[0] === 1) { // Video packet type
-                const frameIndex = (uint8[1] << 24) | (uint8[2] << 16) | (uint8[3] << 8) | uint8[4];
-                const encryptedJpegBytes = uint8.subarray(5);
-                const decoder = videoDecoderRef.current;
-                if (decoder && typeof (decoder as any).decodeP2pFrame === 'function') {
-                  (decoder as any).decodeP2pFrame(frameIndex, encryptedJpegBytes);
+    try {
+      const dc = pc.createDataChannel('stealth_channel', { negotiated: true, id: 0 });
+      dc.binaryType = 'arraybuffer';
+      
+      dc.onopen = () => {
+        console.log("[Stealth-P2P] Data channel opened successfully.");
+      };
+      
+      dc.onclose = () => {
+        console.log("[Stealth-P2P] Data channel closed.");
+      };
+      
+      dc.onmessage = (event) => {
+        try {
+          const buffer = event.data;
+          if (buffer instanceof ArrayBuffer) {
+            const uint8 = new Uint8Array(buffer);
+            if (uint8[0] === 1) { // Video packet type
+              const frameIndex = (uint8[1] << 24) | (uint8[2] << 16) | (uint8[3] << 8) | uint8[4];
+              const encryptedJpegBytes = uint8.subarray(5);
+              const decoder = videoDecoderRef.current;
+              if (decoder && typeof (decoder as any).decodeP2pFrame === 'function') {
+                (decoder as any).decodeP2pFrame(frameIndex, encryptedJpegBytes);
+              }
+            } else if (uint8[0] === 0) { // Audio packet type
+              const seq = (uint8[1] << 8) | uint8[2];
+              const payloadBytes = uint8.subarray(3);
+              const encryptedText = new TextDecoder().decode(payloadBytes);
+              
+              const audioCtx = stealthAudioCtxRef.current;
+              if (audioCtx) {
+                const keys = getDerivedKeys(sessionInfo.pin);
+                const iv = CryptoJS.lib.WordArray.create([0, 0, 0, seq]);
+                const decrypted = fastDecrypt(encryptedText, keys.key, iv);
+                if (decrypted) {
+                  const compressedBytes = base64ToUint8(decrypted);
+                  const decompressedBytes = gunzipSync(compressedBytes);
+                  const voice8kHz = new Float32Array(decompressedBytes.length / 2);
+                  for (let i = 0; i < voice8kHz.length; i++) {
+                    const low = decompressedBytes[i * 2];
+                    const high = decompressedBytes[i * 2 + 1];
+                    let s16 = low | (high << 8);
+                    if (s16 & 0x8000) s16 |= ~0xFFFF;
+                    voice8kHz[i] = s16 / 32768.0;
+                  }
+                  const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+                  const voicePlayerNode = (window as any).stealthVoicePlayerNode;
+                  if (voicePlayerNode) {
+                    voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
+                  }
                 }
               }
             }
-          } catch (err) {
-            console.error("[Stealth-P2P] Error handling incoming data channel message:", err);
           }
-        };
-        
-        dataChannelRef.current = dc;
-      } catch (err) {
-        console.error("[Stealth-P2P] Failed to initialize P2P data channel:", err);
-      }
+        } catch (err) {
+          console.error("[Stealth-P2P] Error handling incoming data channel message:", err);
+        }
+      };
+      
+      dataChannelRef.current = dc;
+    } catch (err) {
+      console.error("[Stealth-P2P] Failed to initialize P2P data channel:", err);
     }
 
     pc.onconnectionstatechange = () => {
@@ -2249,6 +2275,22 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
           // Push bits to the worklet to be embedded
           workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: bitsArray });
+
+          // Send over direct P2P data channel if open (Option B)
+          const dc = dataChannelRef.current;
+          if (dc && dc.readyState === 'open') {
+            const payloadBytes = new TextEncoder().encode(encrypted);
+            const packet = new Uint8Array(3 + payloadBytes.length);
+            packet[0] = 0; // Audio type
+            packet[1] = (seq >> 8) & 0xFF;
+            packet[2] = seq & 0xFF;
+            packet.set(payloadBytes, 3);
+            try {
+              dc.send(packet.buffer);
+            } catch (err) {
+              console.warn("[Stealth-P2P] Failed to send audio packet over data channel:", err);
+            }
+          }
         }
       };
 

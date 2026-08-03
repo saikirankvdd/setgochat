@@ -136,17 +136,22 @@ export class VideoStegoDecoder {
       const url = URL.createObjectURL(blob);
       const img = new Image();
       img.onload = () => {
-        if (this.lastDecodedFaceUrl) {
-          URL.revokeObjectURL(this.lastDecodedFaceUrl);
-        }
-        this.lastDecodedFaceImage = img;
-        this.lastDecodedFaceUrl = url;
-        this.invalidFrameCount = 0;
-        this.frameIndex = frameIndex;
+        img.decode().then(() => {
+          if (this.lastDecodedFaceUrl) {
+            URL.revokeObjectURL(this.lastDecodedFaceUrl);
+          }
+          this.lastDecodedFaceImage = img;
+          this.lastDecodedFaceUrl = url;
+          this.invalidFrameCount = 0;
+          this.frameIndex = frameIndex;
 
-        if (this.onFrameProcessTime) {
-          this.onFrameProcessTime(performance.now() - t0);
-        }
+          if (this.onFrameProcessTime) {
+            this.onFrameProcessTime(performance.now() - t0);
+          }
+        }).catch((err) => {
+          console.warn("[Stealth-Video-Decoder] Asynchronous image decode failed:", err);
+          URL.revokeObjectURL(url);
+        });
       };
       img.onerror = () => {
         URL.revokeObjectURL(url);
