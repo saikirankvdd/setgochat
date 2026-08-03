@@ -2195,21 +2195,33 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           const encrypted = fastEncrypt(base64, keys.key, iv);
           audioSeqRef.current = (seq + 1) & 0xFFFF;
 
-          // Prepend 16-bit sequence number (2 characters) to the payload string
-          const payloadString = String.fromCharCode((seq >> 8) & 0xFF, seq & 0xFF) + encrypted;
-          const bits = stringToBinary(payloadString);
+          // Build standard 12-byte RTP header to match handleStealthRtpReceive
+          const payloadBytes = new TextEncoder().encode(encrypted);
+          const rtp = new Uint8Array(12 + payloadBytes.length);
+          rtp[0] = 0x80;
+          rtp[1] = 0x78;
+          rtp[2] = (seq >>> 8) & 0xFF;
+          rtp[3] = seq & 0xFF;
+          
+          const ts = Math.floor(Date.now() / 20); // Dynamic timestamp clock (approx 50Hz)
+          rtp[4] = (ts >>> 24) & 0xFF;
+          rtp[5] = (ts >>> 16) & 0xFF;
+          rtp[6] = (ts >>> 8) & 0xFF;
+          rtp[7] = ts & 0xFF;
+          
+          // Random SSRC
+          rtp[8] = 0x12; rtp[9] = 0x34; rtp[10] = 0x56; rtp[11] = 0x78;
+          rtp.set(payloadBytes, 12);
 
-          // Prefix with a 32-bit length header (Big Endian)
-          const len = bits.length;
-          let headerBits = "";
-          for (let i = 0; i < 32; i++) {
-            headerBits += ((len >>> (31 - i)) & 1).toString();
-          }
-          const fullBits = headerBits + bits;
-          const bitsArray = fullBits.split('').map(Number);
-
-          // Push bits to the worklet to be embedded
-          workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: bitsArray });
+          // Emit immediately over Socket.io bypassing lossy WebRTC audio compression
+          socket.emit('stealth_rtp_packet', {
+            toId: targetUser.id,
+            packet: {
+              type: 'audio_stego',
+              rtpPacket: Array.from(rtp),
+              timestamp: Date.now()
+            }
+          });
         }
       };
 

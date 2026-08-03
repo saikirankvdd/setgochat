@@ -4,7 +4,7 @@
  *
  * Runs ENTIRELY off the browser main thread.
  * Uses robust block-based differential brightness steganography extraction.
- * Survives lossy WebRTC compression (VP8/H.264).
+ * Extracts JPEG-compressed high-clarity face thumbnails.
  */
 
 class JS_PRNG {
@@ -39,11 +39,6 @@ function decryptLengthHeaderJS(encBytes, pin) {
   return ((dec[0] << 24) | (dec[1] << 16) | (dec[2] << 8) | dec[3]) >>> 0;
 }
 
-/**
- * Extracts bits using block-based differential brightness.
- * Block size: 8x4 pixels per block-pair.
- * Block A: left 4x4. Block B: right 4x4.
- */
 function extractBitsBlockDifferential(pixelData, width, height, maxUsable) {
   const cols = Math.floor(width / 8);
   const rows = Math.floor(height / 4);
@@ -84,13 +79,11 @@ function extractBitsBlockDifferential(pixelData, width, height, maxUsable) {
       const avgBb = sumBb / 16.0;
 
       if (blockPairIdx < 320) {
-        // Header: 1 bit per block-pair, using Luma (R+G+B)/3
         const lumaA = (avgAr + avgAg + avgAb) / 3.0;
         const lumaB = (avgBr + avgBg + avgBb) / 3.0;
         const diff = lumaA - lumaB;
         bits[blockPairIdx] = diff > 0.0 ? 1 : 0;
       } else {
-        // Data: 3 bits per block-pair (R, G, B independently)
         if (bitIdx < maxUsable) bits[bitIdx++] = (avgAr - avgBr) > 0.0 ? 1 : 0;
         if (bitIdx < maxUsable) bits[bitIdx++] = (avgAg - avgBg) > 0.0 ? 1 : 0;
         if (bitIdx < maxUsable) bits[bitIdx++] = (avgAb - avgBb) > 0.0 ? 1 : 0;
@@ -238,38 +231,25 @@ self.onmessage = async function(e) {
         return;
       }
 
-      // ── 8. Decode dynamic size RGB face (16x16 or 32x32) ──
-      const rgbBytes = plainBytes.subarray(4);
-      const numPixels = Math.floor(rgbBytes.length / 3);
-      const THUMB_W = Math.round(Math.sqrt(numPixels));
-      const THUMB_H = THUMB_W;
-      const expectedLen = THUMB_W * THUMB_H * 3;
+      // ── 8. Extract JPEG payload directly ───────────────────
+      const jpegBytes = plainBytes.subarray(4);
 
-      if (rgbBytes.length < expectedLen) {
+      if (jpegBytes.length < 10) {
         isProcessing = false;
         self.postMessage({ type: 'DECODE_INVALID', reason: 'short_payload' });
         return;
       }
 
-      const rgba = new Uint8ClampedArray(THUMB_W * THUMB_H * 4);
-      for (let i = 0, j = 0; i < expectedLen; i += 3, j += 4) {
-        rgba[j]     = rgbBytes[i];
-        rgba[j + 1] = rgbBytes[i + 1];
-        rgba[j + 2] = rgbBytes[i + 2];
-        rgba[j + 3] = 255;
-      }
-
       lastDecodedFrameIndex = frameIndex;
       const duration = performance.now() - t0;
 
+      // Transfer the JPEG buffer back to the main thread (zero copy)
       self.postMessage({
         type: 'DECODE_SUCCESS',
         frameIndex,
         duration,
-        thumbW: THUMB_W,
-        thumbH: THUMB_H,
-        rgba: rgba.buffer
-      }, [rgba.buffer]);
+        jpegBuffer: jpegBytes.buffer
+      }, [jpegBytes.buffer]);
 
     } catch (err) {
       self.postMessage({ type: 'DECODE_ERROR', error: String(err) });

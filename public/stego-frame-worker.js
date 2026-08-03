@@ -4,7 +4,7 @@
  *
  * Runs ENTIRELY off the browser main thread.
  * Uses robust block-based differential brightness steganography.
- * Survives lossy WebRTC compression (VP8/H.264).
+ * Compresses the thumbnail to JPEG format to achieve high clarity.
  */
 
 class JS_PRNG {
@@ -47,11 +47,6 @@ function encryptLengthHeaderJS(length, seedPin) {
   return b;
 }
 
-/**
- * Embeds bits using robust block-based differential brightness.
- * Block size: 8x4 pixels per block-pair.
- * Block A: left 4x4. Block B: right 4x4.
- */
 function embedBitsBlockDifferential(pixelData, allBits, width, height) {
   const cols = Math.floor(width / 8);
   const rows = Math.floor(height / 4);
@@ -94,7 +89,6 @@ function embedBitsBlockDifferential(pixelData, allBits, width, height) {
       let shiftR = 0, shiftG = 0, shiftB = 0;
 
       if (blockPairIdx < 320) {
-        // Header: 1 bit per block-pair, using Luma (R+G+B)/3
         const lumaA = (avgAr + avgAg + avgAb) / 3.0;
         const lumaB = (avgBr + avgBg + avgBb) / 3.0;
         const diff = lumaA - lumaB;
@@ -109,7 +103,6 @@ function embedBitsBlockDifferential(pixelData, allBits, width, height) {
         shiftG = shift;
         shiftB = shift;
       } else {
-        // Data: 3 bits per block-pair (R, G, B independently)
         const diffR = avgAr - avgBr;
         const targetBitR = bitIdx < allBits.length ? allBits[bitIdx++] : 0;
         if (targetBitR === 1 && diffR <= targetDiff) {
@@ -135,7 +128,6 @@ function embedBitsBlockDifferential(pixelData, allBits, width, height) {
         }
       }
 
-      // Apply shift (add to A, subtract from B) and clamp
       for (let y = 0; y < 4; y++) {
         const rowOffset = (startYA + y) * width;
         for (let x = 0; x < 4; x++) {
@@ -168,7 +160,7 @@ self.onmessage = async function(e) {
     width        = e.data.width  || 640;
     height       = e.data.height || 480;
     outputCanvas = e.data.outputCanvas;
-    thumbCanvas  = new OffscreenCanvas(32, 32);
+    thumbCanvas  = new OffscreenCanvas(160, 120);
     coverCanvas  = new OffscreenCanvas(width, height);
     self.postMessage({ type: 'READY' });
     return;
@@ -196,38 +188,38 @@ self.onmessage = async function(e) {
     const { webcamBitmap, coverBitmap, frameIndex, pin } = e.data;
 
     try {
-      // Dynamic thumbnail sizing: 16x16 for 240p (low bandwidth), 32x32 for 480p
-      const THUMB_SIZE = width <= 320 ? 16 : 32;
-      if (thumbCanvas.width !== THUMB_SIZE) {
-        thumbCanvas.width = THUMB_SIZE;
-        thumbCanvas.height = THUMB_SIZE;
+      // Dynamic high-clarity JPEG thumbnail size selection
+      const THUMB_W = width <= 320 ? 80 : 160;
+      const THUMB_H = width <= 320 ? 60 : 120;
+      if (thumbCanvas.width !== THUMB_W || thumbCanvas.height !== THUMB_H) {
+        thumbCanvas.width = THUMB_W;
+        thumbCanvas.height = THUMB_H;
       }
 
-      // ── 1. Draw webcam thumbnail ───────────────────
+      // ── 1. Draw webcam onto dynamic canvas ─────────
       const thumbCtx = thumbCanvas.getContext('2d', { willReadFrequently: true });
-      thumbCtx.drawImage(webcamBitmap, 0, 0, THUMB_SIZE, THUMB_SIZE);
-      const thumbData = thumbCtx.getImageData(0, 0, THUMB_SIZE, THUMB_SIZE);
+      thumbCtx.drawImage(webcamBitmap, 0, 0, THUMB_W, THUMB_H);
       webcamBitmap.close();
 
-      // ── 2. Pack raw RGB payload ────────────────────
-      const rawRgbLen = THUMB_SIZE * THUMB_SIZE * 3;
-      const payload   = new Uint8Array(4 + rawRgbLen);
+      // ── 2. Compress to high-efficiency JPEG ────────
+      const blob = await thumbCanvas.convertToBlob({ type: 'image/jpeg', quality: 0.4 });
+      const arrayBuffer = await blob.arrayBuffer();
+      const jpegBytes = new Uint8Array(arrayBuffer);
+
+      // ── 3. Pack payload with 'STEG' magic ──────────
+      const payload = new Uint8Array(4 + jpegBytes.length);
       payload[0] = 0x53; payload[1] = 0x54; // 'ST'
       payload[2] = 0x45; payload[3] = 0x47; // 'EG'
-      for (let i = 0, j = 4; i < thumbData.data.length; i += 4, j += 3) {
-        payload[j]     = thumbData.data[i];
-        payload[j + 1] = thumbData.data[i + 1];
-        payload[j + 2] = thumbData.data[i + 2];
-      }
+      payload.set(jpegBytes, 4);
 
-      // ── 3. PRNG XOR encrypt ────────────────────────
-      const encPrng   = new JS_PRNG('VID_ENC_' + pin + '_' + frameIndex);
+      // ── 4. PRNG XOR encrypt ────────────────────────
+      const encPrng = new JS_PRNG('VID_ENC_' + pin + '_' + frameIndex);
       const cipherBytes = new Uint8Array(payload.length);
       for (let i = 0; i < payload.length; i++) {
         cipherBytes[i] = payload[i] ^ Math.floor(encPrng.next() * 256);
       }
 
-      // ── 4. Convert to bits ─────────────────────────
+      // ── 5. Convert to bit array ────────────────────
       const dataBitsArr = new Uint8Array(cipherBytes.length * 8);
       for (let i = 0; i < cipherBytes.length; i++) {
         const b = cipherBytes[i];
@@ -236,7 +228,7 @@ self.onmessage = async function(e) {
         }
       }
 
-      // ── 5. Build 5x redundant header (320 bits) ────
+      // ── 6. Build 5x redundant headers ──────────────
       const encFrameIndex = encryptFrameIndexJS(frameIndex, pin);
       const encLength     = encryptLengthHeaderJS(dataBitsArr.length, pin + '_' + frameIndex);
 
@@ -250,16 +242,16 @@ self.onmessage = async function(e) {
       }
       allBits.set(dataBitsArr, 320);
 
-      // ── 6. Get cover frame pixels ──────────────────
+      // ── 7. Get cover frame pixels ──────────────────
       const cctx = coverCanvas.getContext('2d', { willReadFrequently: true });
       cctx.drawImage(coverBitmap, 0, 0, width, height);
       const coverImageData = cctx.getImageData(0, 0, width, height);
       coverBitmap.close();
 
-      // ── 7. Embed using block-based differential brightness ──
+      // ── 8. Embed using differential brightness ──────
       embedBitsBlockDifferential(coverImageData.data, allBits, width, height);
 
-      // ── 8. Draw to output OffscreenCanvas ──────────
+      // ── 9. Draw output to OffscreenCanvas ──────────
       const outCtx = outputCanvas.getContext('2d', { willReadFrequently: false });
       outCtx.putImageData(coverImageData, 0, 0);
 

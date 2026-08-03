@@ -112,24 +112,22 @@ export class VideoStegoDecoder {
           this.workerBusy = false;
           if (this.onFrameProcessTime) this.onFrameProcessTime(e.data.duration);
 
-          // Render decoded face: 32×32 → upscale to display canvas
-          const rgba = new Uint8ClampedArray(e.data.rgba);
-          const thumbImgData = new ImageData(rgba, e.data.thumbW, e.data.thumbH);
-
-          if (this.thumbCanvas) {
-            if (this.thumbCanvas.width !== e.data.thumbW || this.thumbCanvas.height !== e.data.thumbH) {
-              this.thumbCanvas.width = e.data.thumbW;
-              this.thumbCanvas.height = e.data.thumbH;
-            }
-            const thumbCtx = this.thumbCanvas.getContext('2d')!;
-            thumbCtx.putImageData(thumbImgData, 0, 0);
+          const blob = new Blob([e.data.jpegBuffer], { type: 'image/jpeg' });
+          const url = URL.createObjectURL(blob);
+          const img = new Image();
+          img.onload = () => {
             const displayCtx = this.displayCanvas.getContext('2d');
             if (displayCtx) {
               displayCtx.imageSmoothingEnabled = true;
               displayCtx.imageSmoothingQuality = 'high';
-              displayCtx.drawImage(this.thumbCanvas, 0, 0, this.displayCanvas.width, this.displayCanvas.height);
+              displayCtx.drawImage(img, 0, 0, this.displayCanvas.width, this.displayCanvas.height);
             }
-          }
+            URL.revokeObjectURL(url);
+          };
+          img.onerror = () => {
+            URL.revokeObjectURL(url);
+          };
+          img.src = url;
 
           this.lastDecodedFrameIndex = e.data.frameIndex;
           this.frameIndex = e.data.frameIndex;
