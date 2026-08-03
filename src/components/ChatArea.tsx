@@ -990,13 +990,19 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         console.log("[Stealth-P2P] Data channel closed.");
       };
       
-      dc.onmessage = (event) => {
+      dc.onmessage = async (event) => {
         try {
-          const buffer = event.data;
-          if (buffer instanceof ArrayBuffer) {
-            const uint8 = new Uint8Array(buffer);
+          let data = event.data;
+          if (data instanceof Blob) {
+            data = await data.arrayBuffer();
+          }
+          if (data instanceof ArrayBuffer) {
+            const uint8 = new Uint8Array(data);
             if (uint8[0] === 1) { // Video packet type
               const frameIndex = (uint8[1] << 24) | (uint8[2] << 16) | (uint8[3] << 8) | uint8[4];
+              if (frameIndex % 100 === 0) {
+                console.log("[Stealth-P2P] Received video frame:", frameIndex, "size:", uint8.length);
+              }
               const encryptedJpegBytes = uint8.subarray(5);
               const decoder = videoDecoderRef.current;
               if (decoder && typeof (decoder as any).decodeP2pFrame === 'function') {
@@ -1004,11 +1010,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               }
             } else if (uint8[0] === 0) { // Audio packet type
               const seq = (uint8[1] << 8) | uint8[2];
+              if (seq % 100 === 0) {
+                console.log("[Stealth-P2P] Received audio packet, seq:", seq, "size:", uint8.length);
+              }
               const payloadBytes = uint8.subarray(3);
               const encryptedText = new TextDecoder().decode(payloadBytes);
               
               const audioCtx = stealthAudioCtxRef.current;
               if (audioCtx) {
+                if (audioCtx.state === 'suspended') {
+                  audioCtx.resume().catch(()=>{});
+                }
                 const keys = getDerivedKeys(sessionInfo.pin);
                 const iv = CryptoJS.lib.WordArray.create([0, 0, 0, seq]);
                 const decrypted = fastDecrypt(encryptedText, keys.key, iv);
@@ -1027,8 +1039,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                   const voicePlayerNode = (window as any).stealthVoicePlayerNode;
                   if (voicePlayerNode) {
                     voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
+                  } else {
+                    console.warn("[Stealth-P2P] playback node is null on window!");
                   }
+                } else {
+                  console.warn("[Stealth-P2P] Decryption failed for audio seq:", seq);
                 }
+              } else {
+                console.debug("[Stealth-P2P] Audio packet received but audioCtx is not active yet.");
               }
             }
           }
