@@ -2503,9 +2503,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       gestureAudioCtx.resume().catch(err => console.warn("[Stealth-Gesture] AudioContext resume failed:", err));
     }
 
-    // Initialize decode pipeline immediately in user gesture to ensure it's allowed to play audio
-    await startStealthAudioDecode(null as any);
-
     const callId = Math.random().toString(36).substr(2, 9);
     callIdRef.current = callId;
 
@@ -2543,6 +2540,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         },
         video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false
       });
+      
+      // Initialize decode pipeline after getUserMedia duplex switch to avoid hardware mutes
+      await startStealthAudioDecode(null as any);
       
       // --- V2 STEALTH ARCHITECTURE INJECTION ---
       let localAudioTrack = stream.getAudioTracks()[0];
@@ -2686,9 +2686,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     const initCtx = getOrCreateAudioContext();
     if (initCtx.state === 'suspended') initCtx.resume().catch(()=>{});
 
-    // Initialize decode pipeline immediately in user gesture to ensure it's allowed to play audio
-    await startStealthAudioDecode(null as any);
-
     if (callStateRef.current !== 'receiving' || isCallAcceptingRef.current) {
       console.warn("[Stealth-Call] acceptCall ignored because state is not receiving or already accepting:", callStateRef.current);
       return;
@@ -2713,6 +2710,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         },
         video: isVideoCall ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false
       });
+      
+      // Initialize decode pipeline after getUserMedia duplex switch to avoid hardware mutes
+      await startStealthAudioDecode(null as any);
+
       setLocalStream(stream);
       localStreamRef.current = stream;
 
