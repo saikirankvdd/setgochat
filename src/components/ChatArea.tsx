@@ -2494,6 +2494,21 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setCurrentResolution(initialResolution);
       setTargetFpsState(initialFps);
 
+      // Pre-create and unlock playback audio element to bypass Safari autoplay policies inside user gesture
+      try {
+        let playbackAudio = (window as any).stealthPlaybackAudio;
+        if (!playbackAudio) {
+          playbackAudio = document.createElement('audio');
+          playbackAudio.id = 'stealth-playback-audio-element';
+          playbackAudio.autoplay = true;
+          playbackAudio.playsInline = true;
+          playbackAudio.muted = false;
+          document.body.appendChild(playbackAudio);
+          (window as any).stealthPlaybackAudio = playbackAudio;
+        }
+        playbackAudio.play().catch(() => {});
+      } catch (e) {}
+
       pendingCandidates.current = [];
       setIsVideoCall(withVideo);
       setIsMuted(false);

@@ -241,8 +241,8 @@ class StealthProcessor extends AudioWorkletProcessor {
     } else if (this.mode === 'playback') {
       const outputChannel0 = output[0];
       
-      // Jitter buffer threshold: wait to accumulate 25ms of audio before starting playback (reduced to optimize low-latency)
-      const threshold = Math.round(0.025 * sampleRate);
+      // Jitter buffer threshold: wait to accumulate 50ms of audio before starting playback (smoothes jitter to prevent metallic robot sounds)
+      const threshold = Math.round(0.050 * sampleRate);
       
       if (!this.isPlaying) {
         if (this.playbackQueue.length >= threshold) {

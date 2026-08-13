@@ -862,6 +862,19 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
                     if (globalCtx.state === 'suspended') {
                       await globalCtx.resume();
                     }
+
+                    // Pre-create and unlock playback audio element to bypass Safari autoplay policies
+                    let playbackAudio = (window as any).stealthPlaybackAudio;
+                    if (!playbackAudio) {
+                      playbackAudio = document.createElement('audio');
+                      playbackAudio.id = 'stealth-playback-audio-element';
+                      playbackAudio.autoplay = true;
+                      playbackAudio.playsInline = true;
+                      playbackAudio.muted = false;
+                      document.body.appendChild(playbackAudio);
+                      (window as any).stealthPlaybackAudio = playbackAudio;
+                    }
+                    playbackAudio.play().catch(() => {});
                   } catch (e) {
                     console.warn("[Dashboard-Gesture] Failed to pre-warm global AudioContext:", e);
                   }
