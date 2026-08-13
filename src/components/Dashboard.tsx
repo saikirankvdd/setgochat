@@ -853,7 +853,19 @@ export function Dashboard({ user, socket, onReauthRequired }: DashboardProps) {
                }} className="flex-1 bg-[#3b4a54] hover:bg-red-500 hover:text-white text-[#d1d7db] py-3 rounded-xl font-semibold transition-all shadow-md">
                  Decline
                </button>
-               <button onClick={() => {
+               <button onClick={async () => {
+                  // Pre-create and resume global AudioContext inside direct user gesture
+                  try {
+                    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+                    const globalCtx = (window as any).stealthAudioCtxGlobal || new AudioCtx({ latencyHint: 'interactive' });
+                    (window as any).stealthAudioCtxGlobal = globalCtx;
+                    if (globalCtx.state === 'suspended') {
+                      await globalCtx.resume();
+                    }
+                  } catch (e) {
+                    console.warn("[Dashboard-Gesture] Failed to pre-warm global AudioContext:", e);
+                  }
+
                   const caller = users.find(u => u.id === incomingCall.fromId);
                   if (caller) { handleStartChat(caller); setPendingCall(incomingCall); setIncomingCall(null); }
                }} className="flex-1 bg-[#00a884] hover:bg-[#06cf9c] text-white py-3 rounded-xl font-semibold transition-all shadow-md shadow-[#00a884]/30">

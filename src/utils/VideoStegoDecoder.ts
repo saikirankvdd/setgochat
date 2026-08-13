@@ -199,13 +199,14 @@ export class VideoStegoDecoder {
       displayCtx.imageSmoothingQuality = 'high';
       displayCtx.drawImage(this.lastDecodedFaceImage, 0, 0, this.width, this.height);
     } else {
-      // Fallback: draw cover video directly from remote WebRTC track
-      const video = this.remoteVideoEl;
-      if (video && video.readyState >= 2 && video.videoWidth) {
-        displayCtx.drawImage(video, 0, 0, this.width, this.height);
-      } else {
-        this.showCoverVideoFrame();
-      }
+      // Show a premium dark "Camera Off" screen instead of showing the raw cover video to the local user
+      displayCtx.fillStyle = '#0f172a'; // Deep slate background
+      displayCtx.fillRect(0, 0, this.width, this.height);
+      
+      displayCtx.fillStyle = '#64748b';
+      displayCtx.font = '14px sans-serif';
+      displayCtx.textAlign = 'center';
+      displayCtx.fillText('Camera Off', this.width / 2, this.height / 2);
     }
   };
 
