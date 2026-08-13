@@ -2364,7 +2364,36 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       // 1. Create the voice player node (runs in PLAYBACK mode)
       const voicePlayerNode = new AudioWorkletNode(audioCtx, 'stealth-processor');
       voicePlayerNode.port.postMessage({ type: 'SET_MODE_PLAYBACK' });
+      
+      // Connect to audioCtx.destination as a fallback
       voicePlayerNode.connect(audioCtx.destination);
+
+      // Create a MediaStream destination to route audio output to the device speaker
+      try {
+        const playbackDest = audioCtx.createMediaStreamDestination();
+        voicePlayerNode.connect(playbackDest);
+        (window as any).stealthPlaybackDest = playbackDest;
+
+        let playbackAudio = (window as any).stealthPlaybackAudio;
+        if (!playbackAudio) {
+          playbackAudio = document.createElement('audio');
+          playbackAudio.id = 'stealth-playback-audio-element';
+          playbackAudio.autoplay = true;
+          playbackAudio.playsInline = true;
+          playbackAudio.muted = false;
+          document.body.appendChild(playbackAudio);
+          (window as any).stealthPlaybackAudio = playbackAudio;
+        }
+        playbackAudio.srcObject = playbackDest.stream;
+        playbackAudio.play().catch(e => {
+          if (e.name !== 'AbortError') {
+            console.warn("[Stealth-Audio] Playback audio element play failed:", e);
+          }
+        });
+      } catch (e) {
+        console.warn("[Stealth-Audio] Speaker routing initialization failed:", e);
+      }
+
       (window as any).stealthVoicePlayerNode = voicePlayerNode;
 
       // 2. Create the decoder node (runs in DECODE mode)
@@ -2929,6 +2958,20 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         (window as any).stealthVoicePlayerNode.port.postMessage({ type: 'STOP' });
         try { (window as any).stealthVoicePlayerNode.disconnect(); } catch (e) {}
         delete (window as any).stealthVoicePlayerNode;
+      }
+
+      // Clean up the speaker routing audio element
+      const playbackAudio = (window as any).stealthPlaybackAudio;
+      if (playbackAudio) {
+        try {
+          playbackAudio.pause();
+          playbackAudio.srcObject = null;
+          playbackAudio.remove();
+        } catch (e) {}
+        delete (window as any).stealthPlaybackAudio;
+      }
+      if ((window as any).stealthPlaybackDest) {
+        delete (window as any).stealthPlaybackDest;
       }
 
       // 4. Stop audio context
