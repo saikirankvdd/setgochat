@@ -889,55 +889,58 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }).catch(() => {});
   };
 
-  const checkAdaptiveStegoEngine = (frameDurationMs: number, _source: 'encode' | 'decode') => {
-    if (isMobileDevice()) return;
-
+  const checkAdaptiveStegoEngine = (frameDurationMs: number, source: 'encode' | 'decode') => {
+    const isMobile = isMobileDevice();
     const now = performance.now();
-    // Grace period: ignore the first 10 seconds of every call (WASM/GPU warmup is expensive)
     if (!lastAdaptiveCheckRef.current) lastAdaptiveCheckRef.current = now;
     if (now - lastAdaptiveCheckRef.current < 1000) return;
     lastAdaptiveCheckRef.current = now;
 
-    // Use cached battery values — never await here
+    // Use cached battery values
     refreshBatteryState();
     const batteryLevel = batteryLevelRef.current;
     const batteryCharging = batteryChargingRef.current;
 
     const rtt = currentRttRef.current;
     const isBatterySaver = !batteryCharging && batteryLevel < 0.3;
-    const cooldownTime = 15000; // 15 seconds
+    const cooldownTime = 10000; // 10 seconds cooldown
     const timeSinceLastChange = now - lastSettingsChangeTimeRef.current;
 
-    if (isBatterySaver) {
-      if (currentResolutionRef.current !== '240p' || targetFpsRef.current !== 15) {
-        console.warn(`[Stealth-Adaptive] Low battery (${Math.round(batteryLevel * 100)}%) and not charging. Forcing Battery Saver Mode (240p @ 15fps).`);
-        applyStegoSettings('240p', 15);
+    // Enforce lightweight settings on mobile devices or battery saver to prevent CPU choking and laggy audio
+    if (isBatterySaver || isMobile) {
+      const targetRes = '240p';
+      const targetFpsVal = isMobile ? 12 : 10;
+      if (currentResolutionRef.current !== targetRes || targetFpsRef.current !== targetFpsVal) {
+        console.warn(`[Stealth-Adaptive] Restricting stego footprint (Mobile/BatterySaver) to ${targetRes} @ ${targetFpsVal}fps.`);
+        applyStegoSettings(targetRes, targetFpsVal);
       }
       return;
     }
 
-    const profiles: { resolution: '240p' | '480p'; fps: 5 | 10 | 15 | 20 | 30 | 60 }[] = [
-      { resolution: '480p', fps: 15 }, // FLOOR — never go below 15fps
-      { resolution: '480p', fps: 20 },
-      { resolution: '480p', fps: 30 },
-      { resolution: '480p', fps: 60 }
+    // Profiles for laptops
+    const profiles: { resolution: '240p' | '480p'; fps: 10 | 12 | 15 }[] = [
+      { resolution: '240p', fps: 10 },
+      { resolution: '240p', fps: 12 },
+      { resolution: '240p', fps: 15 },
+      { resolution: '480p', fps: 12 },
+      { resolution: '480p', fps: 15 }
     ];
 
     const currentProfileIdx = profiles.findIndex(p => p.resolution === currentResolutionRef.current && p.fps === targetFpsRef.current);
 
-    // ONLY use RTT (network congestion) to drive quality decisions.
-    // Stego frame encoding takes 60-80ms by design — this is NOT "CPU overloaded".
-    // We never downgrade based on frameDurationMs.
-    const isNetworkCongested = rtt > 500; // Only downgrade on severe congestion (>500ms RTT)
-    const isNetworkGood     = rtt > 0 && rtt < 300; // Upgrade when RTT is healthy
+    // CPU load check: if a frame takes > 75ms to encode/decode, the CPU is choking
+    const isCpuChoking = frameDurationMs > 75;
+    const isNetworkCongested = rtt > 400; // Downgrade on network lag
+    const isNetworkGood = rtt > 0 && rtt < 250; // Upgrade on healthy RTT
 
-    if (isNetworkCongested) {
+    if (isCpuChoking || isNetworkCongested) {
       consecutiveSlowFramesRef.current += 1;
-      if (consecutiveSlowFramesRef.current >= 5) {
+      if (consecutiveSlowFramesRef.current >= 4) {
         consecutiveSlowFramesRef.current = 0;
         if (timeSinceLastChange > cooldownTime && currentProfileIdx > 0) {
           const nextProfile = profiles[currentProfileIdx - 1];
-          console.warn(`[Stealth-Adaptive] Network congested (RTT: ${rtt.toFixed(1)}ms). Downgrading to ${nextProfile.resolution} @ ${nextProfile.fps}fps.`);
+          const reason = isCpuChoking ? `CPU overload (${frameDurationMs.toFixed(1)}ms)` : `network congestion (RTT: ${rtt.toFixed(1)}ms)`;
+          console.warn(`[Stealth-Adaptive] Downgrading due to ${reason} to ${nextProfile.resolution} @ ${nextProfile.fps}fps.`);
           applyStegoSettings(nextProfile.resolution, nextProfile.fps);
         }
       }
@@ -2484,8 +2487,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     isCallStartingRef.current = true;
     try {
       const isMobile = isMobileDevice();
-      const initialResolution = '480p';
-      const initialFps = 30;
+      const initialResolution = isMobile ? '240p' : '480p';
+      const initialFps = isMobile ? 12 : 15;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);
@@ -2679,8 +2682,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     isCallAcceptingRef.current = true;
     try {
       const isMobile = isMobileDevice();
-      const initialResolution = '480p';
-      const initialFps = 30;
+      const initialResolution = isMobile ? '240p' : '480p';
+      const initialFps = isMobile ? 12 : 15;
       currentResolutionRef.current = initialResolution;
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);
@@ -3031,28 +3034,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
 
   const toggleSpeaker = async () => {
     try {
+      const nextSpeakerState = !speakerOn;
+      setSpeakerOn(nextSpeakerState);
+
       const audioCtx = stealthAudioCtxRef.current;
-      if (!audioCtx) {
-        console.warn("[Stealth-Speaker] AudioContext not active yet.");
-        return;
-      }
-      if (typeof (audioCtx as any).setSinkId !== 'function') {
-        alert("Your browser does not support choosing audio output devices (setSinkId).");
-        return;
-      }
-      if (typeof navigator.mediaDevices?.enumerateDevices !== 'function') {
-        alert("Media device enumeration is not supported in this browser.");
-        return;
-      }
+      if (!audioCtx) return;
 
-      const devices = await navigator.mediaDevices.enumerateDevices();
+      const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
       const outputs = devices.filter(d => d.kind === 'audiooutput');
-      if (outputs.length === 0) {
-        alert("No audio output devices detected.");
-        return;
-      }
-
-      // Find loudspeaker vs earpiece/default
+      
       const speakerDevice = outputs.find(d => 
         d.label.toLowerCase().includes('speaker') || 
         d.label.toLowerCase().includes('loudspeaker') ||
@@ -3065,40 +3055,23 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         d.label.toLowerCase().includes('handset')
       );
 
-      const nextSpeakerState = !speakerOn;
-      
-      if (nextSpeakerState) {
-        // Enable loudspeaker
-        if (speakerDevice) {
-          await (audioCtx as any).setSinkId(speakerDevice.deviceId);
-          console.log("[Stealth-Speaker] Routed AudioContext to speaker:", speakerDevice.label);
-        } else {
-          // Fallback to the first output device
-          await (audioCtx as any).setSinkId(outputs[0].deviceId);
-        }
-        
-        if (remoteVideoRef.current && typeof (remoteVideoRef.current as any).setSinkId === 'function') {
-          const targetId = speakerDevice?.deviceId || outputs[0].deviceId;
-          await (remoteVideoRef.current as any).setSinkId(targetId).catch(() => {});
-        }
-      } else {
-        // Disable loudspeaker (route back to earpiece/default)
-        if (earpieceDevice) {
-          await (audioCtx as any).setSinkId(earpieceDevice.deviceId);
-          console.log("[Stealth-Speaker] Routed AudioContext to earpiece:", earpieceDevice.label);
-        } else {
-          await (audioCtx as any).setSinkId(''); // default sink ID
-        }
-        
-        if (remoteVideoRef.current && typeof (remoteVideoRef.current as any).setSinkId === 'function') {
-          const targetId = earpieceDevice?.deviceId || '';
-          await (remoteVideoRef.current as any).setSinkId(targetId).catch(() => {});
-        }
+      if (typeof (audioCtx as any).setSinkId === 'function') {
+        const targetId = nextSpeakerState ? (speakerDevice?.deviceId || outputs[0]?.deviceId || '') : (earpieceDevice?.deviceId || '');
+        await (audioCtx as any).setSinkId(targetId).catch(() => {});
       }
-      setSpeakerOn(nextSpeakerState);
-    } catch (err: any) {
-      console.error("[Stealth-Speaker] Error toggling speaker:", err);
-      alert(`Could not change audio output route: ${err.message || 'Unknown error'}`);
+
+      const playbackAudio = (window as any).stealthPlaybackAudio;
+      if (playbackAudio && typeof playbackAudio.setSinkId === 'function') {
+        const targetId = nextSpeakerState ? (speakerDevice?.deviceId || outputs[0]?.deviceId || '') : (earpieceDevice?.deviceId || '');
+        await playbackAudio.setSinkId(targetId).catch(() => {});
+      }
+
+      if (remoteVideoRef.current && typeof (remoteVideoRef.current as any).setSinkId === 'function') {
+        const targetId = nextSpeakerState ? (speakerDevice?.deviceId || outputs[0]?.deviceId || '') : (earpieceDevice?.deviceId || '');
+        await (remoteVideoRef.current as any).setSinkId(targetId).catch(() => {});
+      }
+    } catch (err) {
+      console.error("[Stealth-Speaker] Failed to toggle speaker:", err);
     }
   };
 
