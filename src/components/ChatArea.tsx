@@ -802,6 +802,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const voiceQueueRef = useRef<number[]>([]);
   const isCallAcceptingRef = useRef<boolean>(false);
   const isCallStartingRef = useRef<boolean>(false);
+  const isCleaningUpRef = useRef<boolean>(false);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const derivedKeysRef = useRef<{ key: CryptoJS.lib.WordArray; iv: CryptoJS.lib.WordArray; pin: string } | null>(null);
   const getDerivedKeys = (pin: string) => {
     if (derivedKeysRef.current && derivedKeysRef.current.pin === pin) {
@@ -1093,8 +1095,24 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             isRevealed: true,
           }];
         });
+      } else if (state === 'disconnected') {
+        // Transitory state: WebRTC is trying to reconnect. Give it 15 seconds before ending.
+        console.warn("[Stealth-Call] WebRTC connection disconnected. Starting 15s reconnect grace period...");
+        if (!reconnectTimerRef.current) {
+          reconnectTimerRef.current = setTimeout(() => {
+            reconnectTimerRef.current = null;
+            if (pc.connectionState !== 'connected' && callStateRef.current === 'connected') {
+              console.warn("[Stealth-Call] ICE reconnect timed out after 15s. Ending call.");
+              endCall(true);
+            }
+          }, 15000);
+        }
       } else if (state === 'failed' || state === 'closed') {
         console.warn("[Stealth-Call] WebRTC connection failed or closed. Ending call. State:", state);
+        if (reconnectTimerRef.current) {
+          clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
         endCall(true);
       }
     };
@@ -2251,85 +2269,85 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       const dest = audioCtx.createMediaStreamDestination();
       workletNode.connect(dest);
 
+      // ---- STEALTH-MIC-WORKLET: runs on the audio rendering thread (NOT the main JS thread) ----
+      // This completely replaces the deprecated ScriptProcessorNode which was blocking the main
+      // thread for 250ms+ and causing robot/frozen audio. The mic worklet accumulates samples,
+      // downsamples 48kHz→8kHz, converts to Int16, and posts a tiny buffer back to the main thread.
+      // Main thread only does: gzip → encrypt → dc.send (all <1ms with no audio thread impact).
+      const micWorkletId = `stealth-mic-worklet`;
+      if (!((window as any).stealthMicWorkletLoaded)) {
+        await audioCtx.audioWorklet.addModule('/stealth-mic-worklet.js');
+        (window as any).stealthMicWorkletLoaded = true;
+      }
+      const micWorkletNode = new AudioWorkletNode(audioCtx, 'stealth-mic-processor');
       const micSource = audioCtx.createMediaStreamSource(rawStream);
-      const micProcessor = audioCtx.createScriptProcessor(512, 1, 1);
       (window as any).stealthMicSource = micSource;
-      micSource.connect(micProcessor);
-
+      micSource.connect(micWorkletNode);
+      // Connect to silent gain so the audio graph stays alive but mic isn't audible locally
       const silentGain = audioCtx.createGain();
       silentGain.gain.value = 0;
-      micProcessor.connect(silentGain);
+      micWorkletNode.connect(silentGain);
       silentGain.connect(audioCtx.destination);
+      (window as any).stealthMicWorkletNode = micWorkletNode;
 
-      let micAccumulator: number[] = [];
+      micWorkletNode.port.onmessage = (event) => {
+        if (event.data.type !== 'MIC_CHUNK_READY') return;
+        if (callStateRef.current !== 'connected') return;
 
-      micProcessor.onaudioprocess = (e) => {
-        const inputData = e.inputBuffer.getChannelData(0);
-        micAccumulator.push(...(Array.from(inputData) as number[]));
+        // event.data.samples is already a downsampled Int16Array from the worklet thread
+        const downsampled16 = event.data.samples as Int16Array;
 
-        const triggerLength = audioCtx.sampleRate === 48000 ? 2040 : 2048;
-        if (micAccumulator.length >= triggerLength) {
-          const chunk = micAccumulator.splice(0, triggerLength);
-          const rawFloats = Float32Array.from(chunk);
-          
-          const downsampled = downsampleAudio(rawFloats, audioCtx.sampleRate, 8000);
-          
-          const bytes = new Uint8Array(downsampled.length * 2);
-          const micGain = 1.0; // Prevent manual digital clipping distortion, rely on autoGainControl
-          for (let i = 0; i < downsampled.length; i++) {
-            const boosted = Math.max(-1.0, Math.min(1.0, downsampled[i] * micGain));
-            const s16 = Math.max(-32768, Math.min(32767, Math.floor(boosted * 32767)));
-            bytes[i * 2] = s16 & 0xFF;         // Low byte
-            bytes[i * 2 + 1] = (s16 >> 8) & 0xFF; // High byte
+        // Convert Int16Array to Uint8Array (little-endian bytes)
+        const bytes = new Uint8Array(downsampled16.buffer);
+
+        // gzip compress at level 1 for ultra-low latency
+        const compressed = gzipSync(bytes, { level: 1 });
+        const base64 = uint8ToBase64(compressed);
+
+        // fastEncrypt with sequence number as IV — runs under 1ms
+        const seq = audioSeqRef.current;
+        const keys = getDerivedKeys(sessionInfo.pin);
+        const iv = CryptoJS.lib.WordArray.create([0, 0, 0, seq]);
+        const encrypted = fastEncrypt(base64, keys.key, iv);
+        audioSeqRef.current = (seq + 1) & 0xFFFF;
+
+        // Embed bits into cover song worklet (for WebRTC LSB steganography path)
+        const payloadString = String.fromCharCode((seq >> 8) & 0xFF, seq & 0xFF) + encrypted;
+        const bits = stringToBinary(payloadString);
+        let headerBits = "";
+        const len = bits.length;
+        for (let i = 0; i < 32; i++) {
+          headerBits += ((len >>> (31 - i)) & 1).toString();
+        }
+        const fullBits = headerBits + bits;
+        const bitsArray = fullBits.split('').map(Number);
+        workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: bitsArray });
+
+        // Send over direct P2P data channel (primary audio path)
+        const dc = dataChannelRef.current;
+        if (dc && dc.readyState === 'open') {
+          const payloadBytes = new TextEncoder().encode(encrypted);
+          const packet = new Uint8Array(3 + payloadBytes.length);
+          packet[0] = 0; // Audio type marker
+          packet[1] = (seq >> 8) & 0xFF;
+          packet[2] = seq & 0xFF;
+          packet.set(payloadBytes, 3);
+          try {
+            dc.send(packet);
+          } catch (err) {
+            console.warn("[Stealth-P2P] Failed to send audio packet over data channel:", err);
           }
-
-          // Use compression level 1 for ultra-low latency & CPU savings
-          const compressed = gzipSync(bytes, { level: 1 });
-          const base64 = uint8ToBase64(compressed);
-
-           // Use fastEncrypt with sequence number as IV to run under 1ms
-          const seq = audioSeqRef.current;
-          const keys = getDerivedKeys(sessionInfo.pin);
-          const iv = CryptoJS.lib.WordArray.create([0, 0, 0, seq]);
-          const encrypted = fastEncrypt(base64, keys.key, iv);
-          audioSeqRef.current = (seq + 1) & 0xFFFF;
-
-          // Prepend 16-bit sequence number (2 characters) to the payload string
-          const payloadString = String.fromCharCode((seq >> 8) & 0xFF, seq & 0xFF) + encrypted;
-          const bits = stringToBinary(payloadString);
-
-          // Prefix with a 32-bit length header (Big Endian)
-          const len = bits.length;
-          let headerBits = "";
-          for (let i = 0; i < 32; i++) {
-            headerBits += ((len >>> (31 - i)) & 1).toString();
-          }
-          const fullBits = headerBits + bits;
-          const bitsArray = fullBits.split('').map(Number);
-
-          // Push bits to the worklet to be embedded
-          workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: bitsArray });
-
-          // Send over direct P2P data channel if open (Option B)
-          const dc = dataChannelRef.current;
-          if (dc && dc.readyState === 'open') {
-            const payloadBytes = new TextEncoder().encode(encrypted);
-            const packet = new Uint8Array(3 + payloadBytes.length);
-            packet[0] = 0; // Audio type
-            packet[1] = (seq >> 8) & 0xFF;
-            packet[2] = seq & 0xFF;
-            packet.set(payloadBytes, 3);
-            try {
-              dc.send(packet);
-            } catch (err) {
-              console.warn("[Stealth-P2P] Failed to send audio packet over data channel:", err);
-            }
-          }
+        } else if (callStateRef.current === 'connected') {
+          // Fallback: send via WebSocket if P2P not yet open
+          setPacketsSent(prev => prev + 1);
+          socket.emit('stealth_rtp_packet', {
+            toId: toId,
+            packet: { type: 'audio_stego', rtpPacket: Array.from(bytes), timestamp: Date.now() }
+          });
         }
       };
 
       stealthWorkletRef.current = workletNode;
-      (window as any).stealthMicProcessor = micProcessor; // prevent GC
 
       if (audioCtx.state === 'suspended') {
         audioCtx.resume().catch(e => console.warn("[Stealth-Encode] Failed to resume AudioContext:", e));
@@ -2482,6 +2500,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       console.warn("[Stealth-Call] startCall ignored because state is not idle or already starting:", callStateRef.current);
       return;
     }
+    // Wait for any previous call cleanup to fully finish (prevents zombie worklets)
+    let cleanupWaitMs = 0;
+    while (isCleaningUpRef.current && cleanupWaitMs < 600) {
+      await new Promise(r => setTimeout(r, 50));
+      cleanupWaitMs += 50;
+    }
     isCallStartingRef.current = true;
     try {
       const isMobile = isMobileDevice();
@@ -2508,7 +2532,22 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       } catch (e) {}
 
       pendingCandidates.current = [];
-      setIsVideoCall(withVideo);
+
+      // Pre-check camera permission before getUserMedia to avoid mid-call NotReadableError
+      let effectiveWithVideo = withVideo;
+      if (withVideo) {
+        try {
+          const camPerm = await navigator.permissions.query({ name: 'camera' as PermissionName });
+          if (camPerm.state === 'denied') {
+            console.warn("[Stealth-Call] Camera permission denied — falling back to audio-only.");
+            effectiveWithVideo = false;
+          }
+        } catch (_) {
+          // permissions API not supported (e.g. Firefox) — proceed and let getUserMedia handle it
+        }
+      }
+
+      setIsVideoCall(effectiveWithVideo);
       setIsMuted(false);
       setIsVideoOff(false);
       let stream: MediaStream;
@@ -2519,16 +2558,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             noiseSuppression: true,
             autoGainControl: true
           },
-          video: withVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false
+          video: effectiveWithVideo ? { width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 30 } } : false
         });
       } catch (err: any) {
-        if (withVideo) {
+        if (effectiveWithVideo) {
           console.warn("[Stealth-Call] Failed to start video source, falling back to audio-only:", err);
           showModal({
             title: 'Camera In Use / Blocked',
             message: 'Could not access your video camera. Continuing as an Audio-Only call.',
             iconType: 'warning'
           });
+          effectiveWithVideo = false;
           setIsVideoCall(false);
           stream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -2554,7 +2594,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       }
 
       let localVideoTrack = stream.getVideoTracks()[0];
-      if (withVideo) {
+      if (effectiveWithVideo) {
         try {
           console.log("[Stealth] Initializing Video steganography encoder...");
           const encoder = new VideoStegoEncoder(
@@ -2605,17 +2645,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
       });
       peerConnectionRef.current = pc;
-      setupPeerConnectionListeners(pc, withVideo);
+      setupPeerConnectionListeners(pc, effectiveWithVideo);
 
       // Add the steganographic audio track (cover song + encoded voice) in place of raw mic
       // and the (possibly encoded) video track
       const stegoStream = new MediaStream();
       stegoStream.addTrack(localAudioTrack);
-      if (withVideo && localVideoTrack) {
+      if (effectiveWithVideo && localVideoTrack) {
         stegoStream.addTrack(localVideoTrack);
       }
       pc.addTrack(localAudioTrack, stegoStream);
-      if (withVideo && localVideoTrack) {
+      if (effectiveWithVideo && localVideoTrack) {
         pc.addTrack(localVideoTrack, stegoStream);
       }
 
@@ -2668,7 +2708,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       sendStegoSignaling({
         type: 'stego_call_offer',
         offer: pc.localDescription || offer,
-        withVideo
+        withVideo: effectiveWithVideo
       }, targetUser.id.toString());
     } catch (err: any) {
       console.error('Error starting call:', err);
@@ -2870,6 +2910,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const endCall = (emit = true) => {
+    // Clear any pending ICE reconnect timer
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    isCleaningUpRef.current = true;
     if (callIdRef.current) {
       endedCallIdsRef.current.add(callIdRef.current);
     }
@@ -2945,6 +2991,13 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         try { micProcessor.disconnect(); } catch (e) {}
         delete (window as any).stealthMicProcessor;
       }
+      const micWorkletNode = (window as any).stealthMicWorkletNode;
+      if (micWorkletNode) {
+        try { micWorkletNode.disconnect(); } catch (e) {}
+        micWorkletNode.port.onmessage = null;
+        delete (window as any).stealthMicWorkletNode;
+      }
+      (window as any).stealthMicWorkletLoaded = false;
       const micSource = (window as any).stealthMicSource;
       if (micSource) {
         try { micSource.disconnect(); } catch (e) {}
@@ -2989,6 +3042,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       console.log("[Stealth] Steganography context and worklets cleaned up.");
     } catch (e) {
       console.error("[Stealth] Error during cleanup:", e);
+    } finally {
+      isCleaningUpRef.current = false;
     }
 
     if (localStreamRef.current) {
