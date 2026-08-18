@@ -1093,11 +1093,9 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             isRevealed: true,
           }];
         });
-      } else if (state === 'failed' || state === 'closed' || state === 'disconnected') {
-        console.warn("[Stealth-Call] WebRTC connection failed, closed, or disconnected. Ending call. State:", state);
-        if (callStateRef.current === 'connected' || state === 'closed' || state === 'disconnected') {
-          endCall(true);
-        }
+      } else if (state === 'failed' || state === 'closed') {
+        console.warn("[Stealth-Call] WebRTC connection failed or closed. Ending call. State:", state);
+        endCall(true);
       }
     };
   };
