@@ -1668,7 +1668,19 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setCallerId(data.fromId);
       setIsVideoCall(data.withVideo || false);
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          {
+            urls: [
+              'turn:openrelay.metered.ca:80',
+              'turn:openrelay.metered.ca:443',
+              'turns:openrelay.metered.ca:443'
+            ],
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
+        ]
       });
       peerConnectionRef.current = pc;
       setupPeerConnectionListeners(pc, data.withVideo || false);
@@ -2338,11 +2350,28 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             console.warn("[Stealth-P2P] Failed to send audio packet over data channel:", err);
           }
         } else if (callStateRef.current === 'connected') {
-          // Fallback: send via WebSocket if P2P not yet open
+          // Fallback: send via WebSocket with proper 12-byte fake-RTP header
+          // so the receiver's decoder can parse it correctly (checks rtpBytes[0]===0x80, rtpBytes[1]===0x78)
+          const payloadBytes = new TextEncoder().encode(encrypted);
+          const rtpPacket = new Uint8Array(12 + payloadBytes.length);
+          rtpPacket[0] = 0x80; // RTP version 2
+          rtpPacket[1] = 0x78; // payload type (custom)
+          rtpPacket[2] = (seq >> 8) & 0xFF; // sequence high byte
+          rtpPacket[3] = seq & 0xFF;         // sequence low byte
+          // bytes 4-7: RTP timestamp
+          const ts = performance.now() & 0xFFFFFFFF;
+          rtpPacket[4] = (ts >>> 24) & 0xFF;
+          rtpPacket[5] = (ts >>> 16) & 0xFF;
+          rtpPacket[6] = (ts >>> 8) & 0xFF;
+          rtpPacket[7] = ts & 0xFF;
+          // bytes 8-11: SSRC (constant identifier)
+          rtpPacket[8] = 0xDE; rtpPacket[9] = 0xAD;
+          rtpPacket[10] = 0xBE; rtpPacket[11] = 0xEF;
+          rtpPacket.set(payloadBytes, 12);
           setPacketsSent(prev => prev + 1);
           socket.emit('stealth_rtp_packet', {
             toId: toId,
-            packet: { type: 'audio_stego', rtpPacket: Array.from(bytes), timestamp: Date.now() }
+            packet: { type: 'audio_stego', rtpPacket: Array.from(rtpPacket), timestamp: Date.now() }
           });
         }
       };
@@ -2642,7 +2671,19 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setCallState('calling');
 
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          {
+            urls: [
+              'turn:openrelay.metered.ca:80',
+              'turn:openrelay.metered.ca:443',
+              'turns:openrelay.metered.ca:443'
+            ],
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
+        ]
       });
       peerConnectionRef.current = pc;
       setupPeerConnectionListeners(pc, effectiveWithVideo);
