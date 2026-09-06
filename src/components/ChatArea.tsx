@@ -3188,37 +3188,25 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const toggleAEC = async () => {
     const newAec = !aecEnabled;
     setAecEnabled(newAec);
-    // Reacquire microphone with updated AEC setting on the fly
+    // Use applyConstraints() on the EXISTING mic track — this changes AEC processing
+    // in-place without stopping the track or breaking the audio graph.
+    // (Re-acquiring via getUserMedia would stop the existing track and kill the pipeline.)
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
+      const track = localStreamRef.current?.getAudioTracks()[0];
+      if (track) {
+        await track.applyConstraints({
           echoCancellation: newAec,
           noiseSuppression: newAec,
           autoGainControl: newAec
-        },
-        video: false
-      });
-      const newMicTrack = stream.getAudioTracks()[0];
-      // Reconnect mic source to the existing mic worklet node
-      const audioCtx = stealthAudioCtxRef.current;
-      const micWorkletNode = (window as any).stealthMicWorkletNode;
-      const oldMicSource = (window as any).stealthMicSource;
-      if (audioCtx && micWorkletNode && newMicTrack) {
-        if (oldMicSource) {
-          try { oldMicSource.disconnect(); } catch(_) {}
-        }
-        // Stop old mic tracks on localStream
-        if (localStreamRef.current) {
-          localStreamRef.current.getAudioTracks().forEach(t => t.stop());
-        }
-        const newSource = audioCtx.createMediaStreamSource(new MediaStream([newMicTrack]));
-        newSource.connect(micWorkletNode);
-        (window as any).stealthMicSource = newSource;
+        });
+        console.log(`[Stealth-AEC] Applied constraints — echoCancellation:${newAec}, noiseSuppression:${newAec}, autoGainControl:${newAec}`);
+      } else {
+        console.warn('[Stealth-AEC] No active mic track found to apply constraints to.');
+        setAecEnabled(aecEnabled); // revert UI
       }
-      console.log(`[Stealth-AEC] Echo cancellation turned ${newAec ? 'ON' : 'OFF'}.`);
     } catch (err) {
-      console.warn('[Stealth-AEC] Failed to reacquire mic with new AEC setting:', err);
-      setAecEnabled(aecEnabled); // revert
+      console.warn('[Stealth-AEC] applyConstraints failed:', err);
+      setAecEnabled(aecEnabled); // revert UI
     }
   };
 

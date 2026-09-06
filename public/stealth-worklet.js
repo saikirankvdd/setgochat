@@ -250,9 +250,11 @@ class StealthProcessor extends AudioWorkletProcessor {
       const startThreshold  = Math.round(0.050 * sampleRate); // 50ms cold start
       const resumeThreshold = Math.round(0.005 * sampleRate); // 5ms warm resume
       
+      // Cold-start: wait for 50ms before the very first playback to avoid robot chattering.
+      // After that, NEVER stop playing — output zeros for dry frames and resume immediately.
+      // This prevents the micro-silence gaps between words that cause robotic audio.
       if (!this.isPlaying) {
-        const thresh = this.hasStartedOnce ? resumeThreshold : startThreshold;
-        if (this.playbackQueue.length >= thresh) {
+        if (this.playbackQueue.length >= startThreshold) {
           this.isPlaying = true;
           this.hasStartedOnce = true;
         }
@@ -261,14 +263,13 @@ class StealthProcessor extends AudioWorkletProcessor {
       if (this.isPlaying) {
         const chunkToPlay = this.playbackQueue.splice(0, outputLength);
         for (let i = 0; i < outputLength; i++) {
+          // Play available samples; output zero-padding when queue is briefly dry
           outputChannel0[i] = i < chunkToPlay.length ? chunkToPlay[i] : 0;
         }
-        // Only pause if queue is truly empty — resume quickly with small threshold
-        if (this.playbackQueue.length === 0) {
-          this.isPlaying = false;
-        }
+        // Do NOT reset isPlaying — once started, keep the playback clock running.
+        // New packets will immediately fill into this running output with no threshold wait.
       } else {
-        // Output silence while buffering
+        // Silence while waiting for initial cold-start buffer
         for (let i = 0; i < outputLength; i++) {
           outputChannel0[i] = 0;
         }
