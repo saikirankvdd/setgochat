@@ -752,6 +752,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const [packetsRecv, setPacketsRecv] = useState<number>(0);
   const [isMuted, setIsMuted] = useState(false);
   const [speakerOn, setSpeakerOn] = useState(false);
+  const [aecEnabled, setAecEnabled] = useState(true);
   const [isVideoOff, setIsVideoOff] = useState(false);
   const [scanningStatus, setScanningStatus] = useState<{ active: boolean, type: 'link' | 'document' | null, name: string }>({ active: false, type: null, name: '' });
   const [showDropdown, setShowDropdown] = useState(false);
@@ -3184,6 +3185,43 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
   };
 
+  const toggleAEC = async () => {
+    const newAec = !aecEnabled;
+    setAecEnabled(newAec);
+    // Reacquire microphone with updated AEC setting on the fly
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: newAec,
+          noiseSuppression: newAec,
+          autoGainControl: newAec
+        },
+        video: false
+      });
+      const newMicTrack = stream.getAudioTracks()[0];
+      // Reconnect mic source to the existing mic worklet node
+      const audioCtx = stealthAudioCtxRef.current;
+      const micWorkletNode = (window as any).stealthMicWorkletNode;
+      const oldMicSource = (window as any).stealthMicSource;
+      if (audioCtx && micWorkletNode && newMicTrack) {
+        if (oldMicSource) {
+          try { oldMicSource.disconnect(); } catch(_) {}
+        }
+        // Stop old mic tracks on localStream
+        if (localStreamRef.current) {
+          localStreamRef.current.getAudioTracks().forEach(t => t.stop());
+        }
+        const newSource = audioCtx.createMediaStreamSource(new MediaStream([newMicTrack]));
+        newSource.connect(micWorkletNode);
+        (window as any).stealthMicSource = newSource;
+      }
+      console.log(`[Stealth-AEC] Echo cancellation turned ${newAec ? 'ON' : 'OFF'}.`);
+    } catch (err) {
+      console.warn('[Stealth-AEC] Failed to reacquire mic with new AEC setting:', err);
+      setAecEnabled(aecEnabled); // revert
+    }
+  };
+
   const toggleVideo = () => {
     if (localStream && isVideoCall) {
       localStream.getVideoTracks().forEach(track => {
@@ -3785,6 +3823,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                     
                     <button onClick={toggleSpeaker} className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors ${speakerOn ? 'bg-green-500 hover:bg-green-600 text-white' : 'bg-[#202c33] hover:bg-[#2a3942] text-white'}`}>
                       <Volume2 className="w-6 h-6" />
+                    </button>
+
+                    <button
+                      onClick={toggleAEC}
+                      title={aecEnabled ? 'Echo Cancellation ON — tap to disable (useful when testing in same room)' : 'Echo Cancellation OFF — tap to enable'}
+                      className={`w-14 h-14 rounded-full flex items-center justify-center shadow-lg transition-colors text-xs font-bold ${aecEnabled ? 'bg-[#202c33] hover:bg-[#2a3942] text-white' : 'bg-amber-500 hover:bg-amber-600 text-white'}`}
+                    >
+                      AEC
                     </button>
 
                     {isVideoCall && (

@@ -18,6 +18,7 @@ class StealthProcessor extends AudioWorkletProcessor {
     // Playback buffer for incoming voice samples
     this.playbackQueue = [];
     this.isPlaying = false;
+    this.hasStartedOnce = false; // two-threshold jitter: first play uses cold-start threshold
     
     // WASM Engine instance (to be initialized in Stage 9)
     this.wasmEngine = null;
@@ -60,6 +61,7 @@ class StealthProcessor extends AudioWorkletProcessor {
       this.mode = 'playback';
       this.playbackQueue = [];
       this.isPlaying = false;
+      this.hasStartedOnce = false;
       console.log("AudioWorklet: Mode set to PLAYBACK.");
     } else if (data.type === 'PUSH_PLAYBACK') {
       this.playbackQueue.push(...data.samples);
@@ -79,6 +81,7 @@ class StealthProcessor extends AudioWorkletProcessor {
       this.expectedBitsLength = 0;
       this.playbackQueue = [];
       this.isPlaying = false;
+      this.hasStartedOnce = false;
       console.log("AudioWorklet: Stealth Mode Stopped.");
     }
   }
@@ -241,12 +244,17 @@ class StealthProcessor extends AudioWorkletProcessor {
     } else if (this.mode === 'playback') {
       const outputChannel0 = output[0];
       
-      // Jitter buffer threshold: wait to accumulate 50ms of audio before starting playback (smoothes jitter to prevent metallic robot sounds)
-      const threshold = Math.round(0.050 * sampleRate);
+      // Two-threshold jitter buffer:
+      // startThreshold (50ms): wait for this much audio before playing the very first time (prevents robotic restart chattering)
+      // resumeThreshold (5ms): after a dry-run, only wait for this much before resuming (prevents long silent gaps)
+      const startThreshold  = Math.round(0.050 * sampleRate); // 50ms cold start
+      const resumeThreshold = Math.round(0.005 * sampleRate); // 5ms warm resume
       
       if (!this.isPlaying) {
-        if (this.playbackQueue.length >= threshold) {
+        const thresh = this.hasStartedOnce ? resumeThreshold : startThreshold;
+        if (this.playbackQueue.length >= thresh) {
           this.isPlaying = true;
+          this.hasStartedOnce = true;
         }
       }
       
@@ -255,8 +263,7 @@ class StealthProcessor extends AudioWorkletProcessor {
         for (let i = 0; i < outputLength; i++) {
           outputChannel0[i] = i < chunkToPlay.length ? chunkToPlay[i] : 0;
         }
-        
-        // If the queue runs dry, pause playback to rebuild buffer smoothly
+        // Only pause if queue is truly empty — resume quickly with small threshold
         if (this.playbackQueue.length === 0) {
           this.isPlaying = false;
         }
