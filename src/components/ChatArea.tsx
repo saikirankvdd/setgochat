@@ -3197,9 +3197,10 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         await track.applyConstraints({
           echoCancellation: newAec,
           noiseSuppression: newAec,
-          autoGainControl: newAec
+          autoGainControl: true  // always ON — without AGC the mic is too quiet regardless of AEC state
         });
-        console.log(`[Stealth-AEC] Applied constraints — echoCancellation:${newAec}, noiseSuppression:${newAec}, autoGainControl:${newAec}`);
+        console.log(`[Stealth-AEC] Applied constraints — echoCancellation:${newAec}, noiseSuppression:${newAec}, autoGainControl:true (always on)`);
+
       } else {
         console.warn('[Stealth-AEC] No active mic track found to apply constraints to.');
         setAecEnabled(aecEnabled); // revert UI
