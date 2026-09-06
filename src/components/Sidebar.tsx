@@ -181,15 +181,25 @@ export function Sidebar({ currentUser, users, sessions, calls, onSelectUser, act
 
   const handleChangePassword = async () => {
     try {
+      let encryptedPrivateKey: string | undefined;
+      if (currentUser.privateKey) {
+        const { encryptPrivateKeyWithPassword } = await import('../utils/e2ee');
+        encryptedPrivateKey = await encryptPrivateKeyWithPassword(currentUser.privateKey, newPassword);
+      }
       const res = await fetch('/api/change-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ emailOrUsername: currentUser.username, otp, newPassword }),
+        body: JSON.stringify({ 
+          emailOrUsername: currentUser.username, 
+          otp, 
+          newPassword,
+          encryptedPrivateKey 
+        }),
         credentials: 'include'
       });
       if (res.ok) {
         setShowChangePassword(false);
-        showModal({ title: 'Success', message: 'Password changed successfully!', iconType: 'success' });
+        showModal({ title: 'Success', message: 'Password changed successfully! Vault security re-synchronized.', iconType: 'success' });
         setOtpSent(false); setOtp(''); setNewPassword('');
       } else { showModal({ title: 'Error', message: 'Invalid OTP or error changing password', iconType: 'warning' }); }
     } catch (err) { console.error(err); }

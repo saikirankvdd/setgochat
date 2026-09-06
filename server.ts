@@ -545,14 +545,15 @@ app.post('/api/request-otp', authLimiter, async (req: any, res: any, next: any) 
 const changePasswordSchema = z.object({
   emailOrUsername: z.string().trim().min(1).max(254),
   otp: z.string().min(6).max(6),
-  newPassword: z.string().min(6)
+  newPassword: z.string().min(6),
+  encryptedPrivateKey: z.string().optional()
 });
 
 app.post('/api/change-password', authLimiter, async (req: any, res: any, next: any) => {
   try {
     const parsed = changePasswordSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: 'Missing fields' });
-    const { emailOrUsername, otp, newPassword } = parsed.data;
+    const { emailOrUsername, otp, newPassword, encryptedPrivateKey } = parsed.data;
 
     const user = await User.findOne({
       $or: [
@@ -570,6 +571,9 @@ app.post('/api/change-password', authLimiter, async (req: any, res: any, next: a
   if (storedOtp && storedOtp === otp) {
     const hashedPassword = bcrypt.hashSync(newPassword, 10);
     user.password = hashedPassword;
+    if (encryptedPrivateKey) {
+      user.encryptedPrivateKey = encryptedPrivateKey;
+    }
     await user.save();
     res.json({ success: true });
   } else {

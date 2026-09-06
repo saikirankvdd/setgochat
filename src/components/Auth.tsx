@@ -106,34 +106,68 @@ export function Auth({ onLogin }: AuthProps) {
       if (data.success) {
         if (isLogin) {
           try {
-            const { decryptPrivateKeyWithPassword, encryptPrivateKeyWithPassword } = await import('../utils/e2ee');
+            const { decryptPrivateKeyWithPassword, encryptPrivateKeyWithPassword, verifyKeyPair } = await import('../utils/e2ee');
+            const { getPrivateKeyLocal } = await import('../utils/db');
             let privateKey = '';
             if (data.user.encryptedPrivateKey && data.user.encryptedPrivateKey !== 'ADMIN') {
-               // Decrypt the private key securely (Finding 2)
-                const decrypted = await decryptPrivateKeyWithPassword(data.user.encryptedPrivateKey, password);
-                privateKey = decrypted.key;
+                let decryptedKey: string | null = null;
+                
+                // 1. Try decrypting using the password entered at login
+                try {
+                  const decrypted = await decryptPrivateKeyWithPassword(data.user.encryptedPrivateKey, password);
+                  const isValid = await verifyKeyPair(data.user.publicKey, decrypted.key);
+                  if (isValid) {
+                    decryptedKey = decrypted.key;
+                    if (decrypted.upgraded) {
+                       const newEncrypted = await encryptPrivateKeyWithPassword(decryptedKey, password);
+                       fetch('/api/me/key', {
+                          method: 'PATCH',
+                          credentials: 'include',
+                          headers: { 
+                             'Content-Type': 'application/json',
+                             'x-csrf-token': getCookie('csrf_token') || ''
+                          },
+                          body: JSON.stringify({ encryptedPrivateKey: newEncrypted })
+                       }).catch(e => console.error('[Audit] Silent private key vault upgrade update failed:', e));
+                    }
+                  }
+                } catch (decErr) {
+                  console.warn('[Vault] Decryption with entered password failed. Checking local key fallback...');
+                }
 
-                const { verifyKeyPair } = await import('../utils/e2ee');
-                const isValid = await verifyKeyPair(data.user.publicKey, privateKey);
-                if (!isValid) {
-                   setError('Vault decryption failed. Stale or corrupted security key in vault.');
+                // 2. Fallback: Check local IndexedDB or sessionStorage (if password was changed recently on this device)
+                if (!decryptedKey) {
+                  const localKey = (await getPrivateKeyLocal(data.user.id.toString())) || sessionStorage.getItem('stego_priv_key_' + data.user.id.toString());
+                  if (localKey) {
+                    const isValidLocal = await verifyKeyPair(data.user.publicKey, localKey);
+                    if (isValidLocal) {
+                      decryptedKey = localKey;
+                      console.log('[Vault] Valid local private key found! Re-encrypting vault key on server with new password...');
+                      try {
+                        const newEncrypted = await encryptPrivateKeyWithPassword(localKey, password);
+                        await fetch('/api/me/key', {
+                          method: 'PATCH',
+                          credentials: 'include',
+                          headers: { 
+                            'Content-Type': 'application/json',
+                            'x-csrf-token': getCookie('csrf_token') || ''
+                          },
+                          body: JSON.stringify({ encryptedPrivateKey: newEncrypted })
+                        });
+                      } catch (reErr) {
+                        console.error('[Vault] Failed to sync re-encrypted key to server:', reErr);
+                      }
+                    }
+                  }
+                }
+
+                if (!decryptedKey) {
+                   setError('Vault decryption failed. Password was updated, but server vault requires previous password or local key synchronization.');
                    setIsLoading(false);
                    return;
                 }
-               
-               // Transparent legacy upgrade logic: if CryptoJS was used, migrate to PBKDF2 + AES-GCM silently (Finding 2)
-               if (decrypted.upgraded) {
-                  const newEncrypted = await encryptPrivateKeyWithPassword(privateKey, password);
-                  fetch('/api/me/key', {
-                     method: 'PATCH',
-                     credentials: 'include',
-                     headers: { 
-                        'Content-Type': 'application/json',
-                        'x-csrf-token': getCookie('csrf_token') || ''
-                     },
-                     body: JSON.stringify({ encryptedPrivateKey: newEncrypted })
-                  }).catch(e => console.error('[Audit] Silent private key vault upgrade update failed:', e));
-               }
+
+                privateKey = decryptedKey;
             }
             await savePrivateKeyLocal(data.user.id.toString(), privateKey);
             try {
