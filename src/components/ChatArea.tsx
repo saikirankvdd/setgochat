@@ -1033,15 +1033,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 if (decrypted) {
                   const compressedBytes = base64ToUint8(decrypted);
                   const decompressedBytes = gunzipSync(compressedBytes);
-                  const voice8kHz = new Float32Array(decompressedBytes.length / 2);
-                  for (let i = 0; i < voice8kHz.length; i++) {
+                  const voice16kHz = new Float32Array(decompressedBytes.length / 2);
+                  for (let i = 0; i < voice16kHz.length; i++) {
                     const low = decompressedBytes[i * 2];
                     const high = decompressedBytes[i * 2 + 1];
                     let s16 = low | (high << 8);
                     if (s16 & 0x8000) s16 |= ~0xFFFF;
-                    voice8kHz[i] = s16 / 32768.0;
+                    voice16kHz[i] = s16 / 32768.0;
                   }
-                  const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+                  const upsampled = upsampleAudio(voice16kHz, 16000, audioCtx.sampleRate);
                   const voicePlayerNode = (window as any).stealthVoicePlayerNode;
                   if (voicePlayerNode) {
                     voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
@@ -1859,15 +1859,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             if (decrypted) {
               const compressedBytes = base64ToUint8(decrypted);
               const decompressedBytes = gunzipSync(compressedBytes);
-              const voice8kHz = new Float32Array(decompressedBytes.length / 2);
-              for (let i = 0; i < voice8kHz.length; i++) {
+              const voice16kHz = new Float32Array(decompressedBytes.length / 2);
+              for (let i = 0; i < voice16kHz.length; i++) {
                 const low = decompressedBytes[i * 2];
                 const high = decompressedBytes[i * 2 + 1];
                 let s16 = low | (high << 8);
                 if (s16 & 0x8000) s16 |= ~0xFFFF;
-                voice8kHz[i] = s16 / 32768.0;
+                voice16kHz[i] = s16 / 32768.0;
               }
-              const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+              const upsampled = upsampleAudio(voice16kHz, 16000, audioCtx.sampleRate);
               const voicePlayerNode = (window as any).stealthVoicePlayerNode;
               if (voicePlayerNode) {
                 voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
@@ -1886,15 +1886,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           if (decrypted) {
             const compressedBytes = base64ToUint8(decrypted);
             const decompressedBytes = gunzipSync(compressedBytes);
-            const voice8kHz = new Float32Array(decompressedBytes.length / 2);
-            for (let i = 0; i < voice8kHz.length; i++) {
+            const voice16kHz = new Float32Array(decompressedBytes.length / 2);
+            for (let i = 0; i < voice16kHz.length; i++) {
               const low = decompressedBytes[i * 2];
               const high = decompressedBytes[i * 2 + 1];
               let s16 = low | (high << 8);
               if (s16 & 0x8000) s16 |= ~0xFFFF;
-              voice8kHz[i] = s16 / 32768.0;
+              voice16kHz[i] = s16 / 32768.0;
             }
-            const upsampled = upsampleAudio(voice8kHz, 8000, audioCtx.sampleRate);
+            const upsampled = upsampleAudio(voice16kHz, 16000, audioCtx.sampleRate);
             const voicePlayerNode = (window as any).stealthVoicePlayerNode;
             if (voicePlayerNode) {
               voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });

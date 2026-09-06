@@ -19,11 +19,11 @@ class StealthMicProcessor extends AudioWorkletProcessor {
 
     // Determine packet accumulation size from sampleRate (global in AudioWorklet)
     if (this.targetLength === 0) {
-      // At 48kHz → downsample to 8kHz = 1/6 ratio.
-      // We want 255 output samples per packet (matches original logic).
-      // 255 * 6 = 1530 input samples. Use 2040 at 48kHz or 2048 otherwise.
-      this.targetLength = sampleRate === 48000 ? 2040 : 2048;
-      this.downsampleRatio = sampleRate / 8000;
+      // At 48kHz -> downsample to 16kHz = 1/3 ratio.
+      // 16kHz preserves all human speech (up to 8kHz Nyquist) — eliminates robotic consonant distortion.
+      // 480 output samples × 3 = 1440 input samples per packet.
+      this.targetLength = sampleRate === 48000 ? 1440 : 1024;
+      this.downsampleRatio = sampleRate / 16000;
     }
 
     // Append input to accumulator
@@ -37,24 +37,20 @@ class StealthMicProcessor extends AudioWorkletProcessor {
       const chunk = this.accumulator.slice(0, this.targetLength);
       this.accumulator = this.accumulator.slice(this.targetLength);
 
-      // Downsample: simple averaging (equivalent to downsampleAudio on main thread)
-      const ratio = this.downsampleRatio;
-      const outLen = Math.round(chunk.length / ratio);
+      // Downsample 48kHz->16kHz with a 3-tap FIR low-pass filter [0.25, 0.5, 0.25].
+      // Proper anti-aliasing prevents the robotic metallic buzz from box-filter aliasing.
+      const ratio = Math.round(this.downsampleRatio); // = 3 for 48kHz->16kHz
+      const outLen = Math.floor(chunk.length / ratio);
       const downsampled = new Int16Array(outLen);
 
       for (let i = 0; i < outLen; i++) {
-        const start = Math.round(i * ratio);
-        const end = Math.round((i + 1) * ratio);
-        let sum = 0;
-        let count = 0;
-        for (let j = start; j < end && j < chunk.length; j++) {
-          sum += chunk[j];
-          count++;
-        }
-        const sample = count > 0 ? sum / count : 0;
-        // Clamp and convert to Int16
-        const clamped = Math.max(-1.0, Math.min(1.0, sample));
-        downsampled[i] = Math.max(-32768, Math.min(32767, Math.floor(clamped * 32767)));
+        const center = i * ratio;
+        const s0 = center > 0 ? chunk[center - 1] : chunk[center];
+        const s1 = chunk[center];
+        const s2 = (center + 1 < chunk.length) ? chunk[center + 1] : chunk[center];
+        const filtered = 0.25 * s0 + 0.5 * s1 + 0.25 * s2;
+        const clamped = Math.max(-1.0, Math.min(1.0, filtered));
+        downsampled[i] = Math.max(-32768, Math.min(32767, Math.round(clamped * 32767)));
       }
 
       // Transfer the Int16Array buffer (zero-copy) to the main thread
