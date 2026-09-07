@@ -3797,7 +3797,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               <div className="absolute bottom-8 flex items-center justify-center space-x-6 w-full">
                 {callState === 'receiving' ? (
                   <>
-                    <button onClick={acceptCall} className="w-16 h-16 bg-green-500 hover:bg-green-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
+                    <button onClick={acceptCall} disabled={isCallAcceptingRef.current} className="w-16 h-16 bg-green-500 hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">
                       {isVideoCall ? <Video className="w-7 h-7 text-white" /> : <Phone className="w-7 h-7 text-white" />}
                     </button>
                     <button onClick={() => endCall()} className="w-16 h-16 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center shadow-lg transition-transform hover:scale-105">

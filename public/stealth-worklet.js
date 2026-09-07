@@ -65,8 +65,11 @@ class StealthProcessor extends AudioWorkletProcessor {
       console.log("AudioWorklet: Mode set to PLAYBACK.");
     } else if (data.type === 'PUSH_PLAYBACK') {
       this.playbackQueue.push(...data.samples);
-      const maxAllowed = Math.round(0.15 * sampleRate); // 150ms max buffer to prevent lag accumulation
+      // 400ms max buffer — large enough to survive a 500ms RTT spike without hard-dropping.
+      // The adaptive speed-up in process() drains it gracefully when it gets deep.
+      const maxAllowed = Math.round(0.400 * sampleRate);
       if (this.playbackQueue.length > maxAllowed) {
+        // Keep only the NEWEST samples so the receiver stays close to live audio.
         this.playbackQueue.splice(0, this.playbackQueue.length - maxAllowed);
       }
     } else if (data.type === 'PUSH_VOICE_BITS') {
@@ -261,13 +264,29 @@ class StealthProcessor extends AudioWorkletProcessor {
       }
       
       if (this.isPlaying) {
-        const chunkToPlay = this.playbackQueue.splice(0, outputLength);
-        for (let i = 0; i < outputLength; i++) {
-          // Play available samples; output zero-padding when queue is briefly dry
-          outputChannel0[i] = i < chunkToPlay.length ? chunkToPlay[i] : 0;
+        // Adaptive playback speed based on queue depth:
+        //  < 150ms  → 1x speed (normal)
+        //  150-300ms → 1.5x speed (drain moderately after minor RTT spike)
+        //  > 300ms   → 2x speed (drain fast after major RTT spike like 1130ms)
+        // This prevents the "fast-forward" effect caused by hard-dropping overflow samples.
+        const queueMs = (this.playbackQueue.length / sampleRate) * 1000;
+        let samplesToConsume;
+        if (queueMs > 300) {
+          samplesToConsume = outputLength * 2;          // 2x drain speed
+        } else if (queueMs > 150) {
+          samplesToConsume = Math.round(outputLength * 1.5); // 1.5x drain speed
+        } else {
+          samplesToConsume = outputLength;              // 1x normal speed
         }
-        // Do NOT reset isPlaying — once started, keep the playback clock running.
-        // New packets will immediately fill into this running output with no threshold wait.
+
+        const available = this.playbackQueue.splice(0, Math.min(samplesToConsume, this.playbackQueue.length));
+        for (let i = 0; i < outputLength; i++) {
+          // Map output index back to the (potentially larger) source chunk — this is the speed-up
+          const srcIdx = samplesToConsume > outputLength
+            ? Math.round(i * available.length / outputLength)
+            : i;
+          outputChannel0[i] = srcIdx < available.length ? available[srcIdx] : 0;
+        }
       } else {
         // Silence while waiting for initial cold-start buffer
         for (let i = 0; i < outputLength; i++) {
