@@ -15,7 +15,9 @@ class StealthMicProcessor extends AudioWorkletProcessor {
     if (!input || !input[0]) return true;
 
     const inputChannel = input[0];
-    const inRate = sampleRate; // global in AudioWorklet (e.g. 48000, 44100, 32000, 16000)
+    // Send audio chunks of 960 samples @ 16kHz (60ms audio per packet)
+    const outputChunkSize = 960;
+    const requiredInputSamples = Math.round(outputChunkSize * (inRate / 16000));
 
     // Append input to accumulator
     const newAcc = new Float32Array(this.accumulator.length + inputChannel.length);
@@ -23,9 +25,12 @@ class StealthMicProcessor extends AudioWorkletProcessor {
     newAcc.set(inputChannel, this.accumulator.length);
     this.accumulator = newAcc;
 
-    // Send audio chunks of 960 samples @ 16kHz (60ms audio per packet)
-    const outputChunkSize = 960;
-    const requiredInputSamples = Math.round(outputChunkSize * (inRate / 16000));
+    // Safety cap: if accumulator exceeds 4x required input samples (backlog > 240ms), trim old samples
+    // to prevent memory bloat and keep packet transmission real-time and under 3,000 bytes.
+    const maxAccumulator = 4 * requiredInputSamples;
+    if (this.accumulator.length > maxAccumulator) {
+      this.accumulator = this.accumulator.slice(this.accumulator.length - maxAccumulator);
+    }
 
     while (this.accumulator.length >= requiredInputSamples) {
       const inputChunk = this.accumulator.subarray(0, requiredInputSamples);
