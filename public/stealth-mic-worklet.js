@@ -15,6 +15,7 @@ class StealthMicProcessor extends AudioWorkletProcessor {
     if (!input || !input[0]) return true;
 
     const inputChannel = input[0];
+    const inRate = sampleRate; // global in AudioWorklet (e.g. 48000, 44100, 32000, 16000)
     // Send audio chunks of 960 samples @ 16kHz (60ms audio per packet)
     const outputChunkSize = 960;
     const requiredInputSamples = Math.round(outputChunkSize * (inRate / 16000));
