@@ -2099,15 +2099,32 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
   }, [callState, remoteStream, isVideoCall]);
 
+  const unlockMobilePhoneAudio = () => {
+    try {
+      const audioCtx = getOrCreateAudioContext();
+      if (audioCtx) {
+        if (audioCtx.state === 'suspended') {
+          audioCtx.resume().catch(() => {});
+        }
+        // Play a 1-sample silent buffer to synchronously unlock mobile OS hardware sound driver
+        const buf = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        src.connect(audioCtx.destination);
+        src.start(0);
+      }
+      let playbackAudio = (window as any).stealthPlaybackAudio as HTMLAudioElement;
+      if (playbackAudio) {
+        playbackAudio.muted = false;
+        playbackAudio.play().catch(() => {});
+      }
+    } catch (e) {}
+  };
+
   // Global user interaction listener to force-resume AudioContext on mobile devices
   useEffect(() => {
     const resumeAudio = () => {
-      const audioCtx = stealthAudioCtxRef.current;
-      if (audioCtx && audioCtx.state === 'suspended') {
-        audioCtx.resume()
-          .then(() => console.log("[Stealth-Gesture] AudioCtx successfully resumed via user interaction!"))
-          .catch(e => console.warn("Failed to resume AudioCtx:", e));
-      }
+      unlockMobilePhoneAudio();
     };
     if (callState === 'connected' || callState === 'calling' || callState === 'receiving') {
       document.addEventListener('click', resumeAudio);
@@ -2546,20 +2563,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setCurrentResolution(initialResolution);
       setTargetFpsState(initialFps);
 
-      // Pre-create and unlock playback audio element to bypass Safari autoplay policies inside user gesture
-      try {
-        let playbackAudio = (window as any).stealthPlaybackAudio;
-        if (!playbackAudio) {
-          playbackAudio = document.createElement('audio');
-          playbackAudio.id = 'stealth-playback-audio-element';
-          playbackAudio.autoplay = true;
-          playbackAudio.playsInline = true;
-          playbackAudio.muted = false;
-          document.body.appendChild(playbackAudio);
-          (window as any).stealthPlaybackAudio = playbackAudio;
-        }
-        playbackAudio.play().catch(() => {});
-      } catch (e) {}
+      // Pre-create and unlock playback audio element to bypass mobile autoplay policies inside user gesture
+      unlockMobilePhoneAudio();
 
       pendingCandidates.current = [];
 
@@ -2766,9 +2771,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   };
 
   const acceptCall = async () => {
-    // Mobile Safari requires AudioContext to be resumed synchronously in the click handler!
-    const initCtx = getOrCreateAudioContext();
-    if (initCtx.state === 'suspended') initCtx.resume().catch(()=>{});
+    // Mobile Safari & Chrome require AudioContext to be resumed synchronously in the click handler!
+    unlockMobilePhoneAudio();
 
     if (callStateRef.current !== 'receiving' || isCallAcceptingRef.current) {
       console.warn("[Stealth-Call] acceptCall ignored because state is not receiving or already accepting:", callStateRef.current);
