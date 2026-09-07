@@ -1019,7 +1019,18 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               if (seq % 100 === 0) {
                 console.log("[Stealth-P2P] Received audio packet, seq:", seq, "size:", uint8.length);
               }
-              const payloadBytes = uint8.subarray(3);
+              // Support dynamic 5-byte length framing (67B to 2500B+) and legacy framing
+              let payloadBytes: Uint8Array;
+              if (uint8.length >= 5 && (uint8[3] > 0 || uint8[4] > 0)) {
+                const payloadLen = (uint8[3] << 8) | uint8[4];
+                if (payloadLen > 0 && payloadLen <= uint8.length - 5) {
+                  payloadBytes = uint8.subarray(5, 5 + payloadLen);
+                } else {
+                  payloadBytes = uint8.subarray(3);
+                }
+              } else {
+                payloadBytes = uint8.subarray(3);
+              }
               const encryptedText = new TextDecoder().decode(payloadBytes);
               
               const audioCtx = stealthAudioCtxRef.current;
@@ -2353,15 +2364,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         const bitsArray = fullBits.split('').map(Number);
         workletNode.port.postMessage({ type: 'PUSH_VOICE_BITS', bits: bitsArray });
 
-        // Send over direct P2P data channel (primary audio path)
+        // Send over direct P2P data channel with Dynamic Length Framing (67B to 2500B+)
         const dc = dataChannelRef.current;
         if (dc && dc.readyState === 'open') {
           const payloadBytes = new TextEncoder().encode(encrypted);
-          const packet = new Uint8Array(3 + payloadBytes.length);
+          const packet = new Uint8Array(5 + payloadBytes.length);
           packet[0] = 0; // Audio type marker
           packet[1] = (seq >> 8) & 0xFF;
           packet[2] = seq & 0xFF;
-          packet.set(payloadBytes, 3);
+          packet[3] = (payloadBytes.length >> 8) & 0xFF;
+          packet[4] = payloadBytes.length & 0xFF;
+          packet.set(payloadBytes, 5);
           try {
             dc.send(packet);
           } catch (err) {
