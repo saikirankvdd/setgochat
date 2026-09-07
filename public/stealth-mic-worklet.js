@@ -26,13 +26,7 @@ class StealthMicProcessor extends AudioWorkletProcessor {
     newAcc.set(inputChannel, this.accumulator.length);
     this.accumulator = newAcc;
 
-    // Safety cap: if accumulator exceeds 4x required input samples (backlog > 240ms), trim old samples
-    // to prevent memory bloat and keep packet transmission real-time and under 3,000 bytes.
-    const maxAccumulator = 4 * requiredInputSamples;
-    if (this.accumulator.length > maxAccumulator) {
-      this.accumulator = this.accumulator.slice(this.accumulator.length - maxAccumulator);
-    }
-
+    // Process all accumulated audio chunks continuously without dropping samples
     while (this.accumulator.length >= requiredInputSamples) {
       const inputChunk = this.accumulator.subarray(0, requiredInputSamples);
       this.accumulator = this.accumulator.slice(requiredInputSamples);

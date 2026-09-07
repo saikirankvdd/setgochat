@@ -266,8 +266,8 @@ class StealthProcessor extends AudioWorkletProcessor {
           }
         }
 
-        // Cap queue to max 120ms to prevent latency build-up without pitch/speed distortion
-        const maxQueue = Math.round(0.120 * sampleRate);
+        // Cap queue to max 500ms to absorb network jitter bursts when singing or talking continuously
+        const maxQueue = Math.round(0.500 * sampleRate);
         if (this.playbackQueue.length > maxQueue) {
           this.playbackQueue.splice(0, this.playbackQueue.length - maxQueue);
         }

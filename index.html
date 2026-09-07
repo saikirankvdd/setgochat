@@ -20,7 +20,13 @@
     <meta property="twitter:description" content="A highly secure, real-time messaging application with built-in audio steganography." />
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Eruda Mobile Console Overlay (automatically displays console on mobile screens or when ?debug=true is added to URL) -->
+    <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+    <script>
+      if (window.location.search.includes('debug=true') || /Mobile|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+        eruda.init();
+      }
+    </script>
     <script type="module" src="/src/main.tsx"></script>
     <script type="module" src="/src/App.tsx"></script>
   </body>
