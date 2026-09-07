@@ -65,9 +65,9 @@ class StealthProcessor extends AudioWorkletProcessor {
       console.log("AudioWorklet: Mode set to PLAYBACK.");
     } else if (data.type === 'PUSH_PLAYBACK') {
       this.playbackQueue.push(...data.samples);
-      // 400ms max buffer — large enough to survive a 500ms RTT spike without hard-dropping.
-      // The adaptive speed-up in process() drains it gracefully when it gets deep.
-      const maxAllowed = Math.round(0.400 * sampleRate);
+      // 600ms max buffer — large enough to absorb a 700ms RTT spike with only 14% audio loss.
+      // (400ms buffer lost 44% during the observed 733ms spike; 600ms reduces that to ~14%.)
+      const maxAllowed = Math.round(0.600 * sampleRate);
       if (this.playbackQueue.length > maxAllowed) {
         // Keep only the NEWEST samples so the receiver stays close to live audio.
         this.playbackQueue.splice(0, this.playbackQueue.length - maxAllowed);
@@ -264,19 +264,22 @@ class StealthProcessor extends AudioWorkletProcessor {
       }
       
       if (this.isPlaying) {
-        // Adaptive playback speed based on queue depth:
-        //  < 150ms  → 1x speed (normal)
-        //  150-300ms → 1.5x speed (drain moderately after minor RTT spike)
-        //  > 300ms   → 2x speed (drain fast after major RTT spike like 1130ms)
-        // This prevents the "fast-forward" effect caused by hard-dropping overflow samples.
+        // Adaptive playback speed based on queue depth.
+        // Thresholds are set HIGH to avoid false positives from main-thread jitter
+        // (e.g. a Chrome extension blocking the main thread for 400ms creates a burst
+        // that temporarily fills the queue — this should NOT cause jarring speed-up).
+        //
+        //  < 300ms  → 1x speed  (normal, covers all main-thread jitter bursts)
+        //  300-500ms → 1.3x speed (barely perceptible, drains moderate congestion)
+        //  > 500ms  → 1.5x speed (only real sustained network congestion reaches here)
         const queueMs = (this.playbackQueue.length / sampleRate) * 1000;
         let samplesToConsume;
-        if (queueMs > 300) {
-          samplesToConsume = outputLength * 2;          // 2x drain speed
-        } else if (queueMs > 150) {
-          samplesToConsume = Math.round(outputLength * 1.5); // 1.5x drain speed
+        if (queueMs > 500) {
+          samplesToConsume = Math.round(outputLength * 1.5); // 1.5x drain — real network congestion
+        } else if (queueMs > 300) {
+          samplesToConsume = Math.round(outputLength * 1.3); // 1.3x drain — moderate congestion
         } else {
-          samplesToConsume = outputLength;              // 1x normal speed
+          samplesToConsume = outputLength;                   // 1x — normal operation
         }
 
         const available = this.playbackQueue.splice(0, Math.min(samplesToConsume, this.playbackQueue.length));
