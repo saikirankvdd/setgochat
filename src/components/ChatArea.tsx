@@ -1021,15 +1021,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               }
               // Support dynamic 5-byte length framing (67B to 2500B+) and legacy framing
               let payloadBytes: Uint8Array;
-              if (uint8.length >= 5 && (uint8[3] > 0 || uint8[4] > 0)) {
+              if (uint8.length >= 5) {
                 const payloadLen = (uint8[3] << 8) | uint8[4];
                 if (payloadLen > 0 && payloadLen <= uint8.length - 5) {
                   payloadBytes = uint8.subarray(5, 5 + payloadLen);
                 } else {
-                  payloadBytes = uint8.subarray(3);
+                  payloadBytes = uint8.subarray(5); // Always slice from index 5 for 5-byte header packets
                 }
               } else {
-                payloadBytes = uint8.subarray(3);
+                payloadBytes = uint8.subarray(3); // Fallback for legacy 3-byte header packets
               }
               const encryptedText = new TextDecoder().decode(payloadBytes);
               
