@@ -247,15 +247,8 @@ class StealthProcessor extends AudioWorkletProcessor {
     } else if (this.mode === 'playback') {
       const outputChannel0 = output[0];
       
-      // Two-threshold jitter buffer:
-      // startThreshold (50ms): wait for this much audio before playing the very first time (prevents robotic restart chattering)
-      // resumeThreshold (5ms): after a dry-run, only wait for this much before resuming (prevents long silent gaps)
-      const startThreshold  = Math.round(0.050 * sampleRate); // 50ms cold start
-      const resumeThreshold = Math.round(0.005 * sampleRate); // 5ms warm resume
+      const startThreshold = Math.round(0.030 * sampleRate); // 30ms cold start
       
-      // Cold-start: wait for 50ms before the very first playback to avoid robot chattering.
-      // After that, NEVER stop playing — output zeros for dry frames and resume immediately.
-      // This prevents the micro-silence gaps between words that cause robotic audio.
       if (!this.isPlaying) {
         if (this.playbackQueue.length >= startThreshold) {
           this.isPlaying = true;
@@ -264,31 +257,19 @@ class StealthProcessor extends AudioWorkletProcessor {
       }
       
       if (this.isPlaying) {
-        // Adaptive playback speed based on queue depth.
-        // Thresholds are set HIGH to avoid false positives from main-thread jitter
-        // (e.g. a Chrome extension blocking the main thread for 400ms creates a burst
-        // that temporarily fills the queue — this should NOT cause jarring speed-up).
-        //
-        //  < 300ms  → 1x speed  (normal, covers all main-thread jitter bursts)
-        //  300-500ms → 1.3x speed (barely perceptible, drains moderate congestion)
-        //  > 500ms  → 1.5x speed (only real sustained network congestion reaches here)
-        const queueMs = (this.playbackQueue.length / sampleRate) * 1000;
-        let samplesToConsume;
-        if (queueMs > 500) {
-          samplesToConsume = Math.round(outputLength * 1.5); // 1.5x drain — real network congestion
-        } else if (queueMs > 300) {
-          samplesToConsume = Math.round(outputLength * 1.3); // 1.3x drain — moderate congestion
-        } else {
-          samplesToConsume = outputLength;                   // 1x — normal operation
+        // Enforce strict 1.0x real-time playback — no PCM sample skipping (which causes 2x-3x chipmunk fast-forward)
+        for (let i = 0; i < outputLength; i++) {
+          if (this.playbackQueue.length > 0) {
+            outputChannel0[i] = this.playbackQueue.shift();
+          } else {
+            outputChannel0[i] = 0; // Output silence if queue temporarily dips
+          }
         }
 
-        const available = this.playbackQueue.splice(0, Math.min(samplesToConsume, this.playbackQueue.length));
-        for (let i = 0; i < outputLength; i++) {
-          // Map output index back to the (potentially larger) source chunk — this is the speed-up
-          const srcIdx = samplesToConsume > outputLength
-            ? Math.round(i * available.length / outputLength)
-            : i;
-          outputChannel0[i] = srcIdx < available.length ? available[srcIdx] : 0;
+        // Cap queue to max 120ms to prevent latency build-up without pitch/speed distortion
+        const maxQueue = Math.round(0.120 * sampleRate);
+        if (this.playbackQueue.length > maxQueue) {
+          this.playbackQueue.splice(0, this.playbackQueue.length - maxQueue);
         }
       } else {
         // Silence while waiting for initial cold-start buffer

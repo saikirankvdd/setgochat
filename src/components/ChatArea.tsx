@@ -2441,11 +2441,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       // 1. Create the voice player node (runs in PLAYBACK mode)
       const voicePlayerNode = new AudioWorkletNode(audioCtx, 'stealth-processor');
       voicePlayerNode.port.postMessage({ type: 'SET_MODE_PLAYBACK' });
-      
-      // Connect to audioCtx.destination as a fallback
-      voicePlayerNode.connect(audioCtx.destination);
 
-      // Create a MediaStream destination to route audio output to the device speaker
+      // Create a MediaStream destination to route audio output cleanly to the device speaker
       try {
         const playbackDest = audioCtx.createMediaStreamDestination();
         voicePlayerNode.connect(playbackDest);
@@ -2468,7 +2465,8 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           }
         });
       } catch (e) {
-        console.warn("[Stealth-Audio] Speaker routing initialization failed:", e);
+        console.warn("[Stealth-Audio] Speaker routing fallback to direct AudioContext:", e);
+        voicePlayerNode.connect(audioCtx.destination);
       }
 
       (window as any).stealthVoicePlayerNode = voicePlayerNode;
