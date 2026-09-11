@@ -824,6 +824,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   const clockOffsetRef = useRef<number | null>(null);
   const mainCoverIndexRef = useRef<number>(0);
   const audioSeqRef = useRef<number>(0);
+  const receivedAudioSeqsRef = useRef<Set<number>>(new Set());
   const audioTsRef = useRef<number>(0);
   const dataChannelRef = useRef<RTCDataChannel | null>(null);
 
@@ -1020,6 +1021,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               }
             } else if (uint8[0] === 0) { // Audio packet type
               const seq = (uint8[1] << 8) | uint8[2];
+              if (receivedAudioSeqsRef.current.has(seq)) {
+                return; // Skip duplicate audio packet
+              }
+              receivedAudioSeqsRef.current.add(seq);
+              if (receivedAudioSeqsRef.current.size > 1000) {
+                const firstVal = receivedAudioSeqsRef.current.values().next().value;
+                if (firstVal !== undefined) receivedAudioSeqsRef.current.delete(firstVal);
+              }
               if (seq % 100 === 0) {
                 console.log("[Stealth-P2P] Received audio packet, seq:", seq, "size:", uint8.length);
               }
@@ -1865,6 +1874,14 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
           let seq = 0;
           if (rtpBytes.length > 12 && rtpBytes[0] === 0x80 && rtpBytes[1] === 0x78) {
             seq = (rtpBytes[2] << 8) | rtpBytes[3];
+            if (receivedAudioSeqsRef.current.has(seq)) {
+              return; // Skip duplicate audio packet
+            }
+            receivedAudioSeqsRef.current.add(seq);
+            if (receivedAudioSeqsRef.current.size > 1000) {
+              const firstVal = receivedAudioSeqsRef.current.values().next().value;
+              if (firstVal !== undefined) receivedAudioSeqsRef.current.delete(firstVal);
+            }
             payloadBytes = rtpBytes.subarray(12);
           } else {
             // Fallback for legacy WAV carrier
@@ -2597,6 +2614,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
       }
 
+      receivedAudioSeqsRef.current.clear();
+      if (localStreamRef.current) {
+        try { localStreamRef.current.getTracks().forEach(t => t.stop()); } catch (_) {}
+        localStreamRef.current = null;
+      }
+
       setIsVideoCall(effectiveWithVideo);
       setIsMuted(false);
       setIsVideoOff(false);
@@ -2802,6 +2825,12 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       targetFpsRef.current = initialFps;
       setCurrentResolution(initialResolution);
       setTargetFpsState(initialFps);
+
+      receivedAudioSeqsRef.current.clear();
+      if (localStreamRef.current) {
+        try { localStreamRef.current.getTracks().forEach(t => t.stop()); } catch (_) {}
+        localStreamRef.current = null;
+      }
 
       setIsMuted(false);
       setIsVideoOff(false);
@@ -3044,6 +3073,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         delete (window as any).stealthDecodeWorklet;
       }
       delete (window as any).stealthDecodePipelineActive;
+      receivedAudioSeqsRef.current.clear();
 
       // 3. Clean up processors and players FIRST before closing context
       const micProcessor = (window as any).stealthMicProcessor;

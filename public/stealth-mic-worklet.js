@@ -32,7 +32,7 @@ class StealthMicProcessor extends AudioWorkletProcessor {
       this.accumulator = this.accumulator.slice(requiredInputSamples);
 
       const downsampled = new Int16Array(outputChunkSize);
-      const ratio = (inputChunk.length - 1) / (outputChunkSize - 1 || 1);
+      const ratio = inputChunk.length / outputChunkSize;
 
       for (let i = 0; i < outputChunkSize; i++) {
         const srcPos = i * ratio;

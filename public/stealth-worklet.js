@@ -257,17 +257,23 @@ class StealthProcessor extends AudioWorkletProcessor {
       }
       
       if (this.isPlaying) {
-        // Enforce strict 1.0x real-time playback — no PCM sample skipping (which causes 2x-3x chipmunk fast-forward)
-        for (let i = 0; i < outputLength; i++) {
-          if (this.playbackQueue.length > 0) {
-            outputChannel0[i] = this.playbackQueue.shift();
-          } else {
-            outputChannel0[i] = 0; // Output silence if queue temporarily dips
-          }
+        // High-performance 1.0x real-time playback — bulk slice instead of 128 .shift() calls per render quantum
+        const avail = this.playbackQueue.length;
+        const count = Math.min(outputLength, avail);
+        
+        for (let i = 0; i < count; i++) {
+          outputChannel0[i] = this.playbackQueue[i];
+        }
+        for (let i = count; i < outputLength; i++) {
+          outputChannel0[i] = 0; // Silence if queue temporarily dips
+        }
+        
+        if (count > 0) {
+          this.playbackQueue.splice(0, count);
         }
 
-        // Cap queue to max 500ms to absorb network jitter bursts when singing or talking continuously
-        const maxQueue = Math.round(0.500 * sampleRate);
+        // Cap queue to max 400ms to absorb network jitter bursts without accumulating latency
+        const maxQueue = Math.round(0.400 * sampleRate);
         if (this.playbackQueue.length > maxQueue) {
           this.playbackQueue.splice(0, this.playbackQueue.length - maxQueue);
         }
