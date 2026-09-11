@@ -1033,7 +1033,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               }
               const encryptedText = new TextDecoder().decode(payloadBytes);
               
-              const audioCtx = stealthAudioCtxRef.current;
+              const audioCtx = stealthAudioCtxRef.current || getOrCreateAudioContext();
               if (audioCtx) {
                 if (audioCtx.state === 'suspended') {
                   audioCtx.resume().catch(()=>{});
