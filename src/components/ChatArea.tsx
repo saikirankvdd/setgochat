@@ -2360,11 +2360,6 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       const micSource = audioCtx.createMediaStreamSource(rawStream);
       (window as any).stealthMicSource = micSource;
       micSource.connect(micWorkletNode);
-      // Connect to silent gain so the audio graph stays alive but mic isn't audible locally
-      const silentGain = audioCtx.createGain();
-      silentGain.gain.value = 0;
-      micWorkletNode.connect(silentGain);
-      silentGain.connect(audioCtx.destination);
       (window as any).stealthMicWorkletNode = micWorkletNode;
 
       micWorkletNode.port.onmessage = (event) => {
