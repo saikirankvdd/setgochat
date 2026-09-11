@@ -37,12 +37,16 @@ const optimizeOpusSdp = (sdp: string): string => {
   if (match) {
     const payloadType = match[1];
     const fmtpRegex = new RegExp(`(a=fmtp:${payloadType}\\s+[^\\r\\n]+)`);
+    // Telegram / WhatsApp / Signal standard HD voice SDP parameters:
+    // mono vocal tract (stereo=0), 64kbps bitrate, enabled forward error correction (useinbandfec=1),
+    // constant bitrate (cbr=1) to prevent mobile packet drops and eliminate robotic distortion.
+    const opusParams = `a=fmtp:${payloadType} stereo=0;sprop-stereo=0;maxaveragebitrate=64000;useinbandfec=1;usedtx=0;cbr=1`;
     if (sdp.match(fmtpRegex)) {
-      return sdp.replace(fmtpRegex, `$1;stereo=1;maxaveragebitrate=510000;useinbandfec=0`);
+      return sdp.replace(fmtpRegex, opusParams);
     } else {
       return sdp.replace(
         new RegExp(`(a=rtpmap:${payloadType}\\s+opus\\/48000\\/[^\\r\\n]+)`),
-        `$1\r\na=fmtp:${payloadType} stereo=1;maxaveragebitrate=510000;useinbandfec=0`
+        `$1\r\n${opusParams}`
       );
     }
   }
