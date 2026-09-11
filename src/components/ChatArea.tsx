@@ -2608,6 +2608,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
         }
       }
 
+      audioSeqRef.current = 0;
       receivedAudioSeqsRef.current.clear();
       if (localStreamRef.current) {
         try { localStreamRef.current.getTracks().forEach(t => t.stop()); } catch (_) {}
@@ -2820,6 +2821,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       setCurrentResolution(initialResolution);
       setTargetFpsState(initialFps);
 
+      audioSeqRef.current = 0;
       receivedAudioSeqsRef.current.clear();
       if (localStreamRef.current) {
         try { localStreamRef.current.getTracks().forEach(t => t.stop()); } catch (_) {}
