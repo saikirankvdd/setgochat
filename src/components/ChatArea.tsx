@@ -2478,31 +2478,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
       const voicePlayerNode = new AudioWorkletNode(audioCtx, 'stealth-processor');
       voicePlayerNode.port.postMessage({ type: 'SET_MODE_PLAYBACK' });
 
-      // Create a MediaStream destination to route audio output cleanly to the device speaker
+      // Connect voicePlayerNode directly to audioCtx.destination for guaranteed hardware speaker output on mobile
+      voicePlayerNode.connect(audioCtx.destination);
+
       try {
         const playbackDest = audioCtx.createMediaStreamDestination();
         voicePlayerNode.connect(playbackDest);
         (window as any).stealthPlaybackDest = playbackDest;
-
-        let playbackAudio = (window as any).stealthPlaybackAudio;
-        if (!playbackAudio) {
-          playbackAudio = document.createElement('audio');
-          playbackAudio.id = 'stealth-playback-audio-element';
-          playbackAudio.autoplay = true;
-          playbackAudio.playsInline = true;
-          playbackAudio.muted = false;
-          document.body.appendChild(playbackAudio);
-          (window as any).stealthPlaybackAudio = playbackAudio;
-        }
-        playbackAudio.srcObject = playbackDest.stream;
-        playbackAudio.play().catch(e => {
-          if (e.name !== 'AbortError') {
-            console.warn("[Stealth-Audio] Playback audio element play failed:", e);
-          }
-        });
       } catch (e) {
-        console.warn("[Stealth-Audio] Speaker routing fallback to direct AudioContext:", e);
-        voicePlayerNode.connect(audioCtx.destination);
+        console.warn("[Stealth-Audio] Secondary MediaStreamDestination setup warning:", e);
       }
 
       (window as any).stealthVoicePlayerNode = voicePlayerNode;
