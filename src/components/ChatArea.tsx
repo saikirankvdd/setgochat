@@ -2,8 +2,9 @@ import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import { User, getCookie } from '../App';
 import { Socket } from 'socket.io-client';
-import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX, Upload, Image as ImageIcon, RefreshCw } from 'lucide-react';
+import { Send, Paperclip, Mic, Phone, MoreVertical, Shield, Lock, Trash2, Eye, Smile, Video, VideoOff, MicOff, Download, Clock, X, Check, CheckCheck, ArrowLeft, Volume2, UserPlus, UserMinus, ShieldAlert, Loader2, ExternalLink, Flag, UserX, Upload, Image as ImageIcon, RefreshCw, Terminal } from 'lucide-react';
 import { SharedMediaViewer } from './SharedMediaViewer';
+import { InAppConsoleModal } from './InAppConsoleModal';
 import { useModal } from '../contexts/ModalContext';
 import EmojiPicker, { Theme } from 'emoji-picker-react';
 import { encryptData, decryptData, stringToBinary, binaryToString, uint8ToBase64, base64ToUint8, getSha256Key, fastEncrypt, fastDecrypt, hashString } from '../utils/crypto';
@@ -850,6 +851,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
     }
   }, [callState, isVideoCall]);
 
+  const [showConsoleModal, setShowConsoleModal] = useState<boolean>(false);
   const [currentResolution, setCurrentResolution] = useState<'240p' | '480p'>('240p');
   const [targetFps, setTargetFpsState] = useState<5 | 10 | 15 | 20 | 30 | 60>(10);
   const currentResolutionRef = useRef<'240p' | '480p'>('240p');
@@ -1066,11 +1068,16 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                     voice16kHz[i] = s16 / 32768.0;
                   }
                   const upsampled = upsampleAudio(voice16kHz, 16000, audioCtx.sampleRate);
-                  const voicePlayerNode = (window as any).stealthVoicePlayerNode;
+                  let voicePlayerNode = (window as any).stealthVoicePlayerNode;
+                  if (!voicePlayerNode) {
+                    console.warn("[Stealth-P2P] playback node is null on window! Auto-initializing audio decode pipeline...");
+                    await startStealthAudioDecode(null as any);
+                    voicePlayerNode = (window as any).stealthVoicePlayerNode;
+                  }
                   if (voicePlayerNode) {
                     voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
                   } else {
-                    console.warn("[Stealth-P2P] playback node is null on window!");
+                    console.warn("[Stealth-P2P] Failed to initialize playback node!");
                   }
                 } else {
                   console.warn("[Stealth-P2P] Decryption failed for audio seq:", seq);
@@ -1900,7 +1907,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
                 voice16kHz[i] = s16 / 32768.0;
               }
               const upsampled = upsampleAudio(voice16kHz, 16000, audioCtx.sampleRate);
-              const voicePlayerNode = (window as any).stealthVoicePlayerNode;
+              let voicePlayerNode = (window as any).stealthVoicePlayerNode;
+              if (!voicePlayerNode) {
+                await startStealthAudioDecode(null as any);
+                voicePlayerNode = (window as any).stealthVoicePlayerNode;
+              }
               if (voicePlayerNode) {
                 voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
               }
@@ -1927,7 +1938,11 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
               voice16kHz[i] = s16 / 32768.0;
             }
             const upsampled = upsampleAudio(voice16kHz, 16000, audioCtx.sampleRate);
-            const voicePlayerNode = (window as any).stealthVoicePlayerNode;
+            let voicePlayerNode = (window as any).stealthVoicePlayerNode;
+            if (!voicePlayerNode) {
+              await startStealthAudioDecode(null as any);
+              voicePlayerNode = (window as any).stealthVoicePlayerNode;
+            }
             if (voicePlayerNode) {
               voicePlayerNode.port.postMessage({ type: 'PUSH_PLAYBACK', samples: upsampled });
             }
@@ -3727,6 +3742,17 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             ref={callOverlayRef}
             className="absolute inset-0 z-50 flex flex-col items-center justify-center animate-fade-in bg-black/60 backdrop-blur-md"
           >
+            {/* Live Console button inside active call UI */}
+            <div className="absolute top-4 right-4 z-50">
+              <button 
+                onClick={() => setShowConsoleModal(true)} 
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-[#111b21]/90 hover:bg-[#202c33] text-[#00a884] border border-[#00a884]/40 rounded-xl text-xs font-semibold backdrop-blur-md shadow-lg transition-all cursor-pointer"
+                title="View Live In-App Console Logs"
+              >
+                <Terminal className="w-4 h-4 text-[#00a884]" />
+                <span>Console Logs</span>
+              </button>
+            </div>
             {/* Autoplay activation button for mobile devices */}
             {callState === 'connected' && audioCtxState === 'suspended' && (
               <div className="absolute top-12 z-50">
@@ -3932,7 +3958,15 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
             </div>
           </div>
         </div>
-        <div className="flex items-center space-x-5 text-[#aebac1]">
+        <div className="flex items-center space-x-3 sm:space-x-5 text-[#aebac1]">
+          <button 
+            onClick={() => setShowConsoleModal(true)} 
+            className="flex items-center gap-1 px-2.5 py-1 bg-[#00a884]/20 hover:bg-[#00a884]/30 text-[#00a884] border border-[#00a884]/40 rounded-lg text-xs font-semibold transition-all shadow-sm cursor-pointer"
+            title="Open Live In-App Console Logs"
+          >
+            <Terminal className="w-4 h-4" />
+            <span className="hidden sm:inline">Console</span>
+          </button>
           
           
           {callState === 'idle' ? (
@@ -4418,6 +4452,7 @@ export function ChatArea({ user, targetUser, socket, sessionInfo, isOnline, pend
   {showSharedMedia && (
     <SharedMediaViewer sessionId={sessionInfo.sessionId} pin={sessionInfo.pin} onClose={() => setShowSharedMedia(false)} />
   )}
+  <InAppConsoleModal isOpen={showConsoleModal} onClose={() => setShowConsoleModal(false)} />
 
     </div>
   );
